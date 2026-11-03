@@ -1,4 +1,3 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Quire PDF Studio</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -195,6 +194,54 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
 .segs button.on{background:var(--solid);color:var(--fg);box-shadow:0 0 0 .5px var(--line),0 1px 3px rgba(0,0,0,.1)}
 .sigpad{background:#fff;border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);touch-action:none;width:100%;height:160px;display:block;cursor:crosshair}
 
+/* scanner: a full-window workspace. Camera or photo on the left, settings on the right, captured pages along the bottom. */
+#scan{position:fixed;inset:0;z-index:30;background:var(--desk);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.sc-top{display:flex;align-items:center;gap:8px;height:50px;box-sizing:border-box;padding:0 max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));min-width:0}
+.sc-top h2{margin:0;font:600 15px var(--f-ui);letter-spacing:-.015em;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc-body{display:grid;grid-template-columns:minmax(0,1fr) 288px;gap:12px;min-height:0;padding:0 max(12px,env(safe-area-inset-right,0px)) 0 max(12px,env(safe-area-inset-left,0px))}
+.sc-stage{position:relative;min-width:0;min-height:0;border-radius:16px;overflow:hidden;background:#101114}
+.sc-stage canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.sc-stage video{position:absolute;width:2px;height:2px;opacity:0;pointer-events:none}
+.sc-msg{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:#d9dbe0}
+.sc-msg .card{max-width:380px;display:grid;gap:12px;justify-items:center}
+.sc-msg h3{margin:0;font:600 17px var(--f-ui);color:#fff}
+.sc-msg .btn{background:rgba(255,255,255,.14);color:#fff}
+.sc-state{position:absolute;top:12px;left:12px;z-index:2;background:rgba(16,17,20,.72);color:#fff;font:500 12px var(--f-ui);padding:6px 10px;border-radius:9px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);pointer-events:none;display:flex;align-items:center;gap:7px}
+.sc-state i{width:7px;height:7px;border-radius:50%;background:#8a8f99}
+.sc-state.ok i{background:#3ccf7a}.sc-state.hold i{background:#ffc53d}
+.sc-count{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);font:600 72px var(--f-ui);color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.55);pointer-events:none;font-variant-numeric:tabular-nums}
+.sc-flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+.sc-flash.go{animation:flash .35s ease-out}
+@keyframes flash{from{opacity:.75}to{opacity:0}}
+.sc-bar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:4px;padding:6px;border-radius:16px;z-index:2;max-width:calc(100% - 24px);overflow-x:auto;scrollbar-width:none;box-sizing:border-box}
+.sc-bar::-webkit-scrollbar{display:none}
+.shutter{flex:none;width:54px;height:54px;border-radius:50%;border:3px solid var(--fg);background:none;padding:3px;cursor:pointer;margin:0 6px;transition:transform .1s}
+.shutter::after{content:"";display:block;width:100%;height:100%;border-radius:50%;background:var(--fg)}
+.shutter:active{transform:scale(.92)}
+.sc-side{border-radius:16px;padding:16px;overflow:auto;display:flex;flex-direction:column;gap:20px;min-height:0;box-sizing:border-box;scrollbar-width:thin}
+.sc-side .segs{align-self:stretch;display:grid;grid-auto-flow:column;grid-auto-columns:1fr}
+.sc-side .segs button{padding:0 4px}
+.sc-wide{width:100%;min-width:0}
+.sc-wide span{overflow:hidden;text-overflow:ellipsis}
+.sc-strip{display:flex;gap:8px;overflow-x:auto;padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));align-items:flex-end;scrollbar-width:thin}
+.sc-tile{flex:none;display:flex;flex-direction:column;align-items:center;gap:4px;padding:5px;border-radius:10px;cursor:pointer;border:0;background:none;color:var(--fg)}
+.sc-tile:hover{background:var(--hover)}
+.sc-tile img{height:84px;max-width:120px;display:block;border-radius:2px;background:#fff;box-shadow:0 0 0 1px var(--line),0 2px 6px rgba(0,0,0,.1)}
+.sc-tile .n{font:500 10.5px var(--f-mono);color:var(--faint)}
+.sc-tile.on{background:var(--accent-soft)}
+.sc-tile.on img{box-shadow:0 0 0 2px var(--accent),0 2px 8px rgba(0,0,0,.12)}
+.sc-tile.on .n{color:var(--accent)}
+.sc-tile.drop{box-shadow:-2px 0 0 var(--accent)}
+.sc-tile .camb{height:84px;width:62px;border-radius:6px;display:grid;place-items:center;box-shadow:inset 0 0 0 1.5px var(--line);color:var(--muted)}
+.sc-tile .camb svg{width:22px;height:22px}
+.sc-tile.on .camb{box-shadow:inset 0 0 0 2px var(--accent);color:var(--accent)}
+@media (max-width:760px){
+  .sc-body{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
+  .sc-side{max-height:34vh;padding:12px;gap:14px}
+  .sc-top .lab{display:none}
+  .sc-tile img{height:64px}.sc-tile .camb{height:64px;width:48px}
+}
+
 @media (max-width:760px){
   .main,.main.no-thumbs{grid-template-columns:minmax(0,1fr)}
   .thumbs{display:none;position:absolute;left:0;top:0;bottom:0;width:150px;z-index:8;background:var(--glass);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px);box-shadow:var(--shadow);visibility:visible}
@@ -215,6 +262,7 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
       <button class="icon-btn" id="bUndo" aria-label="Undo"></button>
       <button class="icon-btn" id="bRedo" aria-label="Redo"></button>
       <button class="icon-btn" id="bInfo" aria-label="Show or hide inspector"></button>
+      <button class="btn ghost" id="bScan"></button>
       <button class="btn ghost" id="bOpen"></button>
       <button class="btn primary" id="bSave"></button>
     </div>
@@ -243,6 +291,7 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
 <input type="file" id="mergeIn" accept="application/pdf,.pdf" multiple hidden>
 <input type="file" id="imgIn" accept="image/*" multiple hidden>
 <input type="file" id="picIn" accept="image/*" hidden>
+<input type="file" id="scIn" accept="image/*" multiple hidden>
 <div id="tip" hidden></div>
 <div id="toast" hidden></div>
 <div id="busy" hidden><div class="card glass"><div class="spin"></div><span id="busyMsg">Working…</span></div></div>
@@ -338,7 +387,11 @@ const IC = {
   side: '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M9 4v16"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   plus: '<path d="M12 6v12M6 12h12"/>', minus: '<path d="M6 12h12"/>',
-  panel: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>'
+  panel: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
+  camera: '<path d="M4 8.5h3.2L9 6h6l1.8 2.5H20V19H4z"/><circle cx="12" cy="13.2" r="3.4"/>',
+  crop: '<path d="M7 3v14h14M3 7h14v14"/>',
+  edges: '<path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8.5 8.5l7 1-1 6-7-1z"/>',
+  full: '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M8 9h8v6H8z" stroke-dasharray="2 2"/>'
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k] || ''}</svg>`;
 
@@ -392,7 +445,8 @@ const S = {
   author: pref.get('author', 'Me'),
   sig: pref.get('sig', null), placeImage: null,
   calib: pref.get('calib', { pageVal: 1, pageUnit: 'in', realVal: 1, realUnit: 'in' }),
-  sel: null, selSnap: false, search: { q: '', hits: [], i: -1, cs: false }, info: pref.get('info', false)
+  sel: null, selSnap: false, search: { q: '', hits: [], i: -1, cs: false }, info: pref.get('info', false),
+  crop: Object.assign({ mode: 'fixed', unit: 'mm', t: 10, r: 10, b: 10, l: 10, link: true, pad: 4, scope: 'all' }, pref.get('crop', {}))
 };
 for (const k in DEF) S.styles[k] = Object.assign({}, DEF[k], S.styles[k]);
 const cur = () => S.docs[S.active] || null;
@@ -469,7 +523,7 @@ async function loadPdf(d, first) {
     } catch {}
     try { await PDFDocument.load(d.bytes, LOAD); } catch (e) { if (/encrypt/i.test(e.message)) d.encrypted = true; }
   }
-  d.info = []; d.text = [];
+  d.info = []; d.text = []; d.cropAuto = null;
   for (let i = 1; i <= d.pdf.numPages; i++) {
     const p = await d.pdf.getPage(i); const vp1 = p.getViewport({ scale: 1 });
     d.info.push({ page: p, w: vp1.width, h: vp1.height, rot: p.rotate, vp1 });
@@ -544,8 +598,8 @@ function buildViewer() {
   $$('.empty', $('#viewer')).forEach(e => e.remove());
   const d = cur();
   if (!d) {
-    const e = el('div', 'empty', `<div class="card"><div class="mark"></div><h2>Drop a PDF here</h2><p class="muted" style="margin:0">Or open one from your computer. Images work too. Files never leave your device.</p><button class="btn primary" id="emptyOpen">Open PDF</button></div>`);
-    $('#viewer').append(e); $('#emptyOpen').onclick = () => $('#fileIn').click(); return;
+    const e = el('div', 'empty', `<div class="card"><div class="mark"></div><h2>Drop a PDF here</h2><p class="muted" style="margin:0">Or open one from your computer. Images work too. Files never leave your device.</p><div class="row" style="justify-content:center"><button class="btn primary" id="emptyOpen">Open PDF</button><button class="btn" id="emptyScan">${svg('camera')}Scan pages</button></div></div>`);
+    $('#viewer').append(e); $('#emptyOpen').onclick = () => $('#fileIn').click(); $('#emptyScan').onclick = () => scOpen(); return;
   }
   if (!d.zoom) { d.zoom = fitZoom(d, 'width'); d.autoFit = true; }
   d.views = d.info.map((inf, i) => {
@@ -610,7 +664,7 @@ function gotoPage(i, select) {
 function trackPage() {
   const d = cur(); if (!d || !d.views) return; const V = $('#viewer'); const line = V.scrollTop + V.clientHeight * .35;
   let k = 0; for (let i = 0; i < d.views.length; i++) { if (d.views[i].wrap.offsetTop <= line) k = i; else break; }
-  if (k !== d.cur) { d.cur = k; updateStatus(); markThumbs(); }
+  if (k !== d.cur) { d.cur = k; updateStatus(); markThumbs(); if (S.task === 'crop' && S.crop.scope === 'cur') redrawAll(); }
 }
 
 /* ================= drawing markup ================= */
@@ -695,6 +749,7 @@ function drawOverlay(i) {
   for (const h of S.search.hits) if (h.page === i) { const b = vrect(v.vp, { x1: h.r[0], y1: h.r[1], x2: h.r[2], y2: h.r[3] }); ctx.fillStyle = h === S.search.hits[S.search.i] ? 'rgba(255,140,0,.45)' : 'rgba(47,91,211,.22)'; ctx.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2); }
   for (const a of d.annots[i]) drawAnnot(ctx, v.vp, a, z, { redraw: () => drawOverlay(i) });
   if (drag && drag.page === i && drag.temp) drawAnnot(ctx, v.vp, drag.temp, z);
+  if (S.task === 'crop') drawCropPreview(ctx, d, i);
   if (S.sel && S.sel.page === i && d.annots[i][S.sel.idx]) {
     const a = d.annots[i][S.sel.idx]; const b = abox(v.vp, a, z);
     ctx.save(); ctx.strokeStyle = '#2b5cff'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.strokeRect(b.x - 3, b.y - 3, b.w + 6, b.h + 6); ctx.restore();
@@ -714,6 +769,7 @@ function onDown(i, e) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   const d = cur(); const p = local(i, e); const t = S.tool; d.cur = i;
   if (te) { closeTextEditor(true); if (t === 'text') return; }
+  if (S.task === 'crop') { const s = cropHit(i, p); if (s) { e.target.setPointerCapture(e.pointerId); drag = { mode: 'crop', page: i, sides: s }; } return; }
   if (t === 'hand') { e.target.setPointerCapture(e.pointerId); const V = $('#viewer'); drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, sl: V.scrollLeft, st: V.scrollTop }; return; }
   if (t === 'select') {
     const k = hitTest(i, p[0], p[1]);
@@ -737,10 +793,12 @@ function onDown(i, e) {
 }
 function onMove(i, e) {
   const d = cur(); if (!d) return;
+  if (!drag && S.task === 'crop') { e.target.style.cursor = CROP_CUR[cropHit(i, local(i, e))] || 'default'; return; }
   if (!drag) { if (S.tool === 'select') { const p = local(i, e); e.target.style.cursor = hitTest(i, p[0], p[1]) >= 0 ? 'move' : 'default'; } return; }
   if (drag.mode === 'pan') { const V = $('#viewer'); V.scrollLeft = drag.sl - (e.clientX - drag.sx); V.scrollTop = drag.st - (e.clientY - drag.sy); return; }
   if (drag.page !== i) return;
   const p = local(i, e);
+  if (drag.mode === 'crop') { cropDrag(i, p, drag.sides); return; }
   if (drag.mode === 'move' || drag.mode === 'resize') {
     if (!drag.moved) { if (Math.hypot(p[0] - drag.start[0], p[1] - drag.start[1]) < 3) return; snapshot(); drag.moved = true; }
     let a;
@@ -760,6 +818,7 @@ function onUp(i, e) {
   try { e.target.releasePointerCapture(e.pointerId); } catch {}
   if (g.mode === 'move' || g.mode === 'resize') { if (g.moved) renderPanel(); return; }
   if (g.mode === 'pan') return;
+  if (g.mode === 'crop') { pref.set('crop', S.crop); return; }
   if (g.mode === 'ink') { if (g.temp.points.length) { snapshot(); d.annots[i].push(g.temp); } drawOverlay(i); renderPanel(); return; }
   if (g.mode === 'shape') {
     let end = g.cur; const t = S.tool; const tiny = Math.hypot(end[0] - g.start[0], end[1] - g.start[1]) < 4;
@@ -1046,11 +1105,12 @@ function renderTabs() {
 }
 const RIB = {
   comment: { label: 'Markup', items: ['select', 'hand', '|', 'text', 'note', 'highlight', 'ink', '|', 'rect', 'ellipse', 'line', 'arrow', '|', 'stamp', 'sign', 'image', '|', 'whiteout', 'redact', '|', 'measure', 'area'] },
-  pages: { label: 'Pages', items: ['@rotl', '@rotr', '|', '@up', '@down', '@del', '|', '@dup', '@blank', '@insert', '|', '@extract', '@split', '|', '@merge', '@images'] },
+  pages: { label: 'Pages', items: ['@scan', '|', '@rotl', '@rotr', '@crop', '|', '@up', '@down', '@del', '|', '@dup', '@blank', '@insert', '|', '@extract', '@split', '|', '@merge', '@images'] },
   forms: { label: 'Forms', items: ['select', '|', 'ftext', 'fcheck', '|', '@fill', '@flatten'] },
   tools: { label: 'Tools', items: ['@search', '|', '@watermark', '@hf', '@bates', '@props', '|', '@redactApply', '@compress', '@ocr', '|', '@png', '@txt'] }
 };
 const ACTS = {
+  scan: ['Scan pages', 'camera', () => scOpen()], crop: ['Crop margins', 'crop', () => openTask('crop')],
   rotl: ['Rotate left', 'rotl', () => rotatePages(-90)], rotr: ['Rotate right', 'rotr', () => rotatePages(90)],
   up: ['Move up', 'up', () => movePages(-1)], down: ['Move down', 'down', () => movePages(1)], del: ['Delete', 'del', deletePages],
   dup: ['Duplicate', 'dup', duplicatePages], blank: ['Blank page', 'blank', blankPage], insert: ['Insert file', 'insert', insertFromFile],
@@ -1072,7 +1132,7 @@ const taskOf = t => ({ form: 'fill' }[t] || t);
 $('#toolbar').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.rib) { S.ribbon = b.dataset.rib; renderRibbon(); return; }
-  if (!cur()) { toast('Open a PDF first'); return; }
+  if (!cur() && b.dataset.act !== 'scan') { toast('Open a PDF first'); return; }
   if (b.dataset.tool) setTool(b.dataset.tool);
   else if (b.dataset.act) ACTS[b.dataset.act][2]();
 });
@@ -1200,7 +1260,7 @@ function pageSizeLabel(inf) { if (!inf) return ''; const w = inf.vp1.width, h = 
 
 /* ================= task panels ================= */
 function openTask(id) { S.task = id; if (S.sel) S.sel = null; redrawAll(); renderPanel(); if (innerWidth <= 860) $('#panel').scrollIntoView({ block: 'nearest' }); }
-function closeTask() { S.task = null; S.search.hits = []; redrawAll(); renderPanel(); }
+function closeTask() { S.task = null; S.search.hits = []; redrawAll(); renderPanel(); setCursor(); }
 const head = t => `<div class="task-h"><h3>${t}</h3><button class="icon-btn" data-close aria-label="Close">${svg('x')}</button></div>`;
 function scopeHTML(d) { const n = selPages().length; return `<div class="field"><span class="lbl">Pages</span><div class="row"><label class="chk"><input type="radio" name="scope" value="all" checked> All ${d.info.length}</label><label class="chk"><input type="radio" name="scope" value="sel"> Selected (${n})</label></div></div>`; }
 const scopeIdx = P => { const v = ($('input[name=scope]:checked', P) || {}).value; return v === 'sel' ? selPages() : [...cur().info.keys()]; };
@@ -1329,6 +1389,40 @@ const TASKS = {
       }, 'Adding text layer…');
     };
   },
+  crop(P, d) {
+    const C = S.crop; const save = () => pref.set('crop', C);
+    const u = ['mm', 'in', 'pt'].map(x => `<option${C.unit === x ? ' selected' : ''}>${x}</option>`).join('');
+    const side = (s, l) => `<div class="field"><label for="cr${s}">${l}</label><input id="cr${s}" class="inp" type="number" min="0" step="any" value="${C[s]}"></div>`;
+    P.innerHTML = `<section class="sec">${head('Crop margins')}
+      <div class="segs" id="crMode"><button type="button" data-m="fixed" class="${C.mode === 'fixed' ? 'on' : ''}">Set margins</button><button type="button" data-m="auto" class="${C.mode === 'auto' ? 'on' : ''}">Trim white space</button></div>
+      ${C.mode === 'fixed' ? `<div class="grid2">${side('t', 'Top')}${side('b', 'Bottom')}${side('l', 'Left')}${side('r', 'Right')}</div>
+        <div class="row" style="justify-content:space-between"><label class="chk"><input type="checkbox" id="crLink" ${C.link ? 'checked' : ''}> Same on all sides</label><select id="crUnit" class="inp" style="width:auto" aria-label="Unit">${u}</select></div>
+        <p class="hint">Type how much to cut from each edge, or drag the dashed edges on the page.</p>`
+      : `<div class="field"><label for="crPad">Keep a border of</label><div class="grid2"><input id="crPad" class="inp" type="number" min="0" step="any" value="${C.pad}"><select id="crUnit" class="inp" aria-label="Unit">${u}</select></div></div>
+        <p class="hint" id="crInfo">Finds where the content ends on each page and trims the blank space around it. Each page is measured on its own.</p>`}
+      <div class="field"><span class="lbl">Pages</span><div class="row">${[['all', `All ${d.info.length}`], ['sel', `Selected (${selPages().length})`], ['cur', 'Current page']].map(([v, l]) => `<label class="chk"><input type="radio" name="crScope" value="${v}" ${C.scope === v ? 'checked' : ''}> ${l}</label>`).join('')}</div></div>
+      <div class="row"><button class="btn primary" id="crGo">${svg('crop')}Crop</button><button class="btn" id="crReset">Remove crop</button></div>
+      <p class="hint">Cropping hides the margins rather than deleting them, so Remove crop brings them back later, even after you save.</p></section>`;
+    bindClose(P);
+    $$('#crMode button', P).forEach(b => b.onclick = () => { C.mode = b.dataset.m; save(); TASKS.crop(P, d); redrawAll(); });
+    for (const s of ['t', 'r', 'b', 'l']) { const n = $('#cr' + s, P); if (n) n.oninput = () => { const v = Math.max(0, parseFloat(n.value) || 0); if (C.link) { C.t = C.r = C.b = C.l = v; syncCropFields(n); } else C[s] = v; save(); redrawAll(); }; }
+    const lk = $('#crLink', P); if (lk) lk.onchange = () => { C.link = lk.checked; if (C.link) { C.r = C.b = C.l = C.t; syncCropFields(); } save(); redrawAll(); };
+    $('#crUnit', P).onchange = e => { const f = CU[C.unit] / CU[e.target.value]; const pr = e.target.value === 'pt' ? 0 : e.target.value === 'in' ? 3 : 1; for (const s of ['t', 'r', 'b', 'l', 'pad']) C[s] = +(C[s] * f).toFixed(pr); C.unit = e.target.value; save(); TASKS.crop(P, d); };
+    const pd = $('#crPad', P); if (pd) pd.oninput = () => { C.pad = Math.max(0, parseFloat(pd.value) || 0); save(); redrawAll(); };
+    $$('input[name=crScope]', P).forEach(r => r.onchange = () => { C.scope = r.value; save(); redrawAll(); if (C.mode === 'auto') measureCrop(d, P); });
+    $('#crGo', P).onclick = async () => {
+      const idx = cropScope(d);
+      if (C.mode === 'auto') { await measureCrop(d, P); if (!d.cropAuto || idx.some(i => d.cropAuto[i] === undefined)) return; }
+      const rects = idx.map(i => [i, cropRectVp1(d, i)]).filter(([i, r]) => r && (r[0] > .5 || r[1] > .5 || d.info[i].vp1.width - r[2] > .5 || d.info[i].vp1.height - r[3] > .5));
+      if (!rects.length) { toast(C.mode === 'auto' ? 'There is no blank margin to trim on those pages.' : 'Set a margin above zero first.'); return; }
+      const ok = await editBytes(`Cropped ${rects.length} page${rects.length > 1 ? 's' : ''}`, pdf => {
+        for (const [i, r] of rects) { const vp = d.info[i].vp1; const a = vp.convertToPdfPoint(r[0], r[1]), b = vp.convertToPdfPoint(r[2], r[3]); pdf.getPage(i).setCropBox(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])); }
+      }, 'Cropping…');
+      if (ok && S.task === 'crop') closeTask();
+    };
+    $('#crReset', P).onclick = () => { const idx = cropScope(d); editBytes('Crop removed', pdf => { let n = 0; for (const i of idx) { const p = pdf.getPage(i); const mb = p.getMediaBox(), cb = p.getCropBox(); if (Math.abs(mb.x - cb.x) + Math.abs(mb.y - cb.y) + Math.abs(mb.width - cb.width) + Math.abs(mb.height - cb.height) > .01) { p.setCropBox(mb.x, mb.y, mb.width, mb.height); n++; } } if (!n) { toast('Those pages are not cropped.'); return false; } }); };
+    if (C.mode === 'auto') measureCrop(d, P);
+  },
   async form(P, d) {
     P.innerHTML = `<section class="sec">${head('Fill form')}<p class="muted">Reading fields…</p></section>`; bindClose(P);
     let pdf; try { pdf = await PDFDocument.load(d.bytes, LOAD); } catch (e) { P.querySelector('p').textContent = 'Fields cannot be read from this file: ' + e.message; return; }
@@ -1360,6 +1454,60 @@ const TASKS = {
     });
   }
 };
+/* ================= crop margins ================= */
+// Crops set each page's CropBox, so the cut-off margins are hidden, not deleted, and Remove crop restores them.
+const CU = { mm: 72 / 25.4, in: 72, pt: 1 };
+const CROP_CUR = { l: 'ew-resize', r: 'ew-resize', t: 'ns-resize', b: 'ns-resize', lt: 'nwse-resize', rb: 'nwse-resize', rt: 'nesw-resize', lb: 'nesw-resize' };
+function cropScope(d) { const s = S.crop.scope; return s === 'sel' ? selPages() : s === 'cur' ? [d.cur] : [...d.info.keys()]; }
+// The crop as [x0, y0, x1, y1] in the page's displayed (rotated) orientation at 100%, or null when there is nothing to keep.
+function cropRectVp1(d, i) {
+  const C = S.crop; const W = d.info[i].vp1.width, H = d.info[i].vp1.height; const k = CU[C.unit];
+  let r;
+  if (C.mode === 'auto') { const b = d.cropAuto && d.cropAuto[i]; if (!b) return null; const p = C.pad * k; r = [Math.max(0, b[0] - p), Math.max(0, b[1] - p), Math.min(W, b[2] + p), Math.min(H, b[3] + p)]; }
+  else r = [C.l * k, C.t * k, W - C.r * k, H - C.b * k];
+  return r[2] - r[0] >= 18 && r[3] - r[1] >= 18 ? r : null;
+}
+async function contentBox(d, i) {
+  const s = .6; const { c } = await renderToCanvas(d, i, s, { annots: true }); const w = c.width, h = c.height; const px = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const rows = new Uint32Array(h), cols = new Uint32Array(w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const j = (y * w + x) * 4; if (px[j] * .299 + px[j + 1] * .587 + px[j + 2] * .114 < 215) { rows[y]++; cols[x]++; } }
+  const rmin = Math.max(1, w * .003), cmin = Math.max(1, h * .003); let y0 = 0, y1 = h - 1, x0 = 0, x1 = w - 1;
+  while (y0 < h && rows[y0] < rmin) y0++; while (y1 > y0 && rows[y1] < rmin) y1--; while (x0 < w && cols[x0] < cmin) x0++; while (x1 > x0 && cols[x1] < cmin) x1--;
+  if (y0 >= h || x0 >= w || x1 - x0 < 2 || y1 - y0 < 2) return null;
+  return [x0 / s, y0 / s, (x1 + 1) / s, (y1 + 1) / s];
+}
+async function measureCrop(d, P) {
+  d.cropAuto = d.cropAuto || []; const todo = cropScope(d).filter(i => d.cropAuto[i] === undefined); const job = d.cropJob = (d.cropJob || 0) + 1;
+  for (let k = 0; k < todo.length; k++) {
+    if (d.cropJob !== job || S.task !== 'crop' || S.crop.mode !== 'auto' || !d.cropAuto) return;
+    const n = $('#crInfo', P); if (n) n.textContent = `Measuring page ${todo[k] + 1} (${k + 1} of ${todo.length})…`;
+    let b = null; try { b = await contentBox(d, todo[k]); } catch {} if (!d.cropAuto) return; d.cropAuto[todo[k]] = b; if (d === cur()) drawOverlay(todo[k]);
+  }
+  const n = $('#crInfo', P); if (!n || !d.cropAuto) return; const idx = cropScope(d); const blank = idx.filter(i => d.cropAuto[i] === null).length;
+  n.textContent = `Measured ${idx.length} page${idx.length > 1 ? 's' : ''}. The shaded areas will be cut.${blank ? ` ${blank} blank page${blank > 1 ? 's stay' : ' stays'} as ${blank > 1 ? 'they are' : 'it is'}.` : ''}`;
+}
+function drawCropPreview(ctx, d, i) {
+  if (!cropScope(d).includes(i)) return; const r = cropRectVp1(d, i); if (!r) return; const v = d.views[i]; const W = v.vp.width, H = v.vp.height; const z = d.zoom;
+  const [x0, y0, x1, y1] = r.map(q => q * z);
+  ctx.save(); ctx.fillStyle = 'rgba(18,20,26,.42)'; ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.rect(x0, y0, x1 - x0, y1 - y0); ctx.fill('evenodd');
+  ctx.strokeStyle = '#2b5cff'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]); ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+  if (S.crop.mode === 'fixed') { ctx.fillStyle = '#fff'; const hb = (x, y, w, h) => { ctx.fillRect(x - w / 2, y - h / 2, w, h); ctx.strokeRect(x - w / 2, y - h / 2, w, h); }; const mx = (x0 + x1) / 2, my = (y0 + y1) / 2; hb(mx, y0, 24, 6); hb(mx, y1, 24, 6); hb(x0, my, 6, 24); hb(x1, my, 6, 24); }
+  ctx.restore();
+}
+function cropHit(i, p) {
+  const d = cur(); if (S.crop.mode !== 'fixed' || !cropScope(d).includes(i)) return ''; const r = cropRectVp1(d, i); if (!r) return '';
+  const [x0, y0, x1, y1] = r.map(v => v * d.zoom); const T = 9; const inY = p[1] > y0 - T && p[1] < y1 + T, inX = p[0] > x0 - T && p[0] < x1 + T; let s = '';
+  if (inY && Math.abs(p[0] - x0) < T) s += 'l'; else if (inY && Math.abs(p[0] - x1) < T) s += 'r';
+  if (inX && Math.abs(p[1] - y0) < T) s += 't'; else if (inX && Math.abs(p[1] - y1) < T) s += 'b';
+  return s;
+}
+function cropDrag(i, p, sides) {
+  const d = cur(); const C = S.crop; const z = d.zoom, k = CU[C.unit]; const W = d.info[i].vp1.width, H = d.info[i].vp1.height; const pr = C.unit === 'pt' ? 0 : C.unit === 'in' ? 2 : 1;
+  for (const s of sides) { const v = +(Math.max(0, s === 'l' ? p[0] / z : s === 'r' ? W - p[0] / z : s === 't' ? p[1] / z : H - p[1] / z) / k).toFixed(pr); if (C.link) C.t = C.r = C.b = C.l = v; else C[s] = v; }
+  syncCropFields(); redrawAll();
+}
+function syncCropFields(except) { for (const s of ['t', 'r', 'b', 'l']) { const n = $('#cr' + s); if (n && n !== except) n.value = S.crop[s]; } }
+
 async function findAll(d, q, cs) {
   const H = []; if (!q) return H; const nq = cs ? q : q.toLowerCase();
   for (let i = 0; i < d.info.length; i++) {
@@ -1469,13 +1617,462 @@ async function makeSample() {
   return { bytes, annots };
 }
 
+/* ================= batch scanner ================= */
+// Everything runs on this device: camera frames and photos are never uploaded.
+// Pipeline per page: photo -> page corners (found automatically, draggable) -> perspective straightening -> rotation -> filter -> margins -> PDF page.
+const MM = 72 / 25.4;
+const PAGE_MM = { a4: [210, 297], letter: [215.9, 279.4] };
+const SC_FILTERS = [['color', 'Colour'], ['enhance', 'Enhanced'], ['grey', 'Grey'], ['bw', 'B&W']];
+const SC = {
+  open: false, built: false, pages: [], sel: -1, show: 'corners', insertAt: null, seq: 0,
+  mode: pref.get('scanMode', 'auto'), timer: pref.get('scanTimer', 4), filter: pref.get('scanFilter', 'enhance'), size: pref.get('scanSize', 'auto'),
+  margins: pref.get('scanMargins', { t: 0, r: 0, b: 0, l: 0 }), link: pref.get('scanLink', true),
+  stream: null, video: null, devices: [], deviceId: pref.get('scanDevice', ''), err: '', starting: false,
+  live: null, prevQ: null, stable: 0, armed: true, lastSig: null, lastShot: 0, lastDet: 0, raf: 0, state: '',
+  timerOn: false, timerNext: 0, drag: null, fit: null
+};
+const scE = id => document.getElementById(id);
+function cnv(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
+const scFull = c => [[0, 0], [c.width, 0], [c.width, c.height], [0, c.height]];
+
+/* --- page edge detection: bright, low-colour paper against a darker or more colourful background --- */
+function blurF(a, w, h, r) {
+  const t = new Float32Array(a.length), o = new Float32Array(a.length), n = 2 * r + 1;
+  for (let y = 0; y < h; y++) { const row = y * w; let s = 0; for (let x = -r; x <= r; x++) s += a[row + Math.min(w - 1, Math.max(0, x))]; for (let x = 0; x < w; x++) { t[row + x] = s / n; s += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)]; } }
+  for (let x = 0; x < w; x++) { let s = 0; for (let y = -r; y <= r; y++) s += t[Math.min(h - 1, Math.max(0, y)) * w + x]; for (let y = 0; y < h; y++) { o[y * w + x] = s / n; s += t[Math.min(h - 1, y + r + 1) * w + x] - t[Math.max(0, y - r) * w + x]; } }
+  return o;
+}
+function convexHull(P) {
+  if (P.length < 3) return P.slice(); P = P.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]); const lo = [], up = [];
+  for (const p of P) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = P.length - 1; i >= 0; i--) { const p = P[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  up.pop(); lo.pop(); return lo.concat(up);
+}
+function polyArea(q) { let s = 0; for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; s += a[0] * b[1] - b[0] * a[1]; } return Math.abs(s) / 2; }
+// Corners in reading order: top left, top right, bottom right, bottom left.
+function orderQuad(q) {
+  const cx = q.reduce((s, p) => s + p[0], 0) / 4, cy = q.reduce((s, p) => s + p[1], 0) / 4;
+  const s = q.slice().sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+  let k = 0; for (let i = 1; i < 4; i++) if (s[i][0] + s[i][1] < s[k][0] + s[k][1]) k = i;
+  return [0, 1, 2, 3].map(i => s[(k + i) % 4].slice());
+}
+// The four hull points that enclose the largest area: the page's corners.
+function maxQuad(H) {
+  const n = H.length; if (n < 4) return null;
+  const arg = f => { let k = 0; for (let i = 1; i < n; i++) if (f(H[i]) > f(H[k])) k = i; return k; };
+  let ix = [arg(p => -p[0] - p[1]), arg(p => p[0] - p[1]), arg(p => p[0] + p[1]), arg(p => p[1] - p[0])];
+  const area = ids => polyArea([...ids].sort((a, b) => a - b).map(i => H[i])); let best = area(ix);
+  for (let it = 0; it < 8; it++) {
+    let imp = false;
+    for (let k = 0; k < 4; k++) for (let j = 0; j < n; j++) { if (ix.includes(j)) continue; const t = ix.slice(); t[k] = j; const a = area(t); if (a > best + 1e-6) { best = a; ix = t; imp = true; } }
+    if (!imp) break;
+  }
+  return orderQuad(ix.map(i => H[i]));
+}
+function scDetect(src, maxDim = 240) {
+  const W0 = src.videoWidth || src.width, H0 = src.videoHeight || src.height; if (!W0 || !H0) return null;
+  const k = Math.min(1, maxDim / Math.max(W0, H0)); const w = Math.max(16, Math.round(W0 * k)), h = Math.max(16, Math.round(H0 * k)); const kx = w / W0, ky = h / H0;
+  const c = cnv(w, h); const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
+  const px = ctx.getImageData(0, 0, w, h).data; const N = w * h; let v = new Float32Array(N);
+  for (let i = 0, j = 0; i < N; i++, j += 4) { const r = px[j], g = px[j + 1], b = px[j + 2]; v[i] = r * .299 + g * .587 + b * .114 - (Math.max(r, g, b) - Math.min(r, g, b)) * .7; }
+  v = blurF(v, w, h, 2);
+  let lo = Infinity, hi = -Infinity; for (let i = 0; i < N; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
+  if (hi - lo < 30) return null;
+  const hist = new Float64Array(256), sc = 255 / (hi - lo); for (let i = 0; i < N; i++) hist[Math.min(255, (v[i] - lo) * sc | 0)]++;
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sB = 0, wB = 0, best = -1, th = 128;
+  for (let t = 0; t < 256; t++) { wB += hist[t]; if (!wB) continue; const wF = N - wB; if (!wF) break; sB += t * hist[t]; const bt = wB * wF * (sB / wB - (sum - sB) / wF) ** 2; if (bt > best) { best = bt; th = t; } }
+  const cut = lo + (th + .5) / sc; const m = new Int32Array(N); for (let i = 0; i < N; i++) m[i] = v[i] > cut ? -1 : 0;
+  let bestId = 0, bestN = 0, id = 0; const stack = new Int32Array(N);
+  for (let s0 = 0; s0 < N; s0++) {
+    if (m[s0] !== -1) continue; id++; let n = 0, sp = 0; stack[sp++] = s0; m[s0] = id;
+    while (sp) { const p = stack[--sp]; n++; const x = p % w;
+      if (x > 0 && m[p - 1] === -1) { m[p - 1] = id; stack[sp++] = p - 1; }
+      if (x < w - 1 && m[p + 1] === -1) { m[p + 1] = id; stack[sp++] = p + 1; }
+      if (p >= w && m[p - w] === -1) { m[p - w] = id; stack[sp++] = p - w; }
+      if (p < N - w && m[p + w] === -1) { m[p + w] = id; stack[sp++] = p + w; } }
+    if (n > bestN) { bestN = n; bestId = id; }
+  }
+  if (bestN / N < .08 || bestN / N > .985) return null;
+  const pts = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const p = y * w + x; if (m[p] !== bestId) continue; if (x === 0 || y === 0 || x === w - 1 || y === h - 1 || m[p - 1] !== bestId || m[p + 1] !== bestId || m[p - w] !== bestId || m[p + w] !== bestId) pts.push([x + .5, y + .5]); }
+  const q = maxQuad(convexHull(pts)); if (!q) return null; const qa = polyArea(q); if (qa / N < .08) return null;
+  return { quad: q.map(p => [Math.min(W0, Math.max(0, p[0] / kx)), Math.min(H0, Math.max(0, p[1] / ky))]), conf: Math.min(1, bestN / qa) };
+}
+function scSig(src) { const c = cnv(16, 12); const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(src, 0, 0, 16, 12); const d = x.getImageData(0, 0, 16, 12).data; const o = new Float32Array(192); for (let i = 0; i < 192; i++) o[i] = d[i * 4] * .3 + d[i * 4 + 1] * .59 + d[i * 4 + 2] * .11; return o; }
+const sigDiff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+
+/* --- straightening, rotation, filters --- */
+function solve8(A, b) {
+  const n = 8;
+  for (let i = 0; i < n; i++) { let p = i; for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r; [A[i], A[p]] = [A[p], A[i]]; [b[i], b[p]] = [b[p], b[i]]; const dv = A[i][i]; if (Math.abs(dv) < 1e-10) return null; for (let r = i + 1; r < n; r++) { const f = A[r][i] / dv; for (let c = i; c < n; c++) A[r][c] -= f * A[i][c]; b[r] -= f * b[i]; } }
+  const x = new Array(n); for (let i = n - 1; i >= 0; i--) { let s = b[i]; for (let c = i + 1; c < n; c++) s -= A[i][c] * x[c]; x[i] = s / A[i][i]; } return x;
+}
+function homography(from, to) { const A = [], b = []; for (let i = 0; i < 4; i++) { const [x, y] = from[i], [u, v] = to[i]; A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u); A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v); } const h = solve8(A, b); return h && [...h, 1]; }
+function scWarp(pg, maxSide) {
+  const q = pg.quad; const D = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  let W = Math.max(D(q[0], q[1]), D(q[3], q[2])), H = Math.max(D(q[0], q[3]), D(q[1], q[2]));
+  const k = Math.min(1, maxSide / Math.max(W, H, 1)); W = Math.max(8, Math.round(W * k)); H = Math.max(8, Math.round(H * k));
+  const out = cnv(W, H); const octx = out.getContext('2d'); const hm = homography([[0, 0], [W, 0], [W, H], [0, H]], q);
+  if (!hm) { octx.drawImage(pg.src, 0, 0, W, H); return out; }
+  if (!pg.srcData) pg.srcData = pg.src.getContext('2d').getImageData(0, 0, pg.src.width, pg.src.height);
+  const S0 = pg.srcData.data, sw = pg.src.width, sh = pg.src.height; const od = octx.createImageData(W, H); const O = od.data;
+  for (let y = 0; y < H; y++) {
+    const yy = y + .5;
+    for (let x = 0; x < W; x++) {
+      const xx = x + .5; const z = hm[6] * xx + hm[7] * yy + 1; let sx = (hm[0] * xx + hm[1] * yy + hm[2]) / z - .5, sy = (hm[3] * xx + hm[4] * yy + hm[5]) / z - .5;
+      if (!(sx > 0)) sx = 0; else if (sx > sw - 1.001) sx = sw - 1.001; if (!(sy > 0)) sy = 0; else if (sy > sh - 1.001) sy = sh - 1.001;
+      const x0 = sx | 0, y0 = sy | 0, fx = sx - x0, fy = sy - y0; const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4; const o = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) { const a = S0[i00 + c] + (S0[i10 + c] - S0[i00 + c]) * fx, b = S0[i01 + c] + (S0[i11 + c] - S0[i01 + c]) * fx; O[o + c] = a + (b - a) * fy; }
+      O[o + 3] = 255;
+    }
+  }
+  octx.putImageData(od, 0, 0); return out;
+}
+function scRotate(c, rot) { if (!rot) return c; const o = rot % 180 ? cnv(c.height, c.width) : cnv(c.width, c.height); const x = o.getContext('2d'); x.translate(o.width / 2, o.height / 2); x.rotate(rot * Math.PI / 180); x.drawImage(c, -c.width / 2, -c.height / 2); return o; }
+// Enhanced, Grey and B&W first even out the lighting: the paper's brightness is estimated on a coarse grid and divided out, which lifts shadows and makes the paper white.
+function scFilter(c, f) {
+  if (f === 'color') return c;
+  const x = c.getContext('2d'); const W = c.width, H = c.height; const id = x.getImageData(0, 0, W, H); const D = id.data; const N = W * H;
+  const L = new Uint8ClampedArray(N); for (let i = 0, j = 0; i < N; i++, j += 4) L[i] = D[j] * .299 + D[j + 1] * .587 + D[j + 2] * .114;
+  const B = Math.max(8, Math.round(Math.max(W, H) / 36)); const gw = Math.ceil(W / B), gh = Math.ceil(H / B); let G = new Float32Array(gw * gh); const hist = new Uint32Array(64);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    hist.fill(0); let n = 0; const ye = Math.min(H, gy * B + B), xe = Math.min(W, gx * B + B);
+    for (let y = gy * B; y < ye; y += 2) for (let xx = gx * B; xx < xe; xx += 2) { hist[L[y * W + xx] >> 2]++; n++; }
+    let need = n * .1, k = 63; while (k > 0 && need > 0) { need -= hist[k]; k--; } G[gy * gw + gx] = (k + 1) * 4 + 2;
+  }
+  const G2 = new Float32Array(G.length);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { let mx = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = gy + dy, xx = gx + dx; if (yy >= 0 && yy < gh && xx >= 0 && xx < gw) mx = Math.max(mx, G[yy * gw + xx]); } G2[gy * gw + gx] = mx; }
+  G = blurF(G2, gw, gh, 1);
+  for (let y = 0; y < H; y++) {
+    let fy = (y + .5) / B - .5; if (fy < 0) fy = 0; const y0 = Math.min(gh - 1, fy | 0), y1 = Math.min(gh - 1, y0 + 1); const ty = Math.min(1, fy - y0);
+    for (let xx = 0; xx < W; xx++) {
+      let fx = (xx + .5) / B - .5; if (fx < 0) fx = 0; const x0 = Math.min(gw - 1, fx | 0), x1 = Math.min(gw - 1, x0 + 1); const tx = Math.min(1, fx - x0);
+      const a = G[y0 * gw + x0] + (G[y0 * gw + x1] - G[y0 * gw + x0]) * tx, b = G[y1 * gw + x0] + (G[y1 * gw + x1] - G[y1 * gw + x0]) * tx;
+      const s = 255 / Math.max(48, a + (b - a) * ty); const i = y * W + xx, j = i * 4;
+      if (f === 'enhance') { for (let c2 = 0; c2 < 3; c2++) D[j + c2] = 255 - (255 - Math.min(255, D[j + c2] * s)) * 1.3; }
+      else { let v = Math.min(255, L[i] * s); v = f === 'bw' ? (v > 178 ? 255 : 0) : 255 - (255 - v) * 1.35; D[j] = D[j + 1] = D[j + 2] = v; }
+    }
+  }
+  x.putImageData(id, 0, 0); return c;
+}
+const scRender = (pg, maxSide) => scFilter(scRotate(scWarp(pg, maxSide), pg.rot), pg.filter);
+function scOut(pg) { const key = JSON.stringify([pg.quad, pg.rot, pg.filter]); if (pg.outKey !== key) { pg.out = scRender(pg, 2400); pg.outKey = key; } return pg.out; }
+function scThumb(pg) { pg.thumb = scRender(pg, 320).toDataURL('image/jpeg', .8); }
+const scMarg = pg => (pg && pg.margins) || SC.margins;
+// Page layout in millimetres. Positive margins add white paper around the scan; negative margins trim into it.
+function scLayout(pg, iw, ih) {
+  const m = scMarg(pg); const asp = ih / iw; const a = asp >= 1 ? asp : 1 / asp;
+  const short = Math.abs(a - 1.294) < .03 ? 215.9 : 210; const natW = asp >= 1 ? short : short / asp; const pxmm = iw / natW;
+  const tr = k => Math.max(0, -(m[k] || 0)), ad = k => Math.max(0, m[k] || 0);
+  let crop = { x: tr('l') * pxmm, y: tr('t') * pxmm, w: iw - (tr('l') + tr('r')) * pxmm, h: ih - (tr('t') + tr('b')) * pxmm };
+  if (crop.w < 16 || crop.h < 16) crop = { x: 0, y: 0, w: iw, h: ih };
+  const cw = crop.w / pxmm, ch = crop.h / pxmm;
+  if (SC.size === 'auto') return { pw: cw + ad('l') + ad('r'), ph: ch + ad('t') + ad('b'), x: ad('l'), y: ad('t'), w: cw, h: ch, crop };
+  let [PW, PH] = PAGE_MM[SC.size]; if (cw > ch) [PW, PH] = [PH, PW];
+  const aw = Math.max(10, PW - ad('l') - ad('r')), ah = Math.max(10, PH - ad('t') - ad('b')); const s = Math.min(aw / cw, ah / ch);
+  return { pw: PW, ph: PH, x: ad('l') + (aw - cw * s) / 2, y: ad('t') + (ah - ch * s) / 2, w: cw * s, h: ch * s, crop };
+}
+
+/* --- camera --- */
+async function scStartCam() {
+  scStopCam(); SC.err = ''; SC.starting = true; scMsg();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { SC.err = 'unavailable'; SC.starting = false; scMsg(); scSide(); return; }
+  if (window.quireDesktop && window.quireDesktop.askCamera) { try { if (!(await window.quireDesktop.askCamera())) { SC.err = 'denied'; SC.starting = false; scMsg(); scSide(); return; } } catch {} }
+  const size = { width: { ideal: 3840 }, height: { ideal: 2160 } };
+  try {
+    let st;
+    try { st = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign(SC.deviceId ? { deviceId: { exact: SC.deviceId } } : { facingMode: { ideal: 'environment' } }, size) }); }
+    catch (e) { if (e && e.name === 'OverconstrainedError') st = await navigator.mediaDevices.getUserMedia({ audio: false, video: true }); else throw e; }
+    if (!SC.open) { st.getTracks().forEach(t => t.stop()); return; }
+    SC.stream = st; SC.video.srcObject = st; await SC.video.play().catch(() => {});
+    try { SC.devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); } catch {}
+    const tr = st.getVideoTracks()[0]; const set = tr && tr.getSettings ? tr.getSettings() : {}; if (set.deviceId) SC.deviceId = set.deviceId;
+  } catch (e) { console.warn(e); SC.err = e && e.name === 'NotAllowedError' ? 'denied' : e && (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') ? 'none' : 'unavailable'; }
+  SC.starting = false; scMsg(); scSide(); scBar(); scStrip();
+}
+function scStopCam() { if (SC.stream) SC.stream.getTracks().forEach(t => t.stop()); SC.stream = null; if (SC.video) SC.video.srcObject = null; SC.live = null; }
+function scMsg() {
+  const M = scE('scMsg'); if (!M) return; const live = SC.sel === -1;
+  const txt = { denied: ['Camera access is blocked', 'Allow the camera for this page in your browser’s site settings, then press Try again. You can also import photos you have already taken.'],
+    none: ['No camera found', 'Connect a camera, or import photos of your pages instead.'],
+    unavailable: ['The camera isn’t available here', 'This view can’t use the camera. Import photos of your pages instead, or scan in the Mac or Windows app, or with the HTML file opened in a browser.'] }[SC.err];
+  M.hidden = !live || !(txt || SC.starting);
+  if (M.hidden) return;
+  M.innerHTML = SC.starting ? '<div class="card"><div class="spin"></div><span>Starting camera…</span></div>' : `<div class="card"><h3>${txt[0]}</h3><p style="margin:0;line-height:1.5">${txt[1]}</p><div class="row" style="justify-content:center"><button class="btn" data-sc="import">${svg('images')}Import photos</button>${SC.err !== 'unavailable' ? '<button class="btn" data-sc="retry">Try again</button>' : ''}</div></div>`;
+}
+
+/* --- capture loop: auto shoots when a page has been still for a moment, then waits until the page changes --- */
+function scTick(now) {
+  if (!SC.open) { SC.raf = 0; return; } SC.raf = requestAnimationFrame(scTick);
+  if (SC.sel !== -1) return; const v = SC.video; const ready = v && v.readyState >= 2 && v.videoWidth;
+  if (ready && now - SC.lastDet > 110) { const dt = SC.lastDet ? Math.min(400, now - SC.lastDet) : 0; SC.lastDet = now; scAuto(now, dt); }
+  const cnt = scE('scCount');
+  if (SC.timerOn && ready) { const left = SC.timerNext - now; cnt.hidden = false; cnt.textContent = Math.max(1, Math.ceil(left / 1000)); if (left <= 0) { scCapture(); SC.timerNext = now + SC.timer * 1000; } }
+  else cnt.hidden = true;
+  scDraw();
+}
+function scAuto(now, dt) {
+  const v = SC.video; let r = null; try { r = scDetect(v); } catch {} SC.live = r && r.conf > .72 ? r : null;
+  let st = SC.live ? 'found' : 'search';
+  if (SC.mode === 'auto') {
+    if (!SC.armed) { if (SC.lastSig && sigDiff(scSig(v), SC.lastSig) > 14) SC.armed = true; else st = 'next'; }
+    if (SC.armed && SC.live && now - SC.lastShot > 1200) {
+      const diag = Math.hypot(v.videoWidth, v.videoHeight); const mv = SC.prevQ ? Math.max(...SC.live.quad.map((p, i) => Math.hypot(p[0] - SC.prevQ[i][0], p[1] - SC.prevQ[i][1]))) : 1e9;
+      SC.stable = mv < diag * .012 ? SC.stable + dt : 0; st = 'hold';
+      if (SC.stable > 900) { SC.stable = 0; scCapture(); st = 'next'; }
+    } else SC.stable = 0;
+    SC.prevQ = SC.live && SC.live.quad;
+  }
+  scState(st);
+}
+function scState(st) {
+  if (st != null) SC.state = st; const n = scE('scState'); if (!n) return; n.hidden = SC.sel !== -1 || !SC.stream;
+  const L = { search: ['', 'Looking for a page'], found: ['ok', SC.mode === 'manual' ? 'Page found. Press Space to capture' : 'Page found'], hold: ['hold', 'Hold still…'], next: ['ok', 'Captured. Turn to the next page'] }[SC.state] || ['', 'Looking for a page'];
+  if (SC.mode === 'timer' && !SC.timerOn) L[1] = SC.live ? 'Page found. Start the timer or press Space' : 'Looking for a page';
+  n.className = 'sc-state ' + L[0]; n.innerHTML = `<i></i>${esc(L[1])}`;
+}
+function scCapture() {
+  const v = SC.video; if (SC.sel !== -1 || !v || !v.videoWidth) return;
+  const k = Math.min(1, 2600 / Math.max(v.videoWidth, v.videoHeight)); const c = cnv(v.videoWidth * k, v.videoHeight * k); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  SC.lastShot = performance.now(); SC.armed = false; SC.lastSig = scSig(v); SC.stable = 0;
+  const live = SC.live ? SC.live.quad.map(p => [p[0] * c.width / v.videoWidth, p[1] * c.height / v.videoHeight]) : null;
+  scAdd(c, live); const f = scE('scFlash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+}
+function scAdd(c, hint) {
+  let r = null; try { r = scDetect(c, 420); } catch {}
+  const q = r && r.conf > .72 ? r.quad : hint;
+  const pg = { id: ++SC.seq, src: c, quad: q || scFull(c), found: !!q, rot: 0, filter: SC.filter, margins: null };
+  scThumb(pg);
+  if (SC.insertAt != null) { SC.pages.splice(Math.min(SC.insertAt, SC.pages.length), 0, pg); SC.insertAt = null; } else SC.pages.push(pg);
+  scStrip(); scSide(); scBar();
+}
+async function scImport() {
+  const f = await pickFile('#scIn'); if (!f || !f.length) return; const before = SC.pages.length; busy('Reading photos…');
+  try {
+    for (const file of f) {
+      const url = URL.createObjectURL(file);
+      try { const img = await loadImg(url); const k = Math.min(1, 2600 / Math.max(img.naturalWidth, img.naturalHeight)); const c = cnv(img.naturalWidth * k, img.naturalHeight * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); scAdd(c, null); }
+      catch { toast('Could not read ' + file.name); } finally { URL.revokeObjectURL(url); }
+      await new Promise(r => setTimeout(r));
+    }
+  } finally { unbusy(); }
+  if (SC.pages.length > before && (SC.err || !SC.stream)) scSelect(before);
+}
+
+/* --- drawing the stage --- */
+const scAccent = () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2b5cff';
+function scDraw() {
+  const cv = scE('scCv'); if (!cv || !SC.open) return; const st = scE('scStage'); const r = dpr(); const W = st.clientWidth, H = st.clientHeight; if (!W || !H) return;
+  if (cv.width !== Math.round(W * r) || cv.height !== Math.round(H * r)) { cv.width = Math.round(W * r); cv.height = Math.round(H * r); }
+  const x = cv.getContext('2d'); x.setTransform(r, 0, 0, r, 0, 0); x.clearRect(0, 0, W, H);
+  const pad = innerWidth <= 760 ? 10 : 20, bot = 80; const AC = scAccent();
+  const fit = (iw, ih) => { const s = Math.min((W - pad * 2) / iw, (H - pad - bot) / ih); return { s, ox: (W - iw * s) / 2, oy: pad + (H - pad - bot - ih * s) / 2 }; };
+  const poly = (P) => { x.beginPath(); x.moveTo(P[0][0], P[0][1]); for (let i = 1; i < 4; i++) x.lineTo(P[i][0], P[i][1]); x.closePath(); };
+  if (SC.sel === -1) {
+    const v = SC.video; if (!v || !v.videoWidth || !SC.stream) return; const f = fit(v.videoWidth, v.videoHeight);
+    x.drawImage(v, f.ox, f.oy, v.videoWidth * f.s, v.videoHeight * f.s);
+    if (SC.live) { const P = SC.live.quad.map(p => [f.ox + p[0] * f.s, f.oy + p[1] * f.s]); x.save(); poly(P); x.fillStyle = 'rgba(43,92,255,.16)'; x.fill(); x.strokeStyle = SC.state === 'hold' ? '#ffc53d' : AC; x.lineWidth = 3; x.lineJoin = 'round'; x.stroke(); x.restore(); }
+    return;
+  }
+  const pg = SC.pages[SC.sel]; if (!pg) return;
+  if (SC.show === 'result') {
+    const out = scOut(pg); const L = scLayout(pg, out.width, out.height); const f = fit(L.pw, L.ph);
+    x.save(); x.shadowColor = 'rgba(0,0,0,.45)'; x.shadowBlur = 24; x.shadowOffsetY = 6; x.fillStyle = '#fff'; x.fillRect(f.ox, f.oy, L.pw * f.s, L.ph * f.s); x.restore();
+    x.imageSmoothingQuality = 'high'; x.drawImage(out, L.crop.x, L.crop.y, L.crop.w, L.crop.h, f.ox + L.x * f.s, f.oy + L.y * f.s, L.w * f.s, L.h * f.s);
+    return;
+  }
+  const f = fit(pg.src.width, pg.src.height); SC.fit = f; const iw = pg.src.width * f.s, ih = pg.src.height * f.s;
+  x.drawImage(pg.src, f.ox, f.oy, iw, ih);
+  const P = pg.quad.map(p => [f.ox + p[0] * f.s, f.oy + p[1] * f.s]);
+  x.save(); x.fillStyle = 'rgba(10,12,16,.55)'; x.beginPath(); x.rect(f.ox, f.oy, iw, ih); x.moveTo(P[0][0], P[0][1]); for (let i = 3; i >= 1; i--) x.lineTo(P[i][0], P[i][1]); x.closePath(); x.fill('evenodd');
+  poly(P); x.strokeStyle = AC; x.lineWidth = 2; x.lineJoin = 'round'; x.stroke();
+  P.forEach((p, i) => { x.beginPath(); x.arc(p[0], p[1], SC.drag && SC.drag.k === i ? 12 : 10, 0, Math.PI * 2); x.fillStyle = 'rgba(255,255,255,.95)'; x.fill(); x.lineWidth = 2.5; x.strokeStyle = AC; x.stroke(); });
+  if (SC.drag) {
+    const k = SC.drag.k, c = P[k], R = 58, Z = 3; let lx = c[0] + (k === 1 || k === 2 ? -R - 30 : R + 30), ly = c[1] + (k >= 2 ? -R - 30 : R + 30);
+    lx = Math.max(R + 4, Math.min(W - R - 4, lx)); ly = Math.max(R + 4, Math.min(H - R - 4, ly));
+    const sr = R / (f.s * Z); const q = pg.quad[k];
+    x.save(); x.beginPath(); x.arc(lx, ly, R, 0, Math.PI * 2); x.fillStyle = '#101114'; x.fill(); x.clip();
+    x.drawImage(pg.src, q[0] - sr, q[1] - sr, sr * 2, sr * 2, lx - R, ly - R, R * 2, R * 2);
+    const Q = pg.quad.map(p => [lx + (p[0] - q[0]) * f.s * Z, ly + (p[1] - q[1]) * f.s * Z]); poly(Q); x.strokeStyle = AC; x.lineWidth = 2; x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.9)'; x.lineWidth = 1; x.beginPath(); x.moveTo(lx - 10, ly); x.lineTo(lx + 10, ly); x.moveTo(lx, ly - 10); x.lineTo(lx, ly + 10); x.stroke();
+    x.restore(); x.beginPath(); x.arc(lx, ly, R, 0, Math.PI * 2); x.strokeStyle = 'rgba(255,255,255,.9)'; x.lineWidth = 2; x.stroke();
+  }
+  x.restore();
+}
+
+/* --- panels --- */
+function scSide() {
+  const P = scE('scSide'); if (!P) return; const n = SC.pages.length; const live = SC.sel === -1; const pg = SC.pages[SC.sel];
+  const seg = (id, opts, val) => `<div class="segs" id="${id}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === val ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  let h = '';
+  if (live) {
+    const hint = { manual: 'Press <span class="kbd">Space</span> or the round button to capture each page.', timer: `Shoots a page every ${SC.timer} seconds while the timer runs. Turn the page between shots. <span class="kbd">Space</span> still captures at any time.`, auto: 'Hold the camera over a page. Quire captures it as soon as the page is still, then waits for you to turn to the next one.' }[SC.mode];
+    h += `<section class="sec"><h3>Capture</h3>${seg('scModeSeg', [['manual', 'Manual'], ['timer', 'Timer'], ['auto', 'Auto']], SC.mode)}<p class="hint">${hint}</p>
+      ${SC.mode === 'timer' ? rangeRow('scTimerR', 'Interval', SC.timer, 2, 15, 1, v => v + ' s') : ''}
+      ${SC.devices.length > 1 ? `<div class="field"><label for="scDev">Camera</label><select id="scDev" class="inp">${SC.devices.map((d, k) => `<option value="${esc(d.deviceId)}"${d.deviceId === SC.deviceId ? ' selected' : ''}>${esc(d.label || 'Camera ' + (k + 1))}</option>`).join('')}</select></div>` : ''}
+      <button class="btn" data-sc="import">${svg('images')}Import photos</button></section>
+      <section class="sec"><h3>New pages</h3><span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, SC.filter)}</section>`;
+  } else {
+    h += `<section class="sec"><div class="task-h"><h3>Page ${SC.sel + 1} of ${n}</h3></div><p class="hint">${pg.found ? 'Page edges found. Drag a corner to adjust it.' : 'No page edges found. Drag the corners onto the page’s corners.'}</p>
+      <span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, pg.filter)}${n > 1 ? '<button class="btn ghost" data-sc="filterAll" style="align-self:flex-start">Use this filter on every page</button>' : ''}</section>`;
+  }
+  const m = live ? SC.margins : scMarg(pg); const own = !live && !!pg.margins;
+  const mf = (k, l) => `<div class="field"><label for="scM${k}">${l}</label><input id="scM${k}" class="inp" type="number" step="any" value="${m[k]}"></div>`;
+  h += `<section class="sec"><h3>Margins</h3>${live ? '' : seg('scMScope', [['all', 'All pages'], ['page', 'This page']], own ? 'page' : 'all')}
+    <div class="grid2">${mf('t', 'Top (mm)')}${mf('b', 'Bottom (mm)')}${mf('l', 'Left (mm)')}${mf('r', 'Right (mm)')}</div>
+    <label class="chk"><input type="checkbox" id="scLink" ${SC.link ? 'checked' : ''}> Same on all sides</label>
+    <p class="hint">${own ? 'These margins apply to this page only.' : 'These margins apply to every page that has no margins of its own.'} A positive number adds white paper around the scan. A negative number trims into it.</p></section>`;
+  h += `<section class="sec"><h3>PDF</h3><div class="field"><label for="scSize">Page size</label><select id="scSize" class="inp">${[['auto', 'Match each scan'], ['a4', 'A4'], ['letter', 'Letter']].map(([v, l]) => `<option value="${v}"${SC.size === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+    <button class="btn primary sc-wide" data-sc="make" ${n ? '' : 'disabled'}><span>${n ? `Create PDF · ${n} page${n > 1 ? 's' : ''}` : 'Create PDF'}</span></button>
+    ${cur() && n ? `<button class="btn sc-wide" data-sc="add" title="${esc(cur().name)}"><span>Add to ${esc(cur().name)}</span></button>` : ''}
+    <p class="hint"><span class="kbd">Space</span> capture · <span class="kbd">←</span> <span class="kbd">→</span> pages · <span class="kbd">R</span> rotate · <span class="kbd">Del</span> remove · <span class="kbd">Esc</span> back</p></section>`;
+  P.innerHTML = h;
+  const ms = $('#scModeSeg', P); if (ms) ms.onclick = e => { const b = e.target.closest('button'); if (!b) return; SC.mode = b.dataset.v; pref.set('scanMode', SC.mode); SC.timerOn = false; SC.armed = true; SC.stable = 0; scSide(); scBar(); scState(); };
+  const tr = $('#scTimerR', P); if (tr) tr.oninput = () => { SC.timer = +tr.value; pref.set('scanTimer', SC.timer); $('#scTimerR-o', P).textContent = SC.timer + ' s'; };
+  const dv = $('#scDev', P); if (dv) dv.onchange = () => { SC.deviceId = dv.value; pref.set('scanDevice', SC.deviceId); scStartCam(); };
+  $('#scFilt', P).onclick = e => { const b = e.target.closest('button'); if (!b) return; if (live) { SC.filter = b.dataset.v; pref.set('scanFilter', SC.filter); } else { pg.filter = b.dataset.v; scThumb(pg); SC.show = 'result'; scStrip(); scBar(); scDraw(); } scSide(); };
+  const sco = $('#scMScope', P); if (sco) sco.onclick = e => { const b = e.target.closest('button'); if (!b) return; pg.margins = b.dataset.v === 'page' ? clone(SC.margins) : null; SC.show = 'result'; scSide(); scBar(); scDraw(); };
+  for (const k of ['t', 'r', 'b', 'l']) $('#scM' + k, P).oninput = e => {
+    const v = parseFloat(e.target.value) || 0; const tgt = own ? pg.margins : SC.margins;
+    if (SC.link) { tgt.t = tgt.r = tgt.b = tgt.l = v; for (const j of ['t', 'r', 'b', 'l']) if (j !== k) $('#scM' + j, P).value = v; } else tgt[k] = v;
+    if (!own) pref.set('scanMargins', SC.margins); if (!live && SC.show !== 'result') { SC.show = 'result'; scBar(); } scDraw();
+  };
+  $('#scLink', P).onchange = e => { SC.link = e.target.checked; pref.set('scanLink', SC.link); };
+  $('#scSize', P).onchange = e => { SC.size = e.target.value; pref.set('scanSize', SC.size); if (!live) { SC.show = 'result'; scBar(); } scDraw(); };
+}
+function scBar() {
+  const B = scE('scBar'); if (!B) return; const n = SC.pages.length; const ib = (act, ic, tip) => `<button class="rb" data-sc="${act}" data-tip="${tip}" aria-label="${tip}">${svg(ic)}</button>`;
+  if (SC.sel === -1) {
+    B.hidden = !!SC.err && !n;
+    B.innerHTML = `${SC.err ? `<button class="btn" data-sc="import">${svg('images')}Import photos</button>` : `${SC.mode === 'timer' ? `<button class="btn" data-sc="timer">${SC.timerOn ? 'Pause timer' : 'Start timer'}</button>` : ''}<button class="shutter" data-sc="shoot" data-tip="Capture" data-key="Space" aria-label="Capture page"></button>`}${n ? `<button class="btn" data-sc="review">Review ${n}</button>` : ''}`;
+  } else {
+    B.hidden = false;
+    B.innerHTML = `<div class="segs" id="scShow"><button type="button" data-v="corners" class="${SC.show === 'corners' ? 'on' : ''}">Corners</button><button type="button" data-v="result" class="${SC.show === 'result' ? 'on' : ''}">Result</button></div><span class="vsep"></span>
+      ${ib('rotl', 'rotl', 'Rotate left')}${ib('rotr', 'rotr', 'Rotate right')}${ib('edges', 'edges', 'Find page edges again')}${ib('full', 'full', 'Use the whole photo')}<span class="vsep"></span>${SC.err ? '' : ib('retake', 'camera', 'Retake this page')}${ib('del', 'del', 'Remove page')}`;
+    $('#scShow', B).onclick = e => { const b = e.target.closest('button'); if (!b) return; SC.show = b.dataset.v; scBar(); scDraw(); };
+  }
+}
+function scStrip() {
+  const T = scE('scStrip'); if (!T) return;
+  T.innerHTML = SC.pages.map((pg, k) => `<button class="sc-tile${k === SC.sel ? ' on' : ''}" data-k="${k}" draggable="true" aria-label="Page ${k + 1}"><img src="${pg.thumb}" alt=""><span class="n">${k + 1}</span></button>`).join('')
+    + `<button class="sc-tile${SC.sel === -1 ? ' on' : ''}" data-k="-1" aria-label="${SC.err ? 'Add pages' : 'Camera'}"><span class="camb">${svg(SC.err ? 'plus' : 'camera')}</span><span class="n">${SC.err ? 'Add' : 'Camera'}</span></button>`;
+  $$('.sc-tile', T).forEach(t => {
+    const k = +t.dataset.k;
+    t.onclick = () => { if (k === -1 && SC.err) { scImport(); return; } scSelect(k); };
+    if (k < 0) return;
+    t.ondragstart = e => { e.dataTransfer.setData('text/x-quire-scan', String(k)); e.dataTransfer.effectAllowed = 'move'; };
+    t.ondragover = e => { if (e.dataTransfer.types.includes('text/x-quire-scan')) { e.preventDefault(); t.classList.add('drop'); } };
+    t.ondragleave = () => t.classList.remove('drop');
+    t.ondrop = e => { t.classList.remove('drop'); const from = +e.dataTransfer.getData('text/x-quire-scan'); if (isNaN(from) || from === k) return; e.preventDefault(); const selPg = SC.pages[SC.sel]; const [pg] = SC.pages.splice(from, 1); SC.pages.splice(from < k ? k - 1 : k, 0, pg); SC.sel = selPg ? SC.pages.indexOf(selPg) : -1; scStrip(); scSide(); };
+  });
+  const on = $('.sc-tile.on', T); if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function scSelect(k) {
+  if (k >= SC.pages.length || k < -1) k = -1; if (k !== -1) SC.timerOn = false;
+  if (k !== SC.sel) SC.show = 'corners'; SC.sel = k; SC.drag = null;
+  if (k === -1 && !SC.stream && !SC.starting && !SC.err) scStartCam();
+  scE('scTitle').textContent = k === -1 ? (SC.pages.length ? `Scan · ${SC.pages.length} page${SC.pages.length > 1 ? 's' : ''}` : 'Scan') : `Page ${k + 1} of ${SC.pages.length}`;
+  scStrip(); scSide(); scBar(); scState(); scMsg(); scDraw();
+}
+function scDelete(k) { SC.pages.splice(k, 1); scSelect(SC.pages.length ? Math.min(k, SC.pages.length - 1) : -1); }
+function scRot(d) { const pg = SC.pages[SC.sel]; if (!pg) return; pg.rot = (pg.rot + d + 360) % 360; scThumb(pg); SC.show = 'result'; scStrip(); scBar(); scDraw(); }
+function scAct(a) {
+  const pg = SC.pages[SC.sel];
+  switch (a) {
+    case 'import': scImport(); break;
+    case 'retry': scStartCam(); break;
+    case 'shoot': scCapture(); break;
+    case 'timer': SC.timerOn = !SC.timerOn; SC.timerNext = performance.now() + SC.timer * 1000; scBar(); scState(); break;
+    case 'review': scSelect(0); break;
+    case 'make': scFinish(false); break;
+    case 'add': scFinish(true); break;
+    case 'rotl': scRot(-90); break;
+    case 'rotr': scRot(90); break;
+    case 'del': scDelete(SC.sel); break;
+    case 'retake': SC.insertAt = SC.sel; SC.pages.splice(SC.sel, 1); scSelect(-1); toast('Capture the replacement page'); break;
+    case 'edges': { let r = null; try { r = scDetect(pg.src, 480); } catch {} if (r && r.conf > .6) { pg.quad = r.quad; pg.found = true; SC.show = 'corners'; scThumb(pg); scStrip(); scSide(); scBar(); scDraw(); } else toast('No page edges found. Drag the corners instead.'); break; }
+    case 'full': pg.quad = scFull(pg.src); SC.show = 'corners'; scThumb(pg); scStrip(); scBar(); scDraw(); break;
+    case 'filterAll': for (const p of SC.pages) if (p.filter !== pg.filter) { p.filter = pg.filter; scThumb(p); } SC.filter = pg.filter; pref.set('scanFilter', SC.filter); scStrip(); toast('Filter applied to every page'); break;
+  }
+}
+function scKey(e) {
+  if ($('#dlg').open) return; const tg = e.target; const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName); const n = SC.pages.length;
+  if (e.key === 'Escape') { e.preventDefault(); if (SC.drag) return; if (SC.sel !== -1) scSelect(-1); else scClose(); return; }
+  if (typing) return; const mod = e.ctrlKey || e.metaKey; const k = e.key.toLowerCase();
+  if (e.key === ' ') { e.preventDefault(); if (SC.sel === -1) scCapture(); else scSelect(-1); return; }
+  if (e.key === 'ArrowRight') { e.preventDefault(); if (SC.sel !== -1) scSelect(SC.sel + 1 < n ? SC.sel + 1 : -1); return; }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); if (n) scSelect(SC.sel === -1 ? n - 1 : Math.max(0, SC.sel - 1)); return; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && SC.sel !== -1) { e.preventDefault(); scDelete(SC.sel); return; }
+  if (k === 'r' && !mod && SC.sel !== -1) { e.preventDefault(); scRot(e.shiftKey ? -90 : 90); return; }
+  if (mod && k === 's') { e.preventDefault(); scFinish(false); }
+}
+
+/* --- open, close, finish --- */
+function scBuild() {
+  const w = el('div'); w.id = 'scan'; w.hidden = true; w.setAttribute('role', 'dialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-label', 'Scanner');
+  w.innerHTML = `<header class="sc-top"><button class="btn ghost" data-sc="close">${svg('x')}<span class="lab">Close</span></button><h2 id="scTitle">Scan</h2></header>
+    <div class="sc-body"><div class="sc-stage" id="scStage"><video id="scVid" playsinline muted autoplay></video><canvas id="scCv" aria-label="Camera view and page corners"></canvas><div class="sc-flash" id="scFlash"></div><div class="sc-state" id="scState" hidden></div><div class="sc-count" id="scCount" hidden></div><div class="sc-msg" id="scMsg" hidden></div><div class="sc-bar glass" id="scBar"></div></div>
+    <aside class="sc-side glass" id="scSide" aria-label="Scan settings"></aside></div>
+    <div class="sc-strip" id="scStrip" aria-label="Scanned pages"></div>`;
+  document.body.append(w); SC.video = scE('scVid'); SC.built = true;
+  w.addEventListener('click', e => { const b = e.target.closest('[data-sc]'); if (!b || b.disabled) return; if (b.dataset.sc === 'close') { scClose(); return; } scAct(b.dataset.sc); if (b.blur) b.blur(); });
+  const cv = scE('scCv');
+  const at = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const near = p => { const pg = SC.pages[SC.sel], f = SC.fit; if (!pg || !f || SC.show !== 'corners') return -1; let k = -1, bd = 28; pg.quad.forEach((q, i) => { const d = Math.hypot(f.ox + q[0] * f.s - p[0], f.oy + q[1] * f.s - p[1]); if (d < bd) { bd = d; k = i; } }); return k; };
+  cv.addEventListener('pointerdown', e => { const k = near(at(e)); if (k < 0) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); SC.drag = { k }; scDraw(); });
+  cv.addEventListener('pointermove', e => {
+    const p = at(e); if (!SC.drag) { cv.style.cursor = near(p) >= 0 ? 'grab' : 'default'; return; }
+    const pg = SC.pages[SC.sel], f = SC.fit; pg.quad[SC.drag.k] = [Math.max(0, Math.min(pg.src.width, (p[0] - f.ox) / f.s)), Math.max(0, Math.min(pg.src.height, (p[1] - f.oy) / f.s))]; pg.found = true; scDraw();
+  });
+  const up = () => { if (!SC.drag) return; SC.drag = null; const pg = SC.pages[SC.sel]; if (pg) { pg.quad = orderQuad(pg.quad); scThumb(pg); scStrip(); } scDraw(); };
+  cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  new ResizeObserver(() => scDraw()).observe(scE('scStage'));
+}
+function scOpen() {
+  if (!SC.built) scBuild(); closeTextEditor(true);
+  SC.open = true; scE('scan').hidden = false; SC.armed = true; SC.stable = 0; SC.state = 'search';
+  scSelect(-1); if (!SC.stream) scStartCam(); if (!SC.raf) SC.raf = requestAnimationFrame(scTick);
+}
+async function scClose(force) {
+  if (!force && SC.pages.length) {
+    const n = SC.pages.length; const r = await modal({ title: 'Discard scanned pages?', body: `<p style="margin:0">${n} scanned page${n > 1 ? 's' : ''} will be lost. Use Create PDF to keep ${n > 1 ? 'them' : 'it'}.</p>`, actions: [{ label: 'Keep scanning', value: null }, { label: 'Discard', danger: true, value: 'x' }] });
+    if (!r) return;
+  }
+  SC.open = false; SC.timerOn = false; SC.drag = null; scStopCam(); scE('scan').hidden = true; SC.pages = []; SC.sel = -1; SC.insertAt = null; SC.err = '';
+}
+async function scBuildPdf() {
+  const nd = await PDFDocument.create(); nd.setTitle('Scan ' + today()); nd.setCreator('Quire PDF Studio'); nd.setProducer('Quire PDF Studio');
+  for (let k = 0; k < SC.pages.length; k++) {
+    const pg = SC.pages[k]; $('#busyMsg').textContent = `Preparing page ${k + 1} of ${SC.pages.length}…`; await new Promise(r => setTimeout(r, 0));
+    const out = scOut(pg); const L = scLayout(pg, out.width, out.height); const cc = cnv(L.crop.w, L.crop.h); cc.getContext('2d').drawImage(out, L.crop.x, L.crop.y, L.crop.w, L.crop.h, 0, 0, cc.width, cc.height);
+    const img = pg.filter === 'bw' ? await nd.embedPng(await canvasBytes(cc, 'image/png')) : await nd.embedJpg(await canvasBytes(cc, 'image/jpeg', .86));
+    const p = nd.addPage([L.pw * MM, L.ph * MM]); p.drawImage(img, { x: L.x * MM, y: (L.ph - L.y - L.h) * MM, width: L.w * MM, height: L.h * MM });
+  }
+  return nd.save();
+}
+async function scFinish(add) {
+  const n = SC.pages.length; if (!n) { toast('Capture or import a page first'); return; }
+  busy('Preparing scan…'); let bytes;
+  try { bytes = await scBuildPdf(); } catch (e) { console.error(e); unbusy(); toast('Could not make the PDF: ' + (e.message || e)); return; }
+  unbusy(); const d = add ? cur() : null; await scClose(true);
+  if (d) {
+    const at = d.cur + 1;
+    const ok = await editBytes(`Added ${n} scanned page${n > 1 ? 's' : ''}`, async (pdf, dd) => { const src = await PDFDocument.load(bytes); const cps = await pdf.copyPages(src, src.getPageIndices()); cps.forEach((p, k) => { pdf.insertPage(at + k, p); dd.annots.splice(at + k, 0, []); }); });
+    if (ok) { d.sel = new Set([at]); markThumbs(); gotoPage(at); }
+  } else {
+    const nd = await openBytes(bytes, `Scan ${new Date().toISOString().slice(0, 10)}.pdf`); if (nd) { nd.dirty = true; renderTabs(); toast(`Scanned ${n} page${n > 1 ? 's' : ''}. Run OCR from the Tools ribbon to make the text searchable.`, 5000); }
+  }
+}
+
 /* ================= wiring ================= */
 function wire() {
   const MOD = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl+';
   $('#bUndo').innerHTML = svg('undo'); $('#bRedo').innerHTML = svg('redo'); $('#bInfo').innerHTML = svg('panel');
-  $('#bOpen').innerHTML = svg('open') + '<span class="lab">Open</span>'; $('#bSave').innerHTML = '<span class="lab">Save</span>' + svg('save').replace('<svg', '<svg class="mobile-save"');
+  $('#bOpen').innerHTML = svg('open') + '<span class="lab">Open</span>'; $('#bScan').innerHTML = svg('camera') + '<span class="lab">Scan</span>'; $('#bSave').innerHTML = '<span class="lab">Save</span>' + svg('save').replace('<svg', '<svg class="mobile-save"');
   $('#zIn').innerHTML = svg('plus'); $('#zOut').innerHTML = svg('minus'); $('#bThumbs').innerHTML = svg('side');
-  const tips = { bThumbs: ['Pages', ''], bUndo: ['Undo', MOD + 'Z'], bRedo: ['Redo', MOD + 'Y'], bInfo: ['Document & markup', ''], bOpen: ['Open', MOD + 'O'], bSave: ['Save', MOD + 'S'] };
+  const tips = { bThumbs: ['Pages', ''], bUndo: ['Undo', MOD + 'Z'], bRedo: ['Redo', MOD + 'Y'], bInfo: ['Document & markup', ''], bScan: ['Scan pages with the camera', ''], bOpen: ['Open', MOD + 'O'], bSave: ['Save', MOD + 'S'] };
   for (const [id, [t, k]] of Object.entries(tips)) { $('#' + id).dataset.tip = t; $('#' + id).dataset.key = k; }
   const tip = $('#tip');
   document.addEventListener('pointerover', e => {
@@ -1490,6 +2087,7 @@ function wire() {
   if (!pref.get('thumbs', innerWidth > 1000)) $('#main').classList.add('no-thumbs');
   $('#bInfo').onclick = () => { S.info = !S.info; pref.set('info', S.info); if (S.info) S.task = null; renderPanel(); };
   $('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bSave').onclick = saveDialog;
+  $('#bScan').onclick = () => scOpen();
   $('#bOpen').onclick = async () => { const f = await pickFile('#fileIn'); if (f) handleFiles(f); };
   $('#zIn').onclick = () => zoomBy(1.2); $('#zOut').onclick = () => zoomBy(1 / 1.2);
   $('#zSel').onchange = e => setZoom(+e.target.value);
@@ -1507,6 +2105,7 @@ function wire() {
   window.addEventListener('drop', e => { V.classList.remove('dragging'); if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); handleFiles([...e.dataTransfer.files]); } });
   let rt, lastW = 0; new ResizeObserver(() => { const w = $('#viewer').clientWidth; if (Math.abs(w - lastW) < 2) return; lastW = w; clearTimeout(rt); rt = setTimeout(() => { const d = cur(); if (d) setZoom(d.autoFit ? fitZoom(d, 'width') : d.zoom, d.autoFit); }, 120); }).observe($('#viewer'));
   document.addEventListener('keydown', e => {
+    if (SC.open) { scKey(e); return; }
     const tg = e.target; const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) || tg.isContentEditable; const mod = e.ctrlKey || e.metaKey; const k = e.key.toLowerCase();
     if ($('#dlg').open) return;
     if (mod && k === 's') { e.preventDefault(); saveDialog(); return; }
@@ -1538,5 +2137,3 @@ async function handleFiles(files) {
   catch (e) { console.error(e); toast('Could not create the sample document: ' + e.message); }
 })();
 </script>
-
-</body></html>
