@@ -40,6 +40,22 @@ Open it with **Scan** in the top bar, the camera button on the Pages toolbar, or
 
 Pages toolbar, crop button. **Set margins** (top/bottom/left/right in mm, in or pt, linkable, or drag the dashed edges on the page) or **Trim white space** (renders each page, finds where the content ends and keeps a border). Scope: all, selected or current page. It sets each page's CropBox, so the margins are hidden rather than deleted; **Remove crop** restores them. Works on rotated pages.
 
+## Ideas from PDF-XChange (done, 3 Nov 2026)
+
+Write-up: https://claude.ai/artifact/WvGqbDxrxE6QRiPpnYaCH5. The code lives in the "organise, page size & margins, settings" block, just above `findAll`.
+
+- **Organise** (Pages toolbar): a full-screen grid of every page. Click, Shift-click and Ctrl/⌘-click to select. Drag to reorder, or drop PDFs between pages to insert them. It has rotate, duplicate, blank, insert, extract and delete. Shortcuts: Del, Ctrl+A, Ctrl+D, the arrow keys, Enter and Esc. The grid rebuilds after every edit through a hook in `reloadDoc`.
+- **Arrange & clean up** (`TASKS.arrange`): move up or down, move to page N, reverse, and swap. **Collate fronts and backs** is for one-sided feeders and assumes the backs are reversed. **Find blank pages** looks at ink coverage with a sensitivity slider. **Find duplicate pages** compares a 24×32 normalised thumbnail, plus the text when there is any. Results can be selected or deleted. **Split** works every N pages, at blank separator pages (which are dropped), into odd and even, or into single pages, and saves a .zip.
+- **Page size & margins** (`TASKS.pagesize`):
+  - **Resize** goes to A4, Letter, Legal, A5, A3 or a custom size. **Normalize** goes to the most common size, the first page in range, or the largest page. Orientation can match each page or be fixed. Content can be fit, shrunk only, or kept at actual size.
+  - **Add margins** has a per-side or linked value and a binding margin: left on odd pages, right on even pages.
+  - Scope is all, selected or current, then all, odd or even.
+  - `placeContent` wraps the content stream in a transform plus a clip to the old visible area, so a previous crop stays hidden. It also moves link Rects and QuadPoints and Quire markup.
+- **Toolbar labels:** words under the icons, on by default and switchable in Settings.
+- **Settings:** the gear in the top bar, with labels, units and your name.
+- **Command search:** the lightning button, or Ctrl/⌘+K (or Ctrl+.), finds any command by name or keyword.
+- Up and Down moved off the Pages toolbar and into Arrange.
+
 ## Mac camera permission (done)
 
 `package.json` has `NSCameraUsageDescription`; `main.js` allows only video media and answers `ask-camera` with `systemPreferences.askForMediaAccess('camera')`; `preload.js` exposes `askCamera`, which the scanner calls before `getUserMedia`.

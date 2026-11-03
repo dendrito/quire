@@ -111,6 +111,40 @@ svg{flex:none}
 .rb.on{background:var(--on);color:var(--on-ink)}
 .rb svg{width:18px;height:18px}
 .sep,.vsep{width:1px;height:18px;background:var(--line);margin:0 5px;flex:none}
+/* toolbar labels */
+.dock.labels .rb{width:auto;min-width:46px;height:44px;padding:3px 5px 2px;grid-template-rows:20px 13px;gap:1px;place-items:end center}
+.dock.labels .rb .rl{font:500 10px/13px var(--f-ui);color:var(--muted);white-space:nowrap;letter-spacing:-.01em}
+.dock.labels .rb.on .rl{color:inherit}
+.dock.labels .rtab{height:36px}
+/* page organiser */
+#org{position:fixed;inset:0;z-index:30;background:var(--desk);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.org-top{display:flex;align-items:center;gap:12px;padding:10px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));border-bottom:1px solid var(--line);background:var(--solid);flex-wrap:wrap}
+.org-top h2{margin:0;font:600 16px var(--f-ui);letter-spacing:-.015em;white-space:nowrap}
+.org-acts{display:flex;align-items:center;gap:2px;flex-wrap:wrap;flex:1;min-width:0}
+.org-end{display:flex;align-items:center;gap:10px;margin-left:auto}
+.org-end input[type=range]{width:110px}
+.org-grid{overflow:auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--ow,150px),1fr));gap:18px 14px;align-content:start}
+.org-cell{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;padding:8px;border-radius:12px;cursor:pointer;user-select:none;position:relative;transition:background .15s}
+.org-cell:hover{background:var(--hover)}
+.org-pg{max-width:100%;background:var(--paper);box-shadow:0 0 0 1px var(--line),0 2px 8px rgba(0,0,0,.1);border-radius:2px;overflow:hidden}
+.org-pg canvas{width:100%;height:100%;display:block}
+.org-cell .n{font:500 11px var(--f-mono);color:var(--faint)}
+.org-cell.sel{background:var(--accent-soft)}
+.org-cell.sel .org-pg{box-shadow:0 0 0 2px var(--accent),0 2px 8px rgba(0,0,0,.12)}
+.org-cell.sel .n{color:var(--accent)}
+.org-cell.drop-l::before,.org-cell.drop-r::after{content:"";position:absolute;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--accent)}
+.org-cell.drop-l::before{left:-9px}.org-cell.drop-r::after{right:-9px}
+.org-hint{margin:0;padding:8px 16px 12px;font-size:12px;color:var(--muted);text-align:center}
+@media (max-width:760px){.org-grid{padding:12px;gap:10px 6px}.org-top .btn .lab{display:none}.org-hint{display:none}.org-end input[type=range]{display:none}.org-top h2{flex:1}#bCmd{display:none}}
+/* command search */
+#qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
+#ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
+#ql input{width:100%;box-sizing:border-box;border:0;outline:none;border-radius:9px;padding:11px 12px;font-size:15px;background:var(--hover);color:var(--fg)}
+#ql ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:1px}
+#ql li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer}
+#ql li svg{width:17px;height:17px;flex:none;color:var(--muted)}
+#ql li.on,#ql li:hover{background:var(--hover2)}
+#ql li.none{color:var(--muted);cursor:default;background:none}
 
 /* inspector */
 .panel{position:absolute;top:66px;right:max(12px,env(safe-area-inset-right,0px));width:276px;max-height:calc(100% - 66px - 70px);overflow:auto;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:20px;z-index:5;box-sizing:border-box;scrollbar-width:thin;animation:pin .18s ease}
@@ -259,6 +293,8 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
     <button class="icon-btn" id="bThumbs" aria-label="Show or hide pages"></button>
     <nav class="tabs" id="tabs" aria-label="Open documents"></nav>
     <div class="topacts">
+      <button class="icon-btn" id="bCmd" aria-label="Find a command"></button>
+      <button class="icon-btn" id="bSet" aria-label="Settings"></button>
       <button class="icon-btn" id="bUndo" aria-label="Undo"></button>
       <button class="icon-btn" id="bRedo" aria-label="Redo"></button>
       <button class="icon-btn" id="bInfo" aria-label="Show or hide inspector"></button>
@@ -561,6 +597,7 @@ async function reloadDoc(d) {
   if (d === cur()) {
     S.sel = null; buildViewer(); renderThumbs(); renderPanel(); updateStatus(); renderTabs();
     if (keep) { $('#viewer').scrollTop = keep.top; $('#viewer').scrollLeft = keep.left; }
+    if (typeof ORG !== 'undefined' && ORG.open) orgBuild();
   }
 }
 function snapshot(d = cur()) {
@@ -1124,9 +1161,11 @@ function renderRibbon() {
   $('#rtabs').innerHTML = Object.entries(RIB).map(([k, r]) => `<button class="rtab${S.ribbon === k ? ' on' : ''}" data-rib="${k}">${r.label}</button>`).join('');
   $('#rbtns').innerHTML = RIB[S.ribbon].items.map(it => {
     if (it === '|') return '<span class="sep"></span>';
-    if (it[0] === '@') { const a = ACTS[it.slice(1)]; return `<button class="rb${S.task && it.slice(1) === taskOf(S.task) ? ' on' : ''}" data-act="${it.slice(1)}" data-tip="${a[0]}" aria-label="${a[0]}">${svg(a[1])}</button>`; }
-    const t = TOOL[it]; return `<button class="rb${S.tool === it ? ' on' : ''}" data-tool="${it}" data-tip="${t.label}" data-key="${t.key ? t.key.toUpperCase() : ''}" aria-label="${t.label}">${svg(it)}</button>`;
+    const lb = k => S.labels ? `<span class="rl">${esc(RLBL[k] || (ACTS[k] ? ACTS[k][0] : TOOL[k].label))}</span>` : '';
+    if (it[0] === '@') { const a = ACTS[it.slice(1)]; return `<button class="rb${S.task && it.slice(1) === taskOf(S.task) ? ' on' : ''}" data-act="${it.slice(1)}" data-tip="${a[0]}" aria-label="${a[0]}">${svg(a[1])}${lb(it.slice(1))}</button>`; }
+    const t = TOOL[it]; return `<button class="rb${S.tool === it ? ' on' : ''}" data-tool="${it}" data-tip="${t.label}" data-key="${t.key ? t.key.toUpperCase() : ''}" aria-label="${t.label}">${svg(it)}${lb(it)}</button>`;
   }).join('');
+  $('#toolbar').classList.toggle('labels', !!S.labels);
 }
 const taskOf = t => ({ form: 'fill' }[t] || t);
 $('#toolbar').addEventListener('click', e => {
@@ -1507,6 +1546,443 @@ function cropDrag(i, p, sides) {
   syncCropFields(); redrawAll();
 }
 function syncCropFields(except) { for (const s of ['t', 'r', 'b', 'l']) { const n = $('#cr' + s); if (n && n !== except) n.value = S.crop[s]; } }
+
+/* ================= organise, page size & margins, settings ================= */
+// Ideas borrowed from PDF-XChange's Organize tab (Swap, Reverse, Find Duplicates, Resize, Normalize, Set Margins),
+// plus a full-screen organiser, collate for one-sided feeders, blank-page tools and a command search.
+const MODK = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl+';
+Object.assign(IC, {
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+  arrange: '<path d="M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3"/>',
+  pagesize: '<rect x="5" y="3" width="14" height="18" rx="1"/><rect x="8.5" y="6.5" width="7" height="11" stroke-dasharray="2 2"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
+  bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>'
+});
+Object.assign(ACTS, {
+  organize: ['Organise pages', 'grid', () => orgOpen()],
+  arrange: ['Arrange & clean up', 'arrange', () => openTask('arrange')],
+  pagesize: ['Page size & margins', 'pagesize', () => openTask('pagesize')]
+});
+RIB.pages.items = ['@scan', '@organize', '|', '@rotl', '@rotr', '@del', '@dup', '@blank', '@insert', '|', '@arrange', '@pagesize', '@crop', '|', '@extract', '@split', '@merge', '@images'];
+// Short words shown under ribbon icons.
+const RLBL = { scan: 'Scan', organize: 'Organise', crop: 'Crop', rotl: 'Left', rotr: 'Right', up: 'Up', down: 'Down', del: 'Delete', dup: 'Duplicate', blank: 'Blank', insert: 'Insert', extract: 'Extract', split: 'Split', merge: 'Combine', images: 'Images', arrange: 'Arrange', pagesize: 'Size', fill: 'Fill', flatten: 'Flatten', search: 'Search', watermark: 'Watermark', hf: 'Header', bates: 'Bates', props: 'Info', redactApply: 'Apply', compress: 'Compress', ocr: 'OCR', png: 'PNG', txt: 'Text', select: 'Select', hand: 'Pan', highlight: 'Highlight', ink: 'Pen', rect: 'Box', ellipse: 'Ellipse', measure: 'Distance', whiteout: 'Whiteout', ftext: 'Field', fcheck: 'Checkbox', sign: 'Sign' };
+S.labels = pref.get('labels', true);
+S.ps = Object.assign({ mode: 'resize', size: 'a4', cw: 210, ch: 297, orient: 'auto', fit: 'fit', scope: 'all', subset: 'all', unit: 'mm', t: 10, r: 10, b: 10, l: 10, link: true, bind: 0 }, pref.get('ps', {}));
+S.arr = Object.assign({ sens: .3, backsRev: true, split: 'n', per: 2, scope: 'all' }, pref.get('arr', {}));
+const PAPER = { a4: [595.28, 841.89, 'A4'], a5: [419.53, 595.28, 'A5'], a3: [841.89, 1190.55, 'A3'], letter: [612, 792, 'Letter'], legal: [612, 1008, 'Legal'] };
+
+function pageScope(d, scope, subset = 'all') {
+  const base = scope === 'sel' ? selPages() : scope === 'cur' ? [d.cur] : [...d.info.keys()];
+  return base.filter(i => subset === 'odd' ? i % 2 === 0 : subset === 'even' ? i % 2 === 1 : true);
+}
+const scopeRow = (name, val, d, extra = [['cur', 'Current']]) => `<div class="field"><span class="lbl">Pages</span><div class="row">${[['all', `All ${d.info.length}`], ['sel', `Selected (${selPages().length})`], ...extra].map(([v, l]) => `<label class="chk"><input type="radio" name="${name}" value="${v}" ${val === v ? 'checked' : ''}> ${l}</label>`).join('')}</div></div>`;
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const pageList = idx => idx.length > 12 ? idx.slice(0, 12).map(i => i + 1).join(', ') + ` and ${idx.length - 12} more` : idx.map(i => i + 1).join(', ');
+
+/* ---- page reordering ---- */
+async function movePagesTo(sel, t) {
+  const d = cur(); const n = d.info.length; const set = new Set(sel); const rest = [...Array(n).keys()].filter(k => !set.has(k));
+  const before = rest.filter(k => k < t).length; const order = [...rest.slice(0, before), ...sel, ...rest.slice(before)];
+  if (order.every((v, k) => v === k)) return false;
+  await reorder(order, `Moved ${plural(sel.length, 'page')}`); d.sel = new Set(sel.map((_, k) => before + k)); markThumbs(); if (ORG.open) orgMark(); return true;
+}
+async function reversePages(idx) {
+  const d = cur(); if (idx.length < 2) { toast('Select at least two pages to reverse.'); return; }
+  const order = [...Array(d.info.length).keys()]; const rev = [...idx].reverse(); idx.forEach((pos, k) => order[pos] = rev[k]);
+  await reorder(order, `Reversed ${plural(idx.length, 'page')}`);
+}
+async function swapPages(a, b) {
+  const d = cur(); const n = d.info.length; if (!(a >= 0 && b >= 0 && a < n && b < n) || a === b) { toast(`Enter two different page numbers from 1 to ${n}.`); return; }
+  const order = [...Array(n).keys()]; [order[a], order[b]] = [order[b], order[a]]; await reorder(order, `Swapped pages ${a + 1} and ${b + 1}`); d.sel = new Set([a, b]); markThumbs();
+}
+// For one-sided feeders: fronts first, then backs (usually in reverse because the stack was flipped).
+function collateOrder(n, backsRev) {
+  const nf = Math.ceil(n / 2); const fronts = [...Array(nf).keys()]; let backs = [...Array(n - nf).keys()].map(k => nf + k); if (backsRev) backs.reverse();
+  const order = []; for (let k = 0; k < nf; k++) { order.push(fronts[k]); if (k < backs.length) order.push(backs[k]); } return order;
+}
+async function insertPdfsAt(files, at) {
+  const pdfs = files.filter(f => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)); if (!pdfs.length) { toast('Drop PDF files to insert them.'); return; }
+  const bufs = await Promise.all(pdfs.map(f => f.arrayBuffer()));
+  const ok = await editBytes(`Inserted ${pdfs.length === 1 ? pdfs[0].name : plural(pdfs.length, 'file')}`, async (pdf, d) => {
+    let pos = at; for (const b of bufs) { const src = await PDFDocument.load(new Uint8Array(b), LOAD); const cps = await pdf.copyPages(src, src.getPageIndices()); cps.forEach(p => { pdf.insertPage(pos, p); d.annots.splice(pos, 0, []); pos++; }); }
+  });
+  if (ok) { const d = cur(); d.sel = new Set([at]); markThumbs(); }
+}
+
+/* ---- page analysis: ink coverage (blank pages) and a small picture of the page (duplicates) ---- */
+async function analysePage(d, i) {
+  if (d._anBytes !== d.bytes) { d._an = []; d._anBytes = d.bytes; }
+  if (d._an[i]) return d._an[i];
+  const inf = d.info[i]; const sc = 320 / Math.max(inf.vp1.width, inf.vp1.height);
+  const { c } = await renderToCanvas(d, i, sc, { annots: true }); const w = c.width, h = c.height; const px = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const L = new Uint8Array(w * h); const hist = new Uint32Array(256);
+  for (let k = 0; k < w * h; k++) { const v = (px[k * 4] * .299 + px[k * 4 + 1] * .587 + px[k * 4 + 2] * .114) | 0; L[k] = v; hist[v]++; }
+  let acc = 0, paper = 255; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= w * h * .1) { paper = v; break; } } // 90th percentile = paper brightness
+  const thr = Math.max(40, paper - 60); const mx = Math.round(w * .05), my = Math.round(h * .05); let dark = 0, tot = 0;
+  for (let y = my; y < h - my; y++) for (let x = mx; x < w - mx; x++) { tot++; if (L[y * w + x] < thr) dark++; }
+  const GW = 24, GH = 32, g = new Float32Array(GW * GH);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[((y * GH / h) | 0) * GW + ((x * GW / w) | 0)] += L[y * w + x];
+  let mean = 0; for (const v of g) mean += v; mean /= g.length; let sd = 0; for (let k = 0; k < g.length; k++) { g[k] -= mean; sd += g[k] * g[k]; } sd = Math.sqrt(sd / g.length) || 1; for (let k = 0; k < g.length; k++) g[k] /= sd;
+  let text = ''; try { text = (await pageText(d, i)).items.map(t => t.str).join('').replace(/\s+/g, ''); } catch {}
+  return d._an[i] = { ink: dark / Math.max(1, tot) * 100, grid: g, ar: inf.vp1.width / inf.vp1.height, text };
+}
+async function analyseAll(d, idx, label, P) {
+  const out = []; const info = $('#arInfo', P);
+  for (let k = 0; k < idx.length; k++) { if (info) info.textContent = `${label} page ${idx[k] + 1} (${k + 1} of ${idx.length})…`; out.push(await analysePage(d, idx[k])); if (cur() !== d) return null; }
+  return out;
+}
+const isBlank = (a, sens) => a.ink < sens && a.text.length < 3;
+function findDuplicates(d, idx) {
+  const dups = [], pairs = [];
+  for (let k = 0; k < idx.length; k++) {
+    const A = d._an[idx[k]]; if (isBlank(A, .15)) continue;
+    for (let j = 0; j < k; j++) {
+      const B = d._an[idx[j]]; if (isBlank(B, .15) || Math.abs(A.ar - B.ar) > .03 || dups.includes(idx[j])) continue;
+      let c = 0; for (let q = 0; q < A.grid.length; q++) c += A.grid[q] * B.grid[q]; c /= A.grid.length;
+      const sameText = A.text && B.text ? A.text === B.text : !A.text && !B.text;
+      if (sameText && c > (A.text ? .9 : .975)) { dups.push(idx[k]); pairs.push([idx[k], idx[j]]); break; }
+    }
+  }
+  return { dups, pairs };
+}
+
+/* ---- split into several files ---- */
+async function splitParts(d, parts, suffix) {
+  parts = parts.filter(p => p.length); if (parts.length < 2) { toast('That would make only one file, so there is nothing to split.'); return; }
+  busy('Splitting…');
+  try {
+    await loadScript(JSZIP_URL); const src = await outDoc(d); const zip = new JSZip();
+    for (let k = 0; k < parts.length; k++) { const nd = await PDFDocument.create(); (await nd.copyPages(src, parts[k])).forEach(p => nd.addPage(p)); zip.file(`${baseName(d)}-${typeof suffix === 'function' ? suffix(k) : 'part-' + String(k + 1).padStart(2, '0')}.pdf`, await nd.save()); }
+    const blob = await zip.generateAsync({ type: 'blob' }); unbusy(); await saveFile(`${baseName(d)}-split.zip`, blob);
+  } catch (e) { toast('Split failed: ' + e.message); } finally { unbusy(); }
+}
+
+TASKS.arrange = function (P, d) {
+  const A = S.arr; const save = () => pref.set('arr', A); const sel = selPages();
+  P.innerHTML = `<section class="sec">${head('Arrange & clean up')}
+    <h3>Order</h3>
+    <div class="row"><button class="btn" id="arUp">${svg('up')}Up</button><button class="btn" id="arDown">${svg('down')}Down</button><button class="btn" id="arRev">${svg('arrange')}Reverse</button></div>
+    <div class="field"><label for="arTo">Move selected pages (${sel.length}) to before page</label><div class="row"><input id="arTo" class="inp" type="number" min="1" max="${d.info.length + 1}" value="1" style="width:84px"><button class="btn" id="arMove">Move</button></div></div>
+    <div class="field"><span class="lbl">Swap two pages</span><div class="row"><input id="arA" class="inp" type="number" min="1" max="${d.info.length}" value="${(sel[0] ?? 0) + 1}" style="width:64px" aria-label="First page"><span class="muted small">and</span><input id="arB" class="inp" type="number" min="1" max="${d.info.length}" value="${(sel[1] ?? Math.min(d.info.length - 1, (sel[0] ?? 0) + 1)) + 1}" style="width:64px" aria-label="Second page"><button class="btn" id="arSwap">Swap</button></div></div>
+    <p class="hint">Reverse works on the selected pages when more than one is selected, otherwise on the whole document.</p>
+  </section>
+  <section class="sec"><h3>Scanned stacks</h3>
+    <div class="field"><span class="lbl">Collate fronts and backs</span><label class="chk"><input type="checkbox" id="arBR" ${A.backsRev ? 'checked' : ''}> Backs are in reverse order</label><button class="btn" id="arCol">Collate ${d.info.length} pages</button>
+    <p class="hint">For a one-sided feeder: scan all the fronts, flip the stack, scan all the backs, then collate. Pages 1, 3, 5… become the fronts and the backs slot in between.</p></div>
+    ${rangeRow('arSens', 'Blank page sensitivity', A.sens, .05, 2, .05, v => (+v).toFixed(2) + '% ink')}
+    <div class="row"><button class="btn" id="arBlank">Find blank pages</button><button class="btn" id="arDup">Find duplicate pages</button></div>
+    <p class="hint" id="arInfo">Finds pages with almost no ink, or pages that look the same as an earlier one (for example a sheet scanned twice). Nothing is deleted until you choose.</p>
+    <div class="row" id="arFound" hidden><button class="btn" id="arSel">Select them</button><button class="btn danger-o" id="arDel">${svg('del')}Delete them</button></div>
+  </section>
+  <section class="sec"><h3>Split into files</h3>
+    <div class="field"><label for="arSplit">Split</label><select id="arSplit" class="inp">${[['n', 'Every N pages'], ['blank', 'At blank separator pages'], ['odd', 'Odd and even pages'], ['each', 'Into single pages']].map(([v, l]) => `<option value="${v}"${A.split === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field" id="arPerF" ${A.split === 'n' ? '' : 'hidden'}><label for="arPer">Pages per file</label><input id="arPer" class="inp" type="number" min="1" max="${d.info.length}" value="${A.per}"></div>
+    <button class="btn primary" id="arGo">${svg('split')}Split and save .zip</button>
+    <p class="hint">Separator pages are dropped from the files. Markup is drawn into the split files.</p></section>`;
+  bindClose(P);
+  let found = [];
+  const showFound = (idx, msg) => { found = idx; $('#arInfo', P).textContent = msg; $('#arFound', P).hidden = !idx.length; };
+  $('#arUp', P).onclick = () => movePages(-1); $('#arDown', P).onclick = () => movePages(1);
+  $('#arRev', P).onclick = () => { const s = selPages(); reversePages(s.length > 1 ? s : [...d.info.keys()]); };
+  $('#arMove', P).onclick = () => movePagesTo(selPages(), Math.max(0, Math.min(d.info.length, (parseInt($('#arTo', P).value) || 1) - 1)));
+  $('#arSwap', P).onclick = () => swapPages((parseInt($('#arA', P).value) || 0) - 1, (parseInt($('#arB', P).value) || 0) - 1);
+  $('#arBR', P).onchange = e => { A.backsRev = e.target.checked; save(); };
+  $('#arCol', P).onclick = () => { if (d.info.length < 3) { toast('Collate needs at least three pages.'); return; } reorder(collateOrder(d.info.length, A.backsRev), `Collated ${d.info.length} pages`); };
+  const sens = $('#arSens', P); sens.oninput = () => { A.sens = +sens.value; $('#arSens-o', P).textContent = A.sens.toFixed(2) + '% ink'; save(); };
+  $('#arBlank', P).onclick = async () => {
+    const idx = [...d.info.keys()]; const an = await analyseAll(d, idx, 'Checking', P); if (!an) return;
+    const bl = idx.filter((i, k) => isBlank(an[k], A.sens));
+    showFound(bl, bl.length ? `${plural(bl.length, 'page')} look${bl.length === 1 ? 's' : ''} blank: ${pageList(bl)}.` : 'No blank pages found. Raise the sensitivity to catch pages with specks or faint marks.');
+  };
+  $('#arDup', P).onclick = async () => {
+    const idx = [...d.info.keys()]; const an = await analyseAll(d, idx, 'Comparing', P); if (!an) return;
+    const { dups, pairs } = findDuplicates(d, idx);
+    showFound(dups, dups.length ? `${plural(dups.length, 'duplicate')}: ${pairs.slice(0, 6).map(([a, b]) => `page ${a + 1} matches page ${b + 1}`).join(', ')}${pairs.length > 6 ? '…' : ''}. The first copy is kept.` : 'No duplicate pages found.');
+  };
+  $('#arSel', P).onclick = () => { if (!found.length) return; d.sel = new Set(found); markThumbs(); gotoPage(found[0]); toast(`Selected ${plural(found.length, 'page')}. Check them, then delete with the Delete button.`); TASKS.arrange(P, d); showFound(found, `Selected ${plural(found.length, 'page')}: ${pageList(found)}.`); };
+  $('#arDel', P).onclick = async () => {
+    if (!found.length) return; if (found.length >= d.info.length) { toast('That would delete every page.'); return; }
+    const del = [...found].sort((a, b) => a - b);
+    const ok = await editBytes(`Deleted ${plural(del.length, 'page')}`, (pdf, dd) => { for (const i of [...del].reverse()) { pdf.removePage(i); dd.annots.splice(i, 1); } });
+    if (ok) { d.sel = new Set([Math.min(del[0], d.info.length - 1)]); markThumbs(); }
+  };
+  $('#arSplit', P).onchange = e => { A.split = e.target.value; save(); $('#arPerF', P).hidden = A.split !== 'n'; };
+  $('#arPer', P).oninput = e => { A.per = Math.max(1, parseInt(e.target.value) || 1); save(); };
+  $('#arGo', P).onclick = async () => {
+    const n = d.info.length; const all = [...Array(n).keys()];
+    if (A.split === 'n') { const per = Math.max(1, Math.min(n, A.per)); const parts = []; for (let s = 0; s < n; s += per) parts.push(all.slice(s, s + per)); return splitParts(d, parts); }
+    if (A.split === 'each') return splitParts(d, all.map(i => [i]), k => 'page-' + String(k + 1).padStart(3, '0'));
+    if (A.split === 'odd') return splitParts(d, [all.filter(i => i % 2 === 0), all.filter(i => i % 2 === 1)], k => k ? 'even' : 'odd');
+    const an = await analyseAll(d, all, 'Checking', P); if (!an) return;
+    const parts = [[]]; all.forEach((i, k) => { if (isBlank(an[k], A.sens)) { if (parts[parts.length - 1].length) parts.push([]); } else parts[parts.length - 1].push(i); });
+    const nb = all.filter((i, k) => isBlank(an[k], A.sens)).length;
+    if (!nb) { $('#arInfo', P).textContent = 'No blank separator pages were found, so nothing was split.'; toast('No blank separator pages found'); return; }
+    $('#arInfo', P).textContent = `Found ${plural(nb, 'separator page')}.`; return splitParts(d, parts);
+  };
+};
+
+/* ---- page size & margins ---- */
+// Moves a page's visible area into a new page box: scaled by s and offset by (ox, oy), clipped to the old visible area
+// so content hidden by an earlier crop stays hidden. Links and Quire markup move with the content.
+function visBox(inf) { const a = inf.vp1.convertToPdfPoint(0, 0), b = inf.vp1.convertToPdfPoint(inf.vp1.width, inf.vp1.height); return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(a[0] - b[0]), height: Math.abs(a[1] - b[1]) }; }
+function placeContent(pdf, d, i, b, s, ox, oy, W, H) {
+  const L = PDFLib; const p = pdf.getPage(i); const ctx = pdf.context;
+  const st = ctx.register(ctx.contentStream([L.pushGraphicsState(), L.concatTransformationMatrix(s, 0, 0, s, ox - b.x * s, oy - b.y * s), L.rectangle(b.x, b.y, b.width, b.height), L.clip(), L.endPath()]));
+  const en = ctx.register(ctx.contentStream([L.popGraphicsState()]));
+  p.node.normalize(); p.node.wrapContentStreams(st, en);
+  p.setMediaBox(0, 0, W, H); p.setCropBox(0, 0, W, H); p.setTrimBox(0, 0, W, H); p.setBleedBox(0, 0, W, H); p.setArtBox(0, 0, W, H);
+  const f = (x, y) => [(x - b.x) * s + ox, (y - b.y) * s + oy];
+  try {
+    const ann = p.node.Annots();
+    if (ann) for (let k = 0; k < ann.size(); k++) {
+      const dict = ann.lookup(k); if (!(dict instanceof L.PDFDict)) continue;
+      const r = dict.lookup(L.PDFName.of('Rect')); if (r instanceof L.PDFArray && r.size() === 4) { const v = r.asArray().map(n => n.asNumber()); const a = f(v[0], v[1]), c = f(v[2], v[3]); dict.set(L.PDFName.of('Rect'), ctx.obj([a[0], a[1], c[0], c[1]])); }
+      const q = dict.lookup(L.PDFName.of('QuadPoints')); if (q instanceof L.PDFArray) { const v = q.asArray().map(n => n.asNumber()); const o = []; for (let j = 0; j + 1 < v.length; j += 2) o.push(...f(v[j], v[j + 1])); dict.set(L.PDFName.of('QuadPoints'), ctx.obj(o)); }
+    }
+  } catch (e) { console.warn('annotation move', e); }
+  d.annots[i] = (d.annots[i] || []).map(a => {
+    const c = clone(a); const m = (xk, yk) => { if (xk in c && yk in c) { const r = f(c[xk], c[yk]); c[xk] = r[0]; c[yk] = r[1]; } };
+    m('x1', 'y1'); m('x2', 'y2'); m('x', 'y'); if (c.points) c.points = c.points.map(pt => f(pt[0], pt[1]));
+    if (s !== 1) { if (c.width) c.width *= s; if (c.size) c.size *= s; if (c.factor) c.factor /= s; }
+    return c;
+  });
+}
+function resizePage(pdf, d, i, TW, TH, fit) {
+  const inf = d.info[i]; const sw = inf.rot % 180 !== 0; const W = sw ? TH : TW, H = sw ? TW : TH; const b = visBox(inf);
+  let s = fit === 'actual' ? 1 : Math.min(W / b.width, H / b.height); if (fit === 'shrink') s = Math.min(1, s);
+  placeContent(pdf, d, i, b, s, (W - b.width * s) / 2, (H - b.height * s) / 2, W, H);
+}
+function marginPage(pdf, d, i, t, r, bt, l) {
+  const inf = d.info[i]; const vp = inf.vp1; const b = visBox(inf);
+  const A = vp.convertToPdfPoint(-l, -t), C = vp.convertToPdfPoint(vp.width + r, vp.height + bt);
+  const x0 = Math.min(A[0], C[0]), y0 = Math.min(A[1], C[1]), W = Math.abs(A[0] - C[0]), H = Math.abs(A[1] - C[1]);
+  if (W < 18 || H < 18) throw new Error('the margins leave no page');
+  placeContent(pdf, d, i, b, 1, b.x - x0, b.y - y0, W, H);
+}
+function psTarget(d, idx) {
+  const P = S.ps; const k = CU[P.unit];
+  if (PAPER[P.size]) return [PAPER[P.size][0], PAPER[P.size][1], PAPER[P.size][2]];
+  if (P.size === 'custom') return [P.cw * k, P.ch * k, `${P.cw} × ${P.ch} ${P.unit}`];
+  const dims = d.info.map(inf => [Math.min(inf.vp1.width, inf.vp1.height), Math.max(inf.vp1.width, inf.vp1.height)]);
+  let t;
+  if (P.size === 'first') t = dims[idx[0] ?? 0];
+  else if (P.size === 'largest') t = dims.reduce((a, b) => b[0] * b[1] > a[0] * a[1] ? b : a);
+  else { const cnt = new Map(); for (const q of dims) { const key = q.map(v => Math.round(v)).join('x'); cnt.set(key, (cnt.get(key) || 0) + 1); } const best = [...cnt.entries()].sort((a, b) => b[1] - a[1])[0][0]; t = best.split('x').map(Number); }
+  const named = Object.values(PAPER).find(p => Math.abs(p[0] - t[0]) < 3 && Math.abs(p[1] - t[1]) < 3);
+  return [t[0], t[1], named ? named[2] : `${(t[0] / k).toFixed(P.unit === 'in' ? 2 : 0)} × ${(t[1] / k).toFixed(P.unit === 'in' ? 2 : 0)} ${P.unit}`];
+}
+function psJobs(d) {
+  const P = S.ps; const idx = pageScope(d, P.scope, P.subset); if (!idx.length) return { idx, jobs: [] };
+  const [w, h, name] = psTarget(d, idx); const a = Math.min(w, h), b = Math.max(w, h);
+  const jobs = idx.map(i => { const v = d.info[i].vp1; const land = P.orient === 'landscape' || (P.orient === 'auto' && v.width > v.height); return [i, land ? b : a, land ? a : b]; })
+    .filter(([i, TW, TH]) => Math.abs(d.info[i].vp1.width - TW) > .6 || Math.abs(d.info[i].vp1.height - TH) > .6);
+  return { idx, jobs, name };
+}
+TASKS.pagesize = function (P, d) {
+  const C = S.ps; const save = () => pref.set('ps', C); const re = () => { save(); TASKS.pagesize(P, d); };
+  const u = ['mm', 'in'].map(x => `<option${C.unit === x ? ' selected' : ''}>${x}</option>`).join('');
+  const opt = (v, l, cur) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`;
+  const side = (s, l) => `<div class="field"><label for="ps${s}">${l}</label><input id="ps${s}" class="inp" type="number" min="0" step="any" value="${C[s]}"></div>`;
+  P.innerHTML = `<section class="sec">${head('Page size & margins')}
+    <div class="segs" id="psMode"><button type="button" data-m="resize" class="${C.mode === 'resize' ? 'on' : ''}">Resize</button><button type="button" data-m="margins" class="${C.mode === 'margins' ? 'on' : ''}">Add margins</button><button type="button" data-m="crop">Crop</button></div>
+    ${C.mode === 'resize' ? `
+      <div class="field"><label for="psSize">Paper size</label><select id="psSize" class="inp">
+        <optgroup label="Standard">${opt('a4', 'A4 (210 × 297 mm)', C.size)}${opt('letter', 'Letter (8.5 × 11 in)', C.size)}${opt('legal', 'Legal (8.5 × 14 in)', C.size)}${opt('a5', 'A5 (148 × 210 mm)', C.size)}${opt('a3', 'A3 (297 × 420 mm)', C.size)}${opt('custom', 'Custom size…', C.size)}</optgroup>
+        <optgroup label="Normalize (match this document)">${opt('common', 'Most common size', C.size)}${opt('first', 'Same as first page in range', C.size)}${opt('largest', 'Largest page', C.size)}</optgroup></select></div>
+      ${C.size === 'custom' ? `<div class="grid2"><div class="field"><label for="psCW">Width</label><input id="psCW" class="inp" type="number" min="1" step="any" value="${C.cw}"></div><div class="field"><label for="psCH">Height</label><input id="psCH" class="inp" type="number" min="1" step="any" value="${C.ch}"></div></div>` : ''}
+      <div class="grid2"><div class="field"><label for="psOr">Orientation</label><select id="psOr" class="inp">${opt('auto', 'Match each page', C.orient)}${opt('portrait', 'Portrait', C.orient)}${opt('landscape', 'Landscape', C.orient)}</select></div>
+      <div class="field"><label for="psFit">Content</label><select id="psFit" class="inp">${opt('fit', 'Fit to page', C.fit)}${opt('shrink', 'Shrink only if too big', C.fit)}${opt('actual', 'Keep actual size', C.fit)}</select></div></div>
+      <div class="field"><label for="psUnit">Units</label><select id="psUnit" class="inp" style="width:auto">${u}</select></div>`
+    : `<div class="grid2">${side('t', 'Top')}${side('b', 'Bottom')}${side('l', 'Left')}${side('r', 'Right')}</div>
+      <div class="row" style="justify-content:space-between"><label class="chk"><input type="checkbox" id="psLink" ${C.link ? 'checked' : ''}> Same on all sides</label><select id="psUnit" class="inp" style="width:auto" aria-label="Unit">${u}</select></div>
+      <div class="field"><label for="psBind">Binding margin (inner edge)</label><input id="psBind" class="inp" type="number" min="0" step="any" value="${C.bind}"></div>
+      <p class="hint">Adds paper around each page without shrinking it. The binding margin goes on the left of odd pages and the right of even pages, for double-sided printing.</p>`}
+    ${scopeRow('psScope', C.scope, d)}
+    <div class="field"><span class="lbl">Only</span><div class="row">${[['all', 'All of those'], ['odd', 'Odd pages'], ['even', 'Even pages']].map(([v, l]) => `<label class="chk"><input type="radio" name="psSub" value="${v}" ${C.subset === v ? 'checked' : ''}> ${l}</label>`).join('')}</div></div>
+    <p class="hint" id="psInfo"></p>
+    <div class="row"><button class="btn primary" id="psGo">${svg('pagesize')}Apply</button></div>
+    <p class="hint">Use Undo to go back. Links and markup move with the content.</p></section>`;
+  bindClose(P);
+  const info = () => {
+    const n = $('#psInfo', P); if (!n) return;
+    if (C.mode === 'resize') { const { idx, jobs, name } = psJobs(d); n.textContent = !idx.length ? 'No pages in that range.' : jobs.length ? `${plural(jobs.length, 'page')} of ${idx.length} will become ${name}${C.orient === 'auto' ? '' : ' ' + C.orient}.` : `Those pages are already ${name}.`; }
+    else { const idx = pageScope(d, C.scope, C.subset); const r1 = v => +v.toFixed(2); n.textContent = `${plural(idx.length, 'page')} will get ${r1(C.l + C.r + (C.bind || 0))} ${C.unit} wider and ${r1(C.t + C.b)} ${C.unit} taller.`; }
+  };
+  $$('#psMode button', P).forEach(b => b.onclick = () => { if (b.dataset.m === 'crop') { openTask('crop'); return; } C.mode = b.dataset.m; re(); });
+  const sz = $('#psSize', P); if (sz) sz.onchange = () => { C.size = sz.value; re(); };
+  for (const [id, k] of [['psCW', 'cw'], ['psCH', 'ch'], ['psBind', 'bind']]) { const n = $('#' + id, P); if (n) n.oninput = () => { C[k] = Math.max(0, parseFloat(n.value) || 0); save(); info(); }; }
+  for (const [id, k] of [['psOr', 'orient'], ['psFit', 'fit']]) { const n = $('#' + id, P); if (n) n.onchange = () => { C[k] = n.value; save(); info(); }; }
+  for (const s of ['t', 'r', 'b', 'l']) { const n = $('#ps' + s, P); if (n) n.oninput = () => { const v = Math.max(0, parseFloat(n.value) || 0); if (C.link) { C.t = C.r = C.b = C.l = v; for (const o of ['t', 'r', 'b', 'l']) { const m = $('#ps' + o, P); if (m !== n) m.value = v; } } else C[s] = v; save(); info(); }; }
+  const lk = $('#psLink', P); if (lk) lk.onchange = () => { C.link = lk.checked; if (C.link) { C.r = C.b = C.l = C.t; } re(); };
+  $('#psUnit', P).onchange = e => { const f = CU[C.unit] / CU[e.target.value]; const pr = e.target.value === 'in' ? 2 : 1; for (const s of ['t', 'r', 'b', 'l', 'bind', 'cw', 'ch']) C[s] = +(C[s] * f).toFixed(pr); C.unit = e.target.value; re(); };
+  $$('input[name=psScope]', P).forEach(r => r.onchange = () => { C.scope = r.value; save(); info(); });
+  $$('input[name=psSub]', P).forEach(r => r.onchange = () => { C.subset = r.value; save(); info(); });
+  $('#psGo', P).onclick = async () => {
+    if (C.mode === 'resize') {
+      const { jobs, name } = psJobs(d); if (!jobs.length) { toast('Those pages are already that size.'); return; }
+      await editBytes(`Resized ${plural(jobs.length, 'page')} to ${name}`, pdf => { for (const [i, TW, TH] of jobs) resizePage(pdf, d, i, TW, TH, C.fit); }, 'Resizing…');
+    } else {
+      const k = CU[C.unit]; const idx = pageScope(d, C.scope, C.subset); if (!(C.t + C.r + C.b + C.l + C.bind > 0)) { toast('Set a margin above zero first.'); return; }
+      await editBytes(`Added margins to ${plural(idx.length, 'page')}`, pdf => { for (const i of idx) { let l = C.l * k, r = C.r * k; if (C.bind) { if (i % 2 === 0) l += C.bind * k; else r += C.bind * k; } marginPage(pdf, d, i, C.t * k, r, C.b * k, l); } }, 'Adding margins…');
+    }
+  };
+  info();
+};
+
+/* ---- full-screen page organiser ---- */
+const ORG = { open: false, size: pref.get('orgSize', 150), job: 0, io: null, anchor: 0, drag: null };
+function orgOpen() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  if (S.task) closeTask();
+  let w = $('#org'); if (!w) { w = el('div', '', ''); w.id = 'org'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-label', 'Organise pages'); document.body.append(w); }
+  ORG.open = true; w.hidden = false; ORG.anchor = d.cur; orgBuild();
+}
+function orgClose(goto) {
+  ORG.open = false; ORG.job++; if (ORG.io) ORG.io.disconnect(); const w = $('#org'); if (w) { w.hidden = true; w.innerHTML = ''; }
+  const d = cur(); if (d) { markThumbs(); if (goto != null) gotoPage(goto); }
+}
+function orgMark() {
+  const d = cur(); if (!d) return; $$('#orgGrid .org-cell').forEach(c => { const i = +c.dataset.i; c.classList.toggle('sel', d.sel.has(i)); });
+  const n = $('#orgCount'); if (n) n.textContent = `${plural(d.info.length, 'page')} · ${d.sel.size} selected`;
+}
+function orgBuild() {
+  const w = $('#org'); const d = cur(); if (!w || !d) { orgClose(); return; }
+  const job = ++ORG.job; if (ORG.io) ORG.io.disconnect();
+  const B = (act, label, icon) => `<button class="btn ghost" data-oa="${act}" data-tip="${label}">${svg(icon)}<span class="lab">${label}</span></button>`;
+  const keepScroll = $('#orgGrid', w) ? $('#orgGrid', w).scrollTop : 0;
+  w.innerHTML = `<header class="org-top"><h2>Organise pages <span class="muted small" id="orgCount"></span></h2>
+    <div class="org-acts">${B('rotl', 'Left', 'rotl')}${B('rotr', 'Right', 'rotr')}${B('dup', 'Duplicate', 'dup')}${B('blank', 'Blank', 'blank')}${B('insert', 'Insert file', 'insert')}${B('extract', 'Extract', 'extract')}${B('del', 'Delete', 'del')}<span class="sep"></span>${B('arrange', 'More tools', 'arrange')}</div>
+    <div class="org-end"><input type="range" id="orgZ" min="90" max="320" step="10" value="${ORG.size}" aria-label="Thumbnail size"><button class="btn primary" data-oa="done">Done</button></div></header>
+    <div class="org-grid" id="orgGrid"></div>
+    <p class="org-hint">Click to select. Shift-click selects a range, ${MODK}click adds pages. Drag to reorder, or drop PDF files between pages to insert them. Double-click opens a page.</p>`;
+  const G = $('#orgGrid', w); G.style.setProperty('--ow', ORG.size + 'px');
+  const cells = d.info.map((inf, i) => {
+    const c = el('div', 'org-cell', `<div class="org-pg"><canvas></canvas></div><span class="n">${i + 1}</span>`); c.dataset.i = i; c.draggable = true;
+    const pg = c.querySelector('.org-pg'); const land = inf.vp1.width > inf.vp1.height; pg.style.width = land ? '100%' : (inf.vp1.width / inf.vp1.height * 100) + '%'; pg.style.aspectRatio = `${inf.vp1.width} / ${inf.vp1.height}`;
+    G.append(c); return c;
+  });
+  G.scrollTop = keepScroll; orgMark();
+  const render = async c => {
+    const i = +c.dataset.i; const inf = d.info[i]; if (!inf || c.dataset.r === String(ORG.size)) return; c.dataset.r = ORG.size;
+    const cv = c.querySelector('canvas'); const sc = ORG.size * dpr() / Math.max(inf.vp1.width, inf.vp1.height); const vp = inf.page.getViewport({ scale: sc });
+    const tmp = document.createElement('canvas'); tmp.width = Math.ceil(vp.width); tmp.height = Math.ceil(vp.height);
+    try { await inf.page.render({ canvasContext: tmp.getContext('2d'), viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise; } catch { return; }
+    if (job !== ORG.job) return; cv.width = tmp.width; cv.height = tmp.height; cv.getContext('2d').drawImage(tmp, 0, 0);
+  };
+  ORG.io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) render(e.target); }), { root: G, rootMargin: '400px 0px' });
+  cells.forEach(c => ORG.io.observe(c));
+  $('#orgZ', w).oninput = e => { ORG.size = +e.target.value; pref.set('orgSize', ORG.size); G.style.setProperty('--ow', ORG.size + 'px'); cells.forEach(c => { ORG.io.unobserve(c); ORG.io.observe(c); }); };
+  w.querySelector('.org-top').onclick = async e => {
+    const b = e.target.closest('[data-oa]'); if (!b) return; const a = b.dataset.oa;
+    if (a === 'done') { orgClose(d.cur); return; }
+    if (a === 'arrange') { orgClose(); openTask('arrange'); return; }
+    const fn = { rotl: () => rotatePages(-90), rotr: () => rotatePages(90), dup: duplicatePages, blank: blankPage, insert: insertFromFile, extract: extractPages, del: deletePages }[a];
+    if (fn) await fn(); if (ORG.open) { if (cur() !== d) orgBuild(); else orgMark(); }
+  };
+  G.onclick = e => {
+    const c = e.target.closest('.org-cell'); if (!c) return; const i = +c.dataset.i;
+    if (e.ctrlKey || e.metaKey) { d.sel.has(i) && d.sel.size > 1 ? d.sel.delete(i) : d.sel.add(i); ORG.anchor = i; }
+    else if (e.shiftKey) { const a = Math.min(ORG.anchor, i), b = Math.max(ORG.anchor, i); d.sel = new Set(); for (let k = a; k <= b; k++) d.sel.add(k); }
+    else { d.sel = new Set([i]); ORG.anchor = i; d.cur = i; }
+    orgMark();
+  };
+  G.ondblclick = e => { const c = e.target.closest('.org-cell'); if (c) { d.sel = new Set([+c.dataset.i]); orgClose(+c.dataset.i); } };
+  const clearDrop = () => $$('.org-cell.drop-l,.org-cell.drop-r', G).forEach(c => c.classList.remove('drop-l', 'drop-r'));
+  const dropAt = e => {
+    const c = e.target.closest('.org-cell');
+    if (!c) { const last = cells[cells.length - 1]; return last && e.clientY > last.getBoundingClientRect().top ? { c: last, at: d.info.length, side: 'r' } : { c: cells[0], at: 0, side: 'l' }; }
+    const r = c.getBoundingClientRect(); const right = e.clientX > r.left + r.width / 2; return { c, at: +c.dataset.i + (right ? 1 : 0), side: right ? 'r' : 'l' };
+  };
+  G.addEventListener('dragstart', e => {
+    const c = e.target.closest('.org-cell'); if (!c) return; const i = +c.dataset.i; if (!d.sel.has(i)) { d.sel = new Set([i]); ORG.anchor = i; orgMark(); }
+    ORG.drag = [...d.sel].sort((a, b) => a - b); e.dataTransfer.setData('text/x-quire-org', '1'); e.dataTransfer.effectAllowed = 'move';
+  });
+  G.addEventListener('dragend', () => { ORG.drag = null; clearDrop(); });
+  G.addEventListener('dragover', e => {
+    const t = e.dataTransfer.types; if (!(t.includes('text/x-quire-org') || t.includes('Files'))) return;
+    e.preventDefault(); e.stopPropagation(); clearDrop(); const p = dropAt(e); if (p.c) p.c.classList.add('drop-' + p.side);
+  });
+  G.addEventListener('dragleave', e => { if (!G.contains(e.relatedTarget)) clearDrop(); });
+  G.addEventListener('drop', async e => {
+    e.preventDefault(); e.stopPropagation(); $('#viewer').classList.remove('dragging'); clearDrop(); const p = dropAt(e);
+    if (e.dataTransfer.files && e.dataTransfer.files.length) await insertPdfsAt([...e.dataTransfer.files], p.at);
+    else if (ORG.drag) { const s = ORG.drag; ORG.drag = null; await movePagesTo(s, p.at); }
+  });
+}
+function orgKey(e) {
+  const d = cur(); const k = e.key.toLowerCase(); const mod = e.ctrlKey || e.metaKey;
+  if ($('#dlg').open || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && e.target.type !== 'range') return;
+  if (mod && (k === 'z' || k === 'y' || k === 's' || k === 'o')) return; // let the global shortcuts run
+  e.stopPropagation();
+  if (!d) return;
+  if (e.key === 'Escape') { e.preventDefault(); orgClose(d.cur); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deletePages(); }
+  else if (mod && k === 'a') { e.preventDefault(); d.sel = new Set(d.info.keys()); orgMark(); }
+  else if (mod && k === 'd') { e.preventDefault(); duplicatePages(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault(); const i = Math.max(0, Math.min(d.info.length - 1, ORG.anchor + (e.key === 'ArrowLeft' ? -1 : 1)));
+    if (e.shiftKey) d.sel.add(i); else d.sel = new Set([i]); ORG.anchor = i; d.cur = i; orgMark();
+    const c = $(`#orgGrid .org-cell[data-i="${i}"]`); if (c) c.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') { e.preventDefault(); orgClose(ORG.anchor); }
+}
+
+/* ---- command search (like PDF-XChange's Quick Launch) ---- */
+const CMD_KW = { organize: 'thumbnails grid reorder sort pages', arrange: 'reverse swap collate interleave duplex blank duplicate move order separator', pagesize: 'resize normalize margins paper a4 letter binding scale', crop: 'trim white space margins cut', scan: 'camera scanner capture batch', split: 'separate break', merge: 'combine join append', ocr: 'recognise text searchable', compress: 'smaller reduce size', bates: 'numbering legal', hf: 'page numbers footer', redactApply: 'redaction remove', props: 'properties metadata title author' };
+function cmdList() {
+  const L = [];
+  for (const [k, a] of Object.entries(ACTS)) L.push({ label: a[0], icon: a[1], run: a[2], doc: k !== 'scan', kw: CMD_KW[k] || '' });
+  for (const t of TOOLS) L.push({ label: t.label, icon: t.id, run: () => { const r = Object.keys(RIB).find(k => RIB[k].items.includes(t.id)); if (r) S.ribbon = r; setTool(t.id); renderRibbon(); }, doc: true, kw: 'markup tool draw' });
+  L.push({ label: 'Settings', icon: 'gear', run: openSettings, kw: 'preferences options labels units name' });
+  L.push({ label: 'Open PDF', icon: 'open', run: () => $('#bOpen').click(), kw: 'file' });
+  L.push({ label: 'Save', icon: 'save', run: saveDialog, doc: true, kw: 'export download' });
+  return L;
+}
+function openCmd() {
+  if ($('#ql')) { $('#ql input').focus(); return; }
+  const w = el('div', 'glass', `<input type="search" placeholder="Find a command, e.g. reverse, margins, collate" aria-label="Find a command"><ul role="listbox"></ul>`); w.id = 'ql';
+  const shade = el('div', '', ''); shade.id = 'qlShade'; document.body.append(shade, w);
+  const inp = $('input', w), ul = $('ul', w); const all = cmdList(); let hits = [], at = 0;
+  const close = () => { w.remove(); shade.remove(); };
+  const run = c => { close(); if (c.doc && !cur()) { toast('Open a PDF first'); return; } c.run(); };
+  const draw = () => {
+    const q = inp.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    hits = all.filter(c => q.every(t => (c.label + ' ' + c.kw).toLowerCase().includes(t))).slice(0, 9); at = Math.min(at, Math.max(0, hits.length - 1));
+    ul.innerHTML = hits.length ? hits.map((c, k) => `<li role="option" data-k="${k}" class="${k === at ? 'on' : ''}">${svg(c.icon || 'bolt')}<span>${esc(c.label)}</span></li>`).join('') : '<li class="none">No command matches</li>';
+  };
+  inp.oninput = () => { at = 0; draw(); };
+  inp.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); at = (at + (e.key === 'ArrowDown' ? 1 : -1) + hits.length) % Math.max(1, hits.length); draw(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (hits[at]) run(hits[at]); }
+  };
+  ul.onclick = e => { const li = e.target.closest('li[data-k]'); if (li) run(hits[+li.dataset.k]); };
+  shade.onclick = close; draw(); inp.focus();
+}
+
+/* ---- settings ---- */
+async function openSettings() {
+  const r = await modal({ title: 'Settings', body: `
+    <label class="chk"><input type="checkbox" id="setLbl" ${S.labels ? 'checked' : ''}> Show names under the toolbar buttons</label>
+    <div class="field"><label for="setUnit">Units for margins and page sizes</label><select id="setUnit" class="inp">${['mm', 'in'].map(u => `<option${S.ps.unit === u ? ' selected' : ''}>${u}</option>`).join('')}</select></div>
+    <div class="field"><label for="setAuth">Your name, used on stamps and comments</label><input id="setAuth" class="inp" value="${esc(S.author)}"></div>
+    <p class="hint" style="margin:0">Scanner and camera settings are in the Scan window. Press <span class="kbd">${MODK}K</span> anywhere to find a command by name.</p>`,
+    actions: [{ label: 'Cancel', value: null }, { label: 'Save', primary: true, value: 'ok' }] });
+  if (!r) return;
+  S.labels = $('#setLbl').checked; pref.set('labels', S.labels);
+  const u = $('#setUnit').value; if (u !== S.ps.unit) { const f = CU[S.ps.unit] / CU[u]; for (const s of ['t', 'r', 'b', 'l', 'bind', 'cw', 'ch']) S.ps[s] = +(S.ps[s] * f).toFixed(u === 'in' ? 2 : 1); S.ps.unit = u; pref.set('ps', S.ps);
+    if (S.crop.unit !== u) { const g = CU[S.crop.unit] / CU[u]; for (const s of ['t', 'r', 'b', 'l', 'pad']) S.crop[s] = +(S.crop[s] * g).toFixed(u === 'in' ? 3 : 1); S.crop.unit = u; pref.set('crop', S.crop); } }
+  const a = $('#setAuth').value.trim(); if (a) { S.author = a; pref.set('author', a); }
+  renderPanel(); toast('Settings saved');
+}
+document.addEventListener('keydown', e => {
+  if (typeof SC !== 'undefined' && SC.open) return;
+  const mod = e.ctrlKey || e.metaKey; const k = e.key.toLowerCase();
+  if (mod && (k === 'k' || k === '.') && !$('#dlg').open) { e.preventDefault(); e.stopPropagation(); openCmd(); return; }
+  if (ORG.open) orgKey(e);
+}, true);
+$('#bSet').innerHTML = svg('gear'); $('#bSet').dataset.tip = 'Settings'; $('#bSet').onclick = openSettings;
+$('#bCmd').innerHTML = svg('bolt'); $('#bCmd').dataset.tip = 'Find a command'; $('#bCmd').dataset.key = MODK + 'K'; $('#bCmd').onclick = openCmd;
 
 async function findAll(d, q, cs) {
   const H = []; if (!q) return H; const nq = cs ? q : q.toLowerCase();
