@@ -1,0 +1,80 @@
+{
+  "name": "quire-pdf-studio",
+  "productName": "Quire PDF Studio",
+  "version": "1.1.0",
+  "description": "Personal PDF viewer and editor for Windows that runs entirely offline",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/vendor.js",
+    "vendor": "node scripts/vendor.js",
+    "start": "node scripts/vendor.js && electron .",
+    "dist": "node scripts/vendor.js && electron-builder --win"
+  },
+  "devDependencies": {
+    "@fontsource/caveat": "5.1.0",
+    "@tesseract.js-data/deu": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/fra": "1.0.0",
+    "@tesseract.js-data/ita": "1.0.0",
+    "@tesseract.js-data/nld": "1.0.0",
+    "@tesseract.js-data/pol": "1.0.0",
+    "@tesseract.js-data/por": "1.0.0",
+    "@tesseract.js-data/spa": "1.0.0",
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8",
+    "jszip": "3.10.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "3.11.174",
+    "tesseract.js": "5.1.1",
+    "tesseract.js-core": "5.1.1"
+  },
+  "build": {
+    "appId": "local.quire.pdfstudio",
+    "productName": "Quire PDF Studio",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF Document",
+        "role": "Editor",
+        "mimeType": "application/pdf"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Quire PDF Studio",
+      "artifactName": "Quire-PDF-Studio-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Quire-PDF-Studio-Portable-${version}-${arch}.${ext}"
+    },
+    "publish": null
+  }
+}
