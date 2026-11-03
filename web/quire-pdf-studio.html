@@ -228,6 +228,7 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
 .segs button.on{background:var(--solid);color:var(--fg);box-shadow:0 0 0 .5px var(--line),0 1px 3px rgba(0,0,0,.1)}
 .sigpad{background:#fff;border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);touch-action:none;width:100%;height:160px;display:block;cursor:crosshair}
 
+#scMsg .sc-hwic svg { width: 44px; height: 44px; opacity: .85; }
 /* scanner: a full-window workspace. Camera or photo on the left, settings on the right, captured pages along the bottom. */
 #scan{position:fixed;inset:0;z-index:30;background:var(--desk);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
 .sc-top{display:flex;align-items:center;gap:8px;height:50px;box-sizing:border-box;padding:0 max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));min-width:0}
@@ -425,6 +426,7 @@ const IC = {
   plus: '<path d="M12 6v12M6 12h12"/>', minus: '<path d="M6 12h12"/>',
   panel: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
   camera: '<path d="M4 8.5h3.2L9 6h6l1.8 2.5H20V19H4z"/><circle cx="12" cy="13.2" r="3.4"/>',
+  scanner: '<path d="M3 13h18v6H3z"/><path d="M6 13 17 5"/><path d="M6.5 16h3"/><circle cx="17.5" cy="16" r=".6"/>',
   crop: '<path d="M7 3v14h14M3 7h14v14"/>',
   edges: '<path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8.5 8.5l7 1-1 6-7-1z"/>',
   full: '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M8 9h8v6H8z" stroke-dasharray="2 2"/>'
@@ -2110,6 +2112,14 @@ const SC = {
   hw: { devices: null, device: pref.get('hwDevice', ''), source: pref.get('hwSource', 'flatbed'), dpi: pref.get('hwDpi', 300), color: pref.get('hwColor', 'color'), busy: false, err: '' }
 };
 const scHasHw = () => !!(window.quireDesktop && window.quireDesktop.scanner);
+// With a document scanner available it is the main source and the camera stays off until chosen.
+const scUseHw = () => scHasHw() && SC.src !== 'camera';
+SC.src = pref.get('scanSource', 'scanner');
+function scSetSrc(v) {
+  SC.src = v; pref.set('scanSource', v); SC.timerOn = false; SC.armed = true; SC.stable = 0;
+  if (scUseHw()) { scStopCam(); SC.err = ''; } else if (!SC.stream && !SC.starting) scStartCam();
+  scSelect(-1);
+}
 const scE = id => document.getElementById(id);
 function cnv(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
 const scFull = c => [[0, 0], [c.width, 0], [c.width, c.height], [0, c.height]];
@@ -2277,6 +2287,14 @@ function scMsg() {
   const txt = { denied: ['Camera access is blocked', 'Allow the camera for this page in your browser’s site settings, then press Try again. You can also import photos you have already taken.'],
     none: ['No camera found', scHasHw() ? 'Use your document scanner in the panel on the right, connect a camera, or import photos of your pages.' : 'Connect a camera, or import photos of your pages instead.'],
     unavailable: ['The camera isn’t available here', 'This view can’t use the camera. Import photos of your pages instead, or scan in the Mac or Windows app, or with the HTML file opened in a browser.'] }[SC.err];
+  if (live && scUseHw()) {
+    const H = SC.hw; const d = H.devices && H.devices.find(x => x.id === H.device); const fe = H.source !== 'flatbed';
+    M.hidden = false;
+    M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>${esc(d ? d.name : H.devices && !H.devices.length ? 'No scanner found' : 'Document scanner')}</h3>
+      <p style="margin:0;line-height:1.5">${H.devices && !H.devices.length ? esc(H.err || 'Check that the scanner is switched on and connected, then press Refresh on the right.') : fe ? 'Load your pages in the feeder, then press Scan. Quire scans until the feeder is empty.' : 'Put a page on the glass and press Scan, or press Space. Repeat for each page.'}</p>
+      <div class="row" style="justify-content:center"><button class="btn primary" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}>${H.busy ? 'Scanning…' : fe ? 'Scan all pages' : 'Scan page'}</button><button class="btn" data-sc="useCam">${svg('camera')}Use camera instead</button></div></div>`;
+    return;
+  }
   M.hidden = !live || !(txt || SC.starting);
   if (M.hidden) return;
   M.innerHTML = SC.starting ? '<div class="card"><div class="spin"></div><span>Starting camera…</span></div>' : `<div class="card"><h3>${txt[0]}</h3><p style="margin:0;line-height:1.5">${txt[1]}</p><div class="row" style="justify-content:center"><button class="btn" data-sc="import">${svg('images')}Import photos</button>${SC.err !== 'unavailable' ? '<button class="btn" data-sc="retry">Try again</button>' : ''}</div></div>`;
@@ -2285,7 +2303,7 @@ function scMsg() {
 /* --- capture loop: auto shoots when a page has been still for a moment, then waits until the page changes --- */
 function scTick(now) {
   if (!SC.open) { SC.raf = 0; return; } SC.raf = requestAnimationFrame(scTick);
-  if (SC.sel !== -1) return; const v = SC.video; const ready = v && v.readyState >= 2 && v.videoWidth;
+  if (SC.sel !== -1 || scUseHw()) { const cn = scE('scCount'); if (cn) cn.hidden = true; return; } const v = SC.video; const ready = v && v.readyState >= 2 && v.videoWidth;
   if (ready && now - SC.lastDet > 110) { const dt = SC.lastDet ? Math.min(400, now - SC.lastDet) : 0; SC.lastDet = now; scAuto(now, dt); }
   const cnt = scE('scCount');
   if (SC.timerOn && ready) { const left = SC.timerNext - now; cnt.hidden = false; cnt.textContent = Math.max(1, Math.ceil(left / 1000)); if (left <= 0) { scCapture(); SC.timerNext = now + SC.timer * 1000; } }
@@ -2313,7 +2331,7 @@ function scState(st) {
   n.className = 'sc-state ' + L[0]; n.innerHTML = `<i></i>${esc(L[1])}`;
 }
 function scCapture() {
-  const v = SC.video; if (SC.sel !== -1 || !v || !v.videoWidth) return;
+  const v = SC.video; if (SC.sel !== -1 || scUseHw() || !v || !v.videoWidth) return;
   const k = Math.min(1, 2600 / Math.max(v.videoWidth, v.videoHeight)); const c = cnv(v.videoWidth * k, v.videoHeight * k); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
   SC.lastShot = performance.now(); SC.armed = false; SC.lastSig = scSig(v); SC.stable = 0;
   const live = SC.live ? SC.live.quad.map(p => [p[0] * c.width / v.videoWidth, p[1] * c.height / v.videoHeight]) : null;
@@ -2347,10 +2365,10 @@ async function scHwList(force) {
   try { const r = await window.quireDesktop.scanner.list(); SC.hw.devices = (r && r.devices) || []; SC.hw.err = r && !r.ok ? r.error || '' : ''; }
   catch (e) { SC.hw.err = 'Could not reach Windows scanning.'; }
   if (SC.hw.devices.length && !SC.hw.devices.some(d => d.id === SC.hw.device)) SC.hw.device = SC.hw.devices[0].id;
-  scSide();
+  scSide(); scMsg();
 }
 async function scHwScan(dialog) {
-  if (!scHasHw() || SC.hw.busy) return; SC.hw.busy = true; scSide();
+  if (!scHasHw() || SC.hw.busy) return; SC.hw.busy = true; scSide(); scMsg();
   const feeder = SC.hw.source !== 'flatbed' && !dialog;
   busy(dialog ? 'Waiting for the scanner window…' : feeder ? 'Scanning every page in the feeder…' : 'Scanning…');
   const before = SC.pages.length;
@@ -2365,7 +2383,7 @@ async function scHwScan(dialog) {
     if (r && !r.ok && r.error) toast(r.error, 6000); else if (r && r.warning) toast(r.warning, 6000);
     const got = SC.pages.length - before; if (got) toast(`Scanned ${got} page${got > 1 ? 's' : ''}`);
   } catch (e) { toast('The scan did not work: ' + (e && e.message || e)); }
-  finally { SC.hw.busy = false; unbusy(); scSide(); scBar(); scStrip(); }
+  finally { SC.hw.busy = false; unbusy(); scSide(); scBar(); scStrip(); scMsg(); }
 }
 function scHwSection() {
   if (!scHasHw()) return '';
@@ -2378,12 +2396,12 @@ function scHwSection() {
     <span class="lbl">Colour</span>${seg('scHwCol', [['color', 'Colour'], ['grey', 'Grey'], ['bw', 'B&W']], H.color)}
     <button class="btn primary sc-wide" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}><span>${H.busy ? 'Scanning…' : H.source === 'flatbed' ? 'Scan page' : 'Scan all pages in feeder'}</span></button>
     <button class="btn ghost" data-sc="hwDialog" type="button" ${H.busy ? 'disabled' : ''}>Scanner’s own settings…</button>
-    <p class="hint">${H.source === 'flatbed' ? 'Put a page on the glass and press Scan page for each one.' : 'Load the pages in the feeder. Quire scans until it is empty.'} Scanned pages join the strip below with the camera pages, so you can reorder, rotate and set margins as usual.</p></section>`;
+    <p class="hint">${H.source === 'flatbed' ? 'Put a page on the glass and press Scan page for each one.' : 'Load the pages in the feeder. Quire scans until it is empty.'} Scanned pages join the strip below, where you can reorder, rotate and set margins as usual.</p></section>`;
 }
 function scHwWire(P) {
   if (!scHasHw()) return; const H = SC.hw;
-  const dv = $('#scHwDev', P); if (dv) dv.onchange = () => { H.device = dv.value; pref.set('hwDevice', H.device); };
-  const sg = (id, key, pk) => { const el = $('#' + id, P); if (el) el.onclick = e => { const b = e.target.closest('button'); if (!b) return; H[key] = b.dataset.v; pref.set(pk, H[key]); scSide(); }; };
+  const dv = $('#scHwDev', P); if (dv) dv.onchange = () => { H.device = dv.value; pref.set('hwDevice', H.device); scMsg(); };
+  const sg = (id, key, pk) => { const el = $('#' + id, P); if (el) el.onclick = e => { const b = e.target.closest('button'); if (!b) return; H[key] = b.dataset.v; pref.set(pk, H[key]); scSide(); scMsg(); }; };
   sg('scHwSrc', 'source', 'hwSource'); sg('scHwCol', 'color', 'hwColor');
   const dp = $('#scHwDpi', P); if (dp) dp.onchange = () => { H.dpi = +dp.value; pref.set('hwDpi', H.dpi); };
   if (H.devices === null) scHwList();
@@ -2437,12 +2455,13 @@ function scSide() {
   let h = '';
   if (live) {
     const hint = { manual: 'Press <span class="kbd">Space</span> or the round button to capture each page.', timer: `Shoots a page every ${SC.timer} seconds while the timer runs. Turn the page between shots. <span class="kbd">Space</span> still captures at any time.`, auto: 'Hold the camera over a page. Quire captures it as soon as the page is still, then waits for you to turn to the next one.' }[SC.mode];
-    h += scHwSection();
-    h += `<section class="sec"><h3>Capture</h3>${seg('scModeSeg', [['manual', 'Manual'], ['timer', 'Timer'], ['auto', 'Auto']], SC.mode)}<p class="hint">${hint}</p>
+    if (scHasHw()) h += `<section class="sec"><span class="lbl">Scan with</span>${seg('scSrcSeg', [['scanner', 'Scanner'], ['camera', 'Camera']], scUseHw() ? 'scanner' : 'camera')}</section>`;
+    if (scUseHw()) h += scHwSection() + `<section class="sec"><button class="btn" data-sc="import">${svg('images')}Import photos</button></section>`;
+    else h += `<section class="sec"><h3>Capture</h3>${seg('scModeSeg', [['manual', 'Manual'], ['timer', 'Timer'], ['auto', 'Auto']], SC.mode)}<p class="hint">${hint}</p>
       ${SC.mode === 'timer' ? rangeRow('scTimerR', 'Interval', SC.timer, 2, 15, 1, v => v + ' s') : ''}
       ${SC.devices.length > 1 ? `<div class="field"><label for="scDev">Camera</label><select id="scDev" class="inp">${SC.devices.map((d, k) => `<option value="${esc(d.deviceId)}"${d.deviceId === SC.deviceId ? ' selected' : ''}>${esc(d.label || 'Camera ' + (k + 1))}</option>`).join('')}</select></div>` : ''}
-      <button class="btn" data-sc="import">${svg('images')}Import photos</button></section>
-      <section class="sec"><h3>New pages</h3><span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, SC.filter)}</section>`;
+      <button class="btn" data-sc="import">${svg('images')}Import photos</button></section>`;
+    h += `<section class="sec"><h3>New pages</h3><span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, SC.filter)}</section>`;
   } else {
     h += `<section class="sec"><div class="task-h"><h3>Page ${SC.sel + 1} of ${n}</h3></div><p class="hint">${pg.found ? 'Page edges found. Drag a corner to adjust it.' : 'No page edges found. Drag the corners onto the page’s corners.'}</p>
       <span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, pg.filter)}${n > 1 ? '<button class="btn ghost" data-sc="filterAll" style="align-self:flex-start">Use this filter on every page</button>' : ''}</section>`;
@@ -2457,7 +2476,8 @@ function scSide() {
     <button class="btn primary sc-wide" data-sc="make" ${n ? '' : 'disabled'}><span>${n ? `Create PDF · ${n} page${n > 1 ? 's' : ''}` : 'Create PDF'}</span></button>
     ${cur() && n ? `<button class="btn sc-wide" data-sc="add" title="${esc(cur().name)}"><span>Add to ${esc(cur().name)}</span></button>` : ''}
     <p class="hint"><span class="kbd">Space</span> capture · <span class="kbd">←</span> <span class="kbd">→</span> pages · <span class="kbd">R</span> rotate · <span class="kbd">Del</span> remove · <span class="kbd">Esc</span> back</p></section>`;
-  P.innerHTML = h; if (live) scHwWire(P);
+  P.innerHTML = h; if (live && scUseHw()) scHwWire(P); else if (live && scHasHw() && SC.hw.devices === null) scHwList();
+  const ss = $('#scSrcSeg', P); if (ss) ss.onclick = e => { const b = e.target.closest('button'); if (!b || b.dataset.v === (scUseHw() ? 'scanner' : 'camera')) return; scSetSrc(b.dataset.v); };
   const ms = $('#scModeSeg', P); if (ms) ms.onclick = e => { const b = e.target.closest('button'); if (!b) return; SC.mode = b.dataset.v; pref.set('scanMode', SC.mode); SC.timerOn = false; SC.armed = true; SC.stable = 0; scSide(); scBar(); scState(); };
   const tr = $('#scTimerR', P); if (tr) tr.oninput = () => { SC.timer = +tr.value; pref.set('scanTimer', SC.timer); $('#scTimerR-o', P).textContent = SC.timer + ' s'; };
   const dv = $('#scDev', P); if (dv) dv.onchange = () => { SC.deviceId = dv.value; pref.set('scanDevice', SC.deviceId); scStartCam(); };
@@ -2473,7 +2493,9 @@ function scSide() {
 }
 function scBar() {
   const B = scE('scBar'); if (!B) return; const n = SC.pages.length; const ib = (act, ic, tip) => `<button class="rb" data-sc="${act}" data-tip="${tip}" aria-label="${tip}">${svg(ic)}</button>`;
-  if (SC.sel === -1) {
+  if (SC.sel === -1 && scUseHw()) {
+    B.hidden = !n; B.innerHTML = n ? `<button class="btn" data-sc="review">Review ${n}</button>` : '';
+  } else if (SC.sel === -1) {
     B.hidden = !!SC.err && !n;
     B.innerHTML = `${SC.err ? `<button class="btn" data-sc="import">${svg('images')}Import photos</button>` : `${SC.mode === 'timer' ? `<button class="btn" data-sc="timer">${SC.timerOn ? 'Pause timer' : 'Start timer'}</button>` : ''}<button class="shutter" data-sc="shoot" data-tip="Capture" data-key="Space" aria-label="Capture page"></button>`}${n ? `<button class="btn" data-sc="review">Review ${n}</button>` : ''}`;
   } else {
@@ -2486,10 +2508,10 @@ function scBar() {
 function scStrip() {
   const T = scE('scStrip'); if (!T) return;
   T.innerHTML = SC.pages.map((pg, k) => `<button class="sc-tile${k === SC.sel ? ' on' : ''}" data-k="${k}" draggable="true" aria-label="Page ${k + 1}"><img src="${pg.thumb}" alt=""><span class="n">${k + 1}</span></button>`).join('')
-    + `<button class="sc-tile${SC.sel === -1 ? ' on' : ''}" data-k="-1" aria-label="${SC.err ? 'Add pages' : 'Camera'}"><span class="camb">${svg(SC.err ? 'plus' : 'camera')}</span><span class="n">${SC.err ? 'Add' : 'Camera'}</span></button>`;
+    + `<button class="sc-tile${SC.sel === -1 ? ' on' : ''}" data-k="-1" aria-label="${scUseHw() ? 'Scanner' : SC.err ? 'Add pages' : 'Camera'}"><span class="camb">${svg(scUseHw() ? 'scanner' : SC.err ? 'plus' : 'camera')}</span><span class="n">${scUseHw() ? 'Scanner' : SC.err ? 'Add' : 'Camera'}</span></button>`;
   $$('.sc-tile', T).forEach(t => {
     const k = +t.dataset.k;
-    t.onclick = () => { if (k === -1 && SC.err) { scImport(); return; } scSelect(k); };
+    t.onclick = () => { if (k === -1 && SC.err && !scUseHw()) { scImport(); return; } scSelect(k); };
     if (k < 0) return;
     t.ondragstart = e => { e.dataTransfer.setData('text/x-quire-scan', String(k)); e.dataTransfer.effectAllowed = 'move'; };
     t.ondragover = e => { if (e.dataTransfer.types.includes('text/x-quire-scan')) { e.preventDefault(); t.classList.add('drop'); } };
@@ -2501,7 +2523,7 @@ function scStrip() {
 function scSelect(k) {
   if (k >= SC.pages.length || k < -1) k = -1; if (k !== -1) SC.timerOn = false;
   if (k !== SC.sel) SC.show = 'corners'; SC.sel = k; SC.drag = null;
-  if (k === -1 && !SC.stream && !SC.starting && !SC.err) scStartCam();
+  if (k === -1 && !SC.stream && !SC.starting && !SC.err && !scUseHw()) scStartCam();
   scE('scTitle').textContent = k === -1 ? (SC.pages.length ? `Scan · ${SC.pages.length} page${SC.pages.length > 1 ? 's' : ''}` : 'Scan') : `Page ${k + 1} of ${SC.pages.length}`;
   scStrip(); scSide(); scBar(); scState(); scMsg(); scDraw();
 }
@@ -2520,10 +2542,11 @@ function scAct(a) {
     case 'hwScan': scHwScan(false); break;
     case 'hwDialog': scHwScan(true); break;
     case 'hwRefresh': scHwList(true); break;
+    case 'useCam': scSetSrc('camera'); break;
     case 'rotl': scRot(-90); break;
     case 'rotr': scRot(90); break;
     case 'del': scDelete(SC.sel); break;
-    case 'retake': SC.insertAt = SC.sel; SC.pages.splice(SC.sel, 1); scSelect(-1); toast('Capture the replacement page'); break;
+    case 'retake': SC.insertAt = SC.sel; SC.pages.splice(SC.sel, 1); scSelect(-1); toast(scUseHw() ? 'Scan the replacement page' : 'Capture the replacement page'); break;
     case 'edges': { let r = null; try { r = scDetect(pg.src, 480); } catch {} if (r && r.conf > .6) { pg.quad = r.quad; pg.found = true; SC.show = 'corners'; scThumb(pg); scStrip(); scSide(); scBar(); scDraw(); } else toast('No page edges found. Drag the corners instead.'); break; }
     case 'full': pg.quad = scFull(pg.src); SC.show = 'corners'; scThumb(pg); scStrip(); scBar(); scDraw(); break;
     case 'filterAll': for (const p of SC.pages) if (p.filter !== pg.filter) { p.filter = pg.filter; scThumb(p); } SC.filter = pg.filter; pref.set('scanFilter', SC.filter); scStrip(); toast('Filter applied to every page'); break;
@@ -2533,7 +2556,7 @@ function scKey(e) {
   if ($('#dlg').open) return; const tg = e.target; const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName); const n = SC.pages.length;
   if (e.key === 'Escape') { e.preventDefault(); if (SC.drag) return; if (SC.sel !== -1) scSelect(-1); else scClose(); return; }
   if (typing) return; const mod = e.ctrlKey || e.metaKey; const k = e.key.toLowerCase();
-  if (e.key === ' ') { e.preventDefault(); if (SC.sel === -1) scCapture(); else scSelect(-1); return; }
+  if (e.key === ' ') { e.preventDefault(); if (SC.sel !== -1) scSelect(-1); else if (scUseHw()) scHwScan(false); else scCapture(); return; }
   if (e.key === 'ArrowRight') { e.preventDefault(); if (SC.sel !== -1) scSelect(SC.sel + 1 < n ? SC.sel + 1 : -1); return; }
   if (e.key === 'ArrowLeft') { e.preventDefault(); if (n) scSelect(SC.sel === -1 ? n - 1 : Math.max(0, SC.sel - 1)); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && SC.sel !== -1) { e.preventDefault(); scDelete(SC.sel); return; }
@@ -2565,7 +2588,7 @@ function scBuild() {
 function scOpen() {
   if (!SC.built) scBuild(); closeTextEditor(true);
   SC.open = true; scE('scan').hidden = false; SC.armed = true; SC.stable = 0; SC.state = 'search';
-  scSelect(-1); if (!SC.stream) scStartCam(); if (!SC.raf) SC.raf = requestAnimationFrame(scTick);
+  scSelect(-1); if (!SC.stream && !scUseHw()) scStartCam(); if (!SC.raf) SC.raf = requestAnimationFrame(scTick);
 }
 async function scClose(force) {
   if (!force && SC.pages.length) {
