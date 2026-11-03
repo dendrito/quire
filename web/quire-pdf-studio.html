@@ -2132,7 +2132,8 @@ async function handleFiles(files) {
 }
 (async function init() {
   wire(); renderRibbon(); renderPanel(); renderTabs(); buildViewer(); updateStatus();
-  if (window.quireDesktop) { window.quireDesktop.onOpenFile(f => openBytes(new Uint8Array(f.data), f.name)); window.quireDesktop.ready(); }
+  if (window.quireDesktop) { // Return nothing to the preload bridge: Electron would try to copy the returned document object into the other world and freeze.
+    window.quireDesktop.onOpenFile(f => { openBytes(new Uint8Array(f.data), f.name); }); window.quireDesktop.ready(); }
   try { const s = await makeSample(); const d = await openBytes(s.bytes, 'Sample - Studio Rental Agreement.pdf', { annots: s.annots }); if (d) { redrawAll(); renderPanel(); } }
   catch (e) { console.error(e); toast('Could not create the sample document: ' + e.message); }
 })();
