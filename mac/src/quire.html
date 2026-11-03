@@ -136,6 +136,14 @@ svg{flex:none}
 .org-cell.drop-l::before{left:-9px}.org-cell.drop-r::after{right:-9px}
 .org-hint{margin:0;padding:8px 16px 12px;font-size:12px;color:var(--muted);text-align:center}
 @media (max-width:760px){.org-grid{padding:12px;gap:10px 6px}.org-top .btn .lab{display:none}.org-hint{display:none}.org-end input[type=range]{display:none}.org-top h2{flex:1}#bCmd{display:none}}
+dialog:has(.imgdlg){width:min(780px,calc(100vw - 32px));max-height:calc(100vh - 32px)}
+.imgdlg{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:18px}
+.imgdlg-l{display:flex;flex-direction:column;gap:12px;min-width:0}
+.imgdlg-l [data-p]{display:flex;flex-direction:column;gap:10px}
+.imgdlg-r{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;background:var(--desk);border-radius:12px;align-self:start}
+.imgdlg-r canvas{box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.btn.sm{height:28px;padding:0 9px;font-size:12px}
+@media (max-width:760px){.imgdlg{grid-template-columns:1fr}.imgdlg-r{order:-1}}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -1091,17 +1099,6 @@ async function combineFiles(files) {
   try { const nd = await PDFDocument.create(); for (const f of files) { const src = await PDFDocument.load(new Uint8Array(await f.arrayBuffer()), LOAD); (await nd.copyPages(src, src.getPageIndices())).forEach(p => nd.addPage(p)); } unbusy(); const d = await openBytes(await nd.save(), 'Combined.pdf'); if (d) { d.dirty = true; renderTabs(); } }
   catch (e) { toast('Combine failed: ' + e.message); } finally { unbusy(); }
 }
-async function imagesToPdf(files) {
-  files = files || await pickFile('#imgIn'); if (!files || !files.length) return; busy('Converting images…');
-  try {
-    const nd = await PDFDocument.create();
-    for (const f of files) {
-      let img; if (/jpe?g/i.test(f.type)) img = await nd.embedJpg(new Uint8Array(await f.arrayBuffer())); else { const p = await fileToPng(f); img = await nd.embedPng(dataUrlBytes(p.src)); }
-      const k = Math.min(.75, 792 / Math.max(img.width, img.height)); const pg = nd.addPage([img.width * k, img.height * k]); pg.drawImage(img, { x: 0, y: 0, width: img.width * k, height: img.height * k });
-    }
-    unbusy(); const d = await openBytes(await nd.save(), (files.length === 1 ? files[0].name.replace(/\.\w+$/, '') : 'Images') + '.pdf'); if (d) { d.dirty = true; renderTabs(); }
-  } catch (e) { toast('Conversion failed: ' + e.message); } finally { unbusy(); }
-}
 async function addFormField(i, a) {
   const kind = S.tool;
   await editBytes(kind === 'ftext' ? 'Added text field' : 'Added checkbox', pdf => {
@@ -1173,7 +1170,7 @@ const taskOf = t => ({ form: 'fill' }[t] || t);
 $('#toolbar').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.rib) { S.ribbon = b.dataset.rib; renderRibbon(); return; }
-  if (!cur() && b.dataset.act !== 'scan') { toast('Open a PDF first'); return; }
+  if (!cur() && !(b.dataset.act && NODOC_ACTS.has(b.dataset.act))) { toast('Open a PDF first'); return; }
   if (b.dataset.tool) setTool(b.dataset.tool);
   else if (b.dataset.act) ACTS[b.dataset.act][2]();
 });
@@ -1932,7 +1929,7 @@ function orgKey(e) {
 const CMD_KW = { organize: 'thumbnails grid reorder sort pages', arrange: 'reverse swap collate interleave duplex blank duplicate move order separator', pagesize: 'resize normalize margins paper a4 letter binding scale', crop: 'trim white space margins cut', scan: 'camera scanner capture batch', split: 'separate break', merge: 'combine join append', ocr: 'recognise text searchable', compress: 'smaller reduce size', bates: 'numbering legal', hf: 'page numbers footer', redactApply: 'redaction remove', props: 'properties metadata title author' };
 function cmdList() {
   const L = [];
-  for (const [k, a] of Object.entries(ACTS)) L.push({ label: a[0], icon: a[1], run: a[2], doc: k !== 'scan', kw: CMD_KW[k] || '' });
+  for (const [k, a] of Object.entries(ACTS)) L.push({ label: a[0], icon: a[1], run: a[2], doc: !NODOC_ACTS.has(k), kw: CMD_KW[k] || '' });
   for (const t of TOOLS) L.push({ label: t.label, icon: t.id, run: () => { const r = Object.keys(RIB).find(k => RIB[k].items.includes(t.id)); if (r) S.ribbon = r; setTool(t.id); renderRibbon(); }, doc: true, kw: 'markup tool draw' });
   L.push({ label: 'Settings', icon: 'gear', run: openSettings, kw: 'preferences options labels units name' });
   L.push({ label: 'Open PDF', icon: 'open', run: () => $('#bOpen').click(), kw: 'file' });
@@ -1985,6 +1982,398 @@ document.addEventListener('keydown', e => {
 }, true);
 $('#bSet').innerHTML = svg('gear'); $('#bSet').dataset.tip = 'Settings'; $('#bSet').onclick = openSettings;
 $('#bCmd').innerHTML = svg('bolt'); $('#bCmd').dataset.tip = 'Find a command'; $('#bCmd').dataset.key = MODK + 'K'; $('#bCmd').onclick = openCmd;
+
+/* ================= import: images to PDF options, create from text, replace & overlay ================= */
+// Modelled on PDF-XChange's "Image to PDF Options" and "From Files" menu, with a live layout preview and one-click layouts.
+Object.assign(IC, {
+  newdoc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h4"/>',
+  replace: '<path d="M4 4h7v9H4zM13 11h7v9h-7z"/><path d="M14 4h3a2 2 0 012 2v2M10 20H7a2 2 0 01-2-2v-2"/>',
+  overlay: '<rect x="4" y="4" width="11" height="14" rx="1"/><rect x="9" y="7" width="11" height="14" rx="1" stroke-dasharray="2 2"/>'
+});
+Object.assign(ACTS, {
+  create: ['Create PDF from text, Markdown, CSV or clipboard', 'newdoc', () => openCreate()],
+  images: ['Images to PDF', 'images', () => imagesToPdf()],
+  replace: ['Replace pages', 'replace', () => replacePages()],
+  overlay: ['Overlay or letterhead', 'overlay', () => overlayPages()]
+});
+Object.assign(RLBL, { create: 'New', replace: 'Replace', overlay: 'Overlay' });
+Object.assign(CMD_KW, { create: 'new text markdown csv clipboard paste table notes', images: 'photos pictures jpg png import grid contact sheet labels', replace: 'swap substitute pages from file', overlay: 'letterhead underlay background stamp template watermark' });
+RIB.pages.items = ['@scan', '@create', '@organize', '|', '@rotl', '@rotr', '@del', '@dup', '@blank', '@insert', '@replace', '|', '@arrange', '@pagesize', '@crop', '@overlay', '|', '@extract', '@split', '@merge', '@images'];
+const NODOC_ACTS = new Set(['scan', 'create', 'images', 'merge']);
+
+/* ---- image options ---- */
+const IMG_DEF = { type: 'image', size: 'a4', cw: 210, ch: 297, unit: 'mm', rot: 'auto', t: 0, r: 0, b: 0, l: 0, cols: 1, rows: 1, gx: 5, gy: 5, fit: 'reduce', keep: true, h: 'center', v: 'middle', label: false, labelText: '%[FileName]', labelAbove: false, bookmarks: false, maxDpi: 0, color: 'keep', quality: .85, deskew: false, despeckle: false, ocr: false, dest: 'new' };
+S.img = Object.assign({}, IMG_DEF, pref.get('img', {}));
+const imgOpts = () => S.img;
+const IMG_PRESETS = {
+  photo: ['One per page, sized to the image', { type: 'image', cols: 1, rows: 1, t: 0, r: 0, b: 0, l: 0, fit: 'reduce', label: false }],
+  a4fit: ['One per page on A4', { type: 'std', size: 'a4', rot: 'auto', cols: 1, rows: 1, t: 10, r: 10, b: 10, l: 10, fit: 'fit', label: false }],
+  receipts: ['Receipts, 2 × 2 on A4', { type: 'std', size: 'a4', rot: 'none', cols: 2, rows: 2, t: 10, r: 10, b: 10, l: 10, gx: 6, gy: 6, fit: 'fit', label: true, labelText: '%[FileName]' }],
+  idcard: ['ID card, front and back on one page', { type: 'std', size: 'a4', rot: 'none', cols: 1, rows: 2, t: 20, r: 40, b: 20, l: 40, gx: 10, gy: 15, fit: 'fit', label: false }],
+  contact: ['Contact sheet, 3 × 4 with names', { type: 'std', size: 'a4', rot: 'none', cols: 3, rows: 4, t: 12, r: 12, b: 12, l: 12, gx: 5, gy: 5, fit: 'fit', label: true, labelText: '%[FileName]' }]
+};
+function imgPageSize(o, iw, ih) { // iw/ih: the image's natural size in pt
+  const k = CU[o.unit]; let W, H;
+  if (o.type === 'image') return [iw + (o.l + o.r) * k, ih + (o.t + o.b) * k];
+  if (o.type === 'custom') { W = o.cw * k; H = o.ch * k; } else { [W, H] = PAPER[o.size] || PAPER.a4; }
+  const land = o.rot === 'landscape' || (o.rot === 'auto' && o.cols * o.rows === 1 && iw > ih);
+  return land ? [Math.max(W, H), Math.min(W, H)] : [Math.min(W, H), Math.max(W, H)];
+}
+// Where each image goes: [{page, x, y, w, h, lx, ly, lw}] in pt with y measured from the top.
+function imgLayout(o, sizes) {
+  const k = CU[o.unit]; const per = o.type === 'image' ? 1 : Math.max(1, o.cols * o.rows); const out = []; let pages = [];
+  sizes.forEach(([iw, ih], n) => {
+    const slot = n % per; if (slot === 0) pages.push(imgPageSize(o, iw, ih));
+    const [PW, PH] = pages[pages.length - 1]; const cols = o.type === 'image' ? 1 : o.cols, rows = o.type === 'image' ? 1 : o.rows;
+    const cw = (PW - (o.l + o.r) * k - (cols - 1) * o.gx * k) / cols, ch0 = (PH - (o.t + o.b) * k - (rows - 1) * o.gy * k) / rows;
+    const lh = o.label ? 14 : 0; const ch = Math.max(4, ch0 - lh);
+    const cx = o.l * k + (slot % cols) * (cw + o.gx * k), cy0 = o.t * k + Math.floor(slot / cols) * (ch0 + o.gy * k), cy = cy0 + (o.label && o.labelAbove ? lh : 0);
+    let w = iw, h = ih;
+    if (o.type !== 'image') {
+      if (!o.keep && o.fit !== 'none') { w = cw; h = ch; }
+      else { let s = Math.min(cw / iw, ch / ih); if (o.fit === 'reduce') s = Math.min(1, s); if (o.fit === 'none') s = 1; w = iw * s; h = ih * s; }
+    }
+    const x = cx + (o.type === 'image' ? 0 : o.h === 'left' ? 0 : o.h === 'right' ? cw - w : (cw - w) / 2);
+    const y = cy + (o.type === 'image' ? 0 : o.v === 'top' ? 0 : o.v === 'bottom' ? ch - h : (ch - h) / 2);
+    out.push({ page: pages.length - 1, x, y, w, h, lx: cx, ly: o.labelAbove ? cy0 + 10 : cy + ch + 11, lw: cw });
+  });
+  return { pages, place: out };
+}
+const naturalPt = (pw, ph) => { const k = Math.min(.75, 842 / Math.max(pw, ph)); return [pw * k, ph * k]; };
+const labelFor = (o, name, n, total) => o.labelText.replace(/%\[FileName\]/gi, name.replace(/\.[^.]+$/, '')).replace(/%\[Index\]/gi, n + 1).replace(/%\[Count\]/gi, total).replace(/%\[Date\]/gi, today());
+
+// Small image clean-up: deskew (projection profile), despeckle (isolated dark dots), colour conversion.
+function deskewCanvas(c) {
+  const s = Math.min(1, 900 / Math.max(c.width, c.height)); const w = Math.round(c.width * s), h = Math.round(c.height * s);
+  const t = cnv(w, h); const x = t.getContext('2d'); x.drawImage(c, 0, 0, w, h); const D = x.getImageData(0, 0, w, h).data;
+  const pts = []; for (let y = 0; y < h; y += 2) for (let xx = 0; xx < w; xx += 2) { const j = (y * w + xx) * 4; if (D[j] * .299 + D[j + 1] * .587 + D[j + 2] * .114 < 110) pts.push(xx, y); }
+  if (pts.length < 200) return c;
+  const score = a => { const sn = Math.sin(a), cs = Math.cos(a); const bins = new Float32Array(h * 2); for (let q = 0; q < pts.length; q += 2) { const r = Math.round(pts[q + 1] * cs - pts[q] * sn + h * .5); if (r >= 0 && r < bins.length) bins[r]++; } let v = 0; for (const b of bins) v += b * b; return v; };
+  let best = 0, bs = score(0); for (let a = -5; a <= 5; a += .25) { if (!a) continue; const sc = score(a * Math.PI / 180); if (sc > bs) { bs = sc; best = a; } }
+  for (let a = best - .2; a <= best + .2; a += .05) { const sc = score(a * Math.PI / 180); if (sc > bs) { bs = sc; best = a; } }
+  if (Math.abs(best) < .15) return c;
+  const o = cnv(c.width, c.height); const ox = o.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, o.width, o.height);
+  ox.translate(o.width / 2, o.height / 2); ox.rotate(best * Math.PI / 180); ox.drawImage(c, -c.width / 2, -c.height / 2); return o;
+}
+function despeckleCanvas(c) {
+  const x = c.getContext('2d'); const W = c.width, H = c.height; const id = x.getImageData(0, 0, W, H); const D = id.data; const L = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) L[i] = D[i * 4] * .299 + D[i * 4 + 1] * .587 + D[i * 4 + 2] * .114;
+  const dark = 150;
+  for (let y = 1; y < H - 1; y++) for (let xx = 1; xx < W - 1; xx++) {
+    const i = y * W + xx; if (L[i] >= dark) continue; let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && L[i + dy * W + dx] < dark) n++;
+    if (n <= 1) { const j = i * 4; D[j] = D[j + 1] = D[j + 2] = 255; }
+  }
+  x.putImageData(id, 0, 0); return c;
+}
+async function imgCanvas(item) {
+  if (item instanceof HTMLCanvasElement) return { c: item, name: 'Scan' };
+  if (item.c) return item;
+  const url = URL.createObjectURL(item); try { const img = await loadImg(url); const c = cnv(img.naturalWidth, img.naturalHeight); c.getContext('2d').drawImage(img, 0, 0); return { c, name: item.name || 'Image' }; } finally { URL.revokeObjectURL(url); }
+}
+// Builds a PDF (or adds pages to the open one) from images with the given options. items: Files, canvases or {c, name}.
+async function imagesToPdfWith(items, o = S.img) {
+  busy('Preparing images…');
+  try {
+    const imgs = []; for (const it of items) imgs.push(await imgCanvas(it));
+    const sizes = imgs.map(m => naturalPt(m.c.width, m.c.height)); const { pages, place } = imgLayout(o, sizes);
+    const toCur = o.dest === 'cur' && cur() && !cur().encrypted;
+    const pdf = await PDFDocument.create(); const font = await pdf.embedFont(StandardFonts.Helvetica); const pgs = pages.map(([w, h]) => pdf.addPage([w, h])); const marks = [];
+    for (let n = 0; n < imgs.length; n++) {
+      $('#busyMsg').textContent = `Adding image ${n + 1} of ${imgs.length}…`; await new Promise(r => setTimeout(r, 0));
+      let c = imgs[n].c; const P = place[n]; const pg = pgs[P.page]; const PH = pages[P.page][1];
+      if (o.deskew) c = deskewCanvas(c);
+      if (o.maxDpi) { const dpi = c.width / (P.w / 72); if (dpi > o.maxDpi * 1.05) { const f = o.maxDpi / dpi; const t = cnv(Math.max(1, Math.round(c.width * f)), Math.max(1, Math.round(c.height * f))); t.getContext('2d').drawImage(c, 0, 0, t.width, t.height); c = t; } }
+      if (c === imgs[n].c && (o.despeckle || o.color !== 'keep')) { const t = cnv(c.width, c.height); t.getContext('2d').drawImage(c, 0, 0); c = t; }
+      if (o.color !== 'keep' && typeof scFilter === 'function') c = scFilter(c, o.color === 'bw' ? 'bw' : 'grey') || c;
+      if (o.despeckle) c = despeckleCanvas(c);
+      const img = o.color === 'bw' ? await pdf.embedPng(await canvasBytes(c, 'image/png')) : await pdf.embedJpg(await canvasBytes(c, 'image/jpeg', o.quality));
+      pg.drawImage(img, { x: P.x, y: PH - P.y - P.h, width: P.w, height: P.h });
+      if (o.label || o.bookmarks) {
+        const t = labelFor(o, imgs[n].name, n, imgs.length);
+        if (o.label) { let tx = safe(font, t); while (tx.length > 1 && font.widthOfTextAtSize(tx, 9) > P.lw) tx = tx.slice(0, -2) + '…'; tx = safe(font, tx); const tw = font.widthOfTextAtSize(tx, 9); pg.drawText(tx, { x: P.lx + (P.lw - tw) / 2, y: PH - P.ly, size: 9, font, color: rgb(.25, .27, .3) }); }
+        if (o.bookmarks) marks.push([t, P.page]);
+      }
+    }
+    if (toCur) {
+      const d = cur(); const at = (selPages().slice(-1)[0] ?? d.cur) + 1; const bytes = await pdf.save(); unbusy();
+      const ok = await editBytes(`Added ${plural(imgs.length, 'image')}`, async (dst, dd) => { const src = await PDFDocument.load(bytes); const cps = await dst.copyPages(src, src.getPageIndices()); cps.forEach((p, k) => { dst.insertPage(at + k, p); dd.annots.splice(at + k, 0, []); }); if (o.bookmarks) addOutline(dst, marks.map(([t, p]) => [t, at + p])); });
+      if (ok) { d.sel = new Set([at]); markThumbs(); gotoPage(at); if (o.ocr) startOcr(); }
+      return ok;
+    }
+    if (o.bookmarks) addOutline(pdf, marks);
+    const bytes = await pdf.save(); unbusy();
+    const name = (imgs.length === 1 ? imgs[0].name.replace(/\.\w+$/, '') : 'Images') + '.pdf';
+    const d = await openBytes(bytes, name); if (d) { d.dirty = true; renderTabs(); if (o.ocr) startOcr(); }
+    return !!d;
+  } catch (e) { console.error(e); toast('Conversion failed: ' + (e.message || e)); return false; } finally { unbusy(); }
+}
+function startOcr() { setTimeout(() => { openTask('ocr'); const b = $('#oGo'); if (b) b.click(); }, 300); }
+// Adds top-level bookmarks [[title, pageIndex]] (keeps any existing ones).
+function addOutline(pdf, items) {
+  if (!items.length) return; const L = PDFLib; const ctx = pdf.context; const cat = pdf.catalog; const N = L.PDFName.of;
+  let root = cat.lookup(N('Outlines')); let rootRef = cat.get(N('Outlines'));
+  if (!(root instanceof L.PDFDict)) { root = ctx.obj({ Type: 'Outlines', Count: 0 }); rootRef = ctx.register(root); cat.set(N('Outlines'), rootRef); }
+  let prev = root.get(N('Last')) || null; const refs = items.map(() => ctx.nextRef()); const pages = pdf.getPages();
+  items.forEach(([title, pi], k) => {
+    const it = ctx.obj({ Title: L.PDFHexString.fromText(title), Parent: rootRef, Dest: [pages[Math.min(pi, pages.length - 1)].ref, 'XYZ', null, null, null] });
+    if (prev) { it.set(N('Prev'), prev); const pd = ctx.lookup(prev); if (pd instanceof L.PDFDict) pd.set(N('Next'), refs[k]); }
+    if (!root.get(N('First'))) root.set(N('First'), refs[k]);
+    ctx.assign(refs[k], it); prev = refs[k];
+  });
+  root.set(N('Last'), prev); const cnt = root.lookup(N('Count')); root.set(N('Count'), L.PDFNumber.of(Math.abs(cnt instanceof L.PDFNumber ? cnt.asNumber() : 0) + items.length));
+}
+
+// The options dialog, with a live preview of the first page.
+async function imageOptionsDialog(items) {
+  const o = Object.assign({}, S.img); const metas = [];
+  for (const it of items.slice(0, 24)) { try { const m = await imgCanvas(it); metas.push({ w: m.c.width, h: m.c.height, name: m.name, c: m.c }); } catch {} }
+  const opt = (v, l, c) => `<option value="${v}"${c === v ? ' selected' : ''}>${l}</option>`; const num = (id, v, step = 'any', min = 0) => `<input id="${id}" class="inp" type="number" min="${min}" step="${step}" value="${v}">`;
+  const body = el('div', 'imgdlg', `
+    <div class="imgdlg-l">
+      <div class="field"><span class="lbl">Quick layouts</span><div class="row">${Object.entries(IMG_PRESETS).map(([k, [l]]) => `<button type="button" class="btn sm" data-pre="${k}">${l}</button>`).join('')}</div></div>
+      <div class="segs" id="ioTabs">${['Page', 'Layout', 'Labels', 'Quality'].map((t, k) => `<button type="button" data-t="${k}" class="${k ? '' : 'on'}">${t}</button>`).join('')}</div>
+      <div data-p="0">
+        <div class="field"><span class="lbl">Page size</span><div class="segs" id="ioType">${[['image', 'By image'], ['std', 'Standard'], ['custom', 'Custom']].map(([v, l]) => `<button type="button" data-v="${v}">${l}</button>`).join('')}</div></div>
+        <div class="grid2" id="ioStd"><div class="field"><label for="ioSize">Paper</label><select id="ioSize" class="inp">${Object.entries(PAPER).map(([k, p]) => opt(k, p[2], o.size)).join('')}</select></div>
+          <div class="field"><label for="ioRot">Orientation</label><select id="ioRot" class="inp">${opt('auto', 'Match the image', o.rot)}${opt('none', 'Portrait', o.rot)}${opt('landscape', 'Landscape', o.rot)}</select></div></div>
+        <div class="grid2" id="ioCust"><div class="field"><label for="ioCW">Width</label>${num('ioCW', o.cw)}</div><div class="field"><label for="ioCH">Height</label>${num('ioCH', o.ch)}</div></div>
+        <div class="grid2">${['t', 'b', 'l', 'r'].map(s => `<div class="field"><label for="io${s}">${{ t: 'Top', b: 'Bottom', l: 'Left', r: 'Right' }[s]} margin</label>${num('io' + s, o[s])}</div>`).join('')}</div>
+        <div class="row" style="justify-content:space-between"><span class="lbl">Units</span><select id="ioUnit" class="inp" style="width:auto">${opt('mm', 'mm', o.unit)}${opt('in', 'in', o.unit)}${opt('pt', 'pt', o.unit)}</select></div>
+      </div>
+      <div data-p="1" hidden>
+        <div class="grid2"><div class="field"><label for="ioCols">Columns</label>${num('ioCols', o.cols, 1, 1)}</div><div class="field"><label for="ioRows">Rows</label>${num('ioRows', o.rows, 1, 1)}</div>
+          <div class="field"><label for="iogx">Space between columns</label>${num('iogx', o.gx)}</div><div class="field"><label for="iogy">Space between rows</label>${num('iogy', o.gy)}</div></div>
+        <div class="grid2"><div class="field"><label for="ioFit">Fit</label><select id="ioFit" class="inp">${opt('reduce', 'Shrink to cell if bigger', o.fit)}${opt('fit', 'Fill the cell', o.fit)}${opt('none', 'Actual size', o.fit)}</select></div>
+          <label class="chk" style="align-self:end"><input type="checkbox" id="ioKeep" ${o.keep ? 'checked' : ''}> Keep aspect ratio</label>
+          <div class="field"><label for="ioH">Horizontal</label><select id="ioH" class="inp">${opt('left', 'Left', o.h)}${opt('center', 'Centre', o.h)}${opt('right', 'Right', o.h)}</select></div>
+          <div class="field"><label for="ioV">Vertical</label><select id="ioV" class="inp">${opt('top', 'Top', o.v)}${opt('middle', 'Middle', o.v)}${opt('bottom', 'Bottom', o.v)}</select></div></div>
+        <p class="hint" id="ioGridHint">Columns and rows need a Standard or Custom page size.</p>
+      </div>
+      <div data-p="2" hidden>
+        <label class="chk"><input type="checkbox" id="ioLabel" ${o.label ? 'checked' : ''}> Print a label with each image</label>
+        <div class="field"><label for="ioLT">Label text</label><input id="ioLT" class="inp" value="${esc(o.labelText)}"><span class="muted small">%[FileName], %[Index], %[Count] and %[Date] are filled in.</span></div>
+        <label class="chk"><input type="checkbox" id="ioLA" ${o.labelAbove ? 'checked' : ''}> Put the label above the image</label>
+        <label class="chk"><input type="checkbox" id="ioBM" ${o.bookmarks ? 'checked' : ''}> Add a bookmark for each image</label>
+      </div>
+      <div data-p="3" hidden>
+        <div class="grid2"><div class="field"><label for="ioColor">Colour</label><select id="ioColor" class="inp">${opt('keep', 'Keep colour', o.color)}${opt('grey', 'Greyscale, shadows removed', o.color)}${opt('bw', 'Black and white', o.color)}</select></div>
+          <div class="field"><label for="ioDpi">Max resolution</label><select id="ioDpi" class="inp">${[[0, 'Keep'], [300, '300 dpi'], [200, '200 dpi'], [150, '150 dpi'], [100, '100 dpi']].map(([v, l]) => opt(v, l, o.maxDpi)).join('')}</select></div></div>
+        ${rangeRow('ioQ', 'JPEG quality', o.quality, .4, .95, .05, v => Math.round(v * 100) + '%')}
+        <label class="chk"><input type="checkbox" id="ioDesk" ${o.deskew ? 'checked' : ''}> Deskew (straighten tilted pages)</label>
+        <label class="chk"><input type="checkbox" id="ioDesp" ${o.despeckle ? 'checked' : ''}> Despeckle (remove dust dots)</label>
+        <label class="chk"><input type="checkbox" id="ioOcr" ${o.ocr ? 'checked' : ''}> Make text searchable (OCR) afterwards</label>
+      </div>
+      <div class="field"><span class="lbl">Put the pages</span><div class="row"><label class="chk"><input type="radio" name="ioDest" value="new" ${o.dest !== 'cur' || !cur() ? 'checked' : ''}> In a new PDF</label><label class="chk"><input type="radio" name="ioDest" value="cur" ${o.dest === 'cur' && cur() ? 'checked' : ''} ${cur() ? '' : 'disabled'}> After the current page</label></div></div>
+    </div>
+    <div class="imgdlg-r"><canvas id="ioPrev"></canvas><p class="muted small" id="ioSum"></p></div>`);
+  const $b = s => body.querySelector(s);
+  const sync = () => {
+    $$('#ioType button', body).forEach(b => b.classList.toggle('on', b.dataset.v === o.type));
+    $b('#ioStd').hidden = o.type !== 'std'; $b('#ioCust').hidden = o.type !== 'custom'; $b('#ioGridHint').hidden = o.type !== 'image';
+    for (const id of ['ioCols', 'ioRows', 'iogx', 'iogy', 'ioFit', 'ioKeep', 'ioH', 'ioV']) $b('#' + id).disabled = o.type === 'image';
+    const vals = { ioSize: o.size, ioRot: o.rot, ioCW: o.cw, ioCH: o.ch, iot: o.t, iob: o.b, iol: o.l, ior: o.r, ioUnit: o.unit, ioCols: o.cols, ioRows: o.rows, iogx: o.gx, iogy: o.gy, ioFit: o.fit, ioH: o.h, ioV: o.v, ioLT: o.labelText, ioColor: o.color, ioDpi: o.maxDpi };
+    for (const [id, v] of Object.entries(vals)) { const n = $b('#' + id); if (n && document.activeElement !== n) n.value = v; }
+    $b('#ioKeep').checked = o.keep; $b('#ioLabel').checked = o.label; $b('#ioLA').checked = o.labelAbove; $b('#ioBM').checked = o.bookmarks; $b('#ioDesk').checked = o.deskew; $b('#ioDesp').checked = o.despeckle;
+    drawPrev();
+  };
+  const drawPrev = () => {
+    const cv = $b('#ioPrev'); const sizes = (metas.length ? metas : [{ w: 1200, h: 900 }]).map(m => naturalPt(m.w, m.h)); const { pages, place } = imgLayout(o, sizes);
+    const [PW, PH] = pages[0]; const S2 = Math.min(230 / PW, 300 / PH); const r = dpr(); cv.width = Math.round(PW * S2 * r); cv.height = Math.round(PH * S2 * r); cv.style.width = PW * S2 + 'px'; cv.style.height = PH * S2 + 'px';
+    const x = cv.getContext('2d'); x.scale(r * S2, r * S2); x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH);
+    const k = CU[o.unit]; x.strokeStyle = 'rgba(43,92,255,.5)'; x.setLineDash([4 / S2, 3 / S2]); x.lineWidth = 1 / S2; x.strokeRect(o.l * k, o.t * k, PW - (o.l + o.r) * k, PH - (o.t + o.b) * k); x.setLineDash([]);
+    place.forEach((p, n) => { if (p.page) return; const m = metas[n]; if (m) x.drawImage(m.c, p.x, p.y, p.w, p.h); else { x.fillStyle = '#c9d3e6'; x.fillRect(p.x, p.y, p.w, p.h); }
+      if (o.label) { x.fillStyle = '#444'; x.font = `9px Helvetica, Arial, sans-serif`; x.textAlign = 'center'; x.fillText(labelFor(o, m ? m.name : 'image.jpg', n, sizes.length).slice(0, 40), p.lx + p.lw / 2, p.ly - 1); } });
+    x.strokeStyle = 'rgba(0,0,0,.15)'; x.strokeRect(0, 0, PW, PH);
+    const nm = o.type === 'image' ? 'sized to each image' : `${(PW / CU[o.unit]).toFixed(o.unit === 'mm' ? 0 : 1)} × ${(PH / CU[o.unit]).toFixed(o.unit === 'mm' ? 0 : 1)} ${o.unit}`;
+    $b('#ioSum').textContent = `${plural(items.length, 'image')} on ${plural(pages.length, 'page')}, ${nm}. Preview of page 1.`;
+  };
+  body.addEventListener('click', e => {
+    const t = e.target.closest('[data-t]'); if (t) { $$('#ioTabs button', body).forEach(b => b.classList.toggle('on', b === t)); $$('[data-p]', body).forEach(p => p.hidden = p.dataset.p !== t.dataset.t); return; }
+    const v = e.target.closest('#ioType [data-v]'); if (v) { o.type = v.dataset.v; sync(); return; }
+    const p = e.target.closest('[data-pre]'); if (p) { Object.assign(o, IMG_PRESETS[p.dataset.pre][1]); if (o.unit !== 'mm') { const f = CU.mm / CU[o.unit]; for (const s of ['t', 'r', 'b', 'l', 'gx', 'gy']) o[s] = +(o[s] * f).toFixed(2); } sync(); }
+  });
+  body.addEventListener('input', e => {
+    const n = e.target; const id = n.id; const f = parseFloat(n.value);
+    const map = { ioCW: 'cw', ioCH: 'ch', iot: 't', iob: 'b', iol: 'l', ior: 'r', iogx: 'gx', iogy: 'gy' };
+    if (map[id]) o[map[id]] = Math.max(0, f || 0);
+    else if (id === 'ioCols' || id === 'ioRows') o[id === 'ioCols' ? 'cols' : 'rows'] = Math.max(1, Math.min(12, parseInt(n.value) || 1));
+    else if (id === 'ioUnit') { const g = CU[o.unit] / CU[n.value]; for (const s of ['t', 'r', 'b', 'l', 'gx', 'gy', 'cw', 'ch']) o[s] = +(o[s] * g).toFixed(n.value === 'mm' ? 1 : 2); o.unit = n.value; }
+    else if (id === 'ioQ') { o.quality = +n.value; $b('#ioQ-o').textContent = Math.round(o.quality * 100) + '%'; }
+    else if (id === 'ioDpi') o.maxDpi = +n.value;
+    else if (id === 'ioLT') o.labelText = n.value;
+    else if (n.name === 'ioDest') o.dest = n.value;
+    else { const sel = { ioSize: 'size', ioRot: 'rot', ioFit: 'fit', ioH: 'h', ioV: 'v', ioColor: 'color' }[id]; const chk = { ioKeep: 'keep', ioLabel: 'label', ioLA: 'labelAbove', ioBM: 'bookmarks', ioDesk: 'deskew', ioDesp: 'despeckle', ioOcr: 'ocr' }[id]; if (sel) o[sel] = n.value; if (chk) o[chk] = n.checked; }
+    if (id === 'ioUnit') sync(); else drawPrev();
+  });
+  sync();
+  const r = await modal({ title: `Images to PDF (${items.length})`, body, actions: [{ label: 'Cancel', value: null }, { label: 'Create', primary: true, value: 'ok' }] });
+  if (!r) return null; S.img = o; pref.set('img', o); return o;
+}
+async function imagesToPdf(files) {
+  files = files || await pickFile('#imgIn'); if (!files || !files.length) return;
+  const o = await imageOptionsDialog(files); if (!o) return; return imagesToPdfWith(files, o);
+}
+
+/* ---- create from text, Markdown, CSV or clipboard ---- */
+S.create = Object.assign({ kind: 'text', size: 'a4', fs: 11, margin: 20 }, pref.get('create', {}));
+function mdBlocks(src) {
+  const out = []; let para = [], code = null;
+  const flush = () => { if (para.length) { out.push({ t: 'p', s: para.join(' ') }); para = []; } };
+  const inline = s => s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)').replace(/(\*\*|__)(.+?)\1/g, '$2').replace(/(\*|_)(.+?)\1/g, '$2').replace(/`([^`]+)`/g, '$1');
+  for (const line of src.replace(/\r/g, '').split('\n')) {
+    if (code) { if (/^\s*```/.test(line)) { out.push({ t: 'code', s: code.join('\n') }); code = null; } else code.push(line); continue; }
+    if (/^\s*```/.test(line)) { flush(); code = []; continue; }
+    let m;
+    if (!line.trim()) { flush(); continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*)/))) { flush(); out.push({ t: 'h' + Math.min(3, m[1].length), s: inline(m[2]) }); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push({ t: 'hr' }); continue; }
+    if ((m = line.match(/^(\s*)[-*+]\s+(?:\[( |x)\]\s+)?(.*)/i))) { flush(); out.push({ t: 'li', s: (m[2] ? (m[2].toLowerCase() === 'x' ? '[x] ' : '[  ] ') : '') + inline(m[3]), ind: Math.floor(m[1].length / 2), bullet: '•' }); continue; }
+    if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)/))) { flush(); out.push({ t: 'li', s: inline(m[3]), ind: Math.floor(m[1].length / 2), bullet: m[2] + '.' }); continue; }
+    if ((m = line.match(/^>\s?(.*)/))) { flush(); out.push({ t: 'quote', s: inline(m[1]) }); continue; }
+    if (/^\s*\|.*\|\s*$/.test(line)) { flush(); if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue; const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => inline(c.trim())); const last = out[out.length - 1]; if (last && last.t === 'table') last.rows.push(cells); else out.push({ t: 'table', rows: [cells] }); continue; }
+    para.push(inline(line.trim()));
+  }
+  flush(); if (code) out.push({ t: 'code', s: code.join('\n') }); return out;
+}
+function parseCsv(src) {
+  const first = src.split('\n')[0] || ''; const sep = [',', ';', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < src.length; i++) { const ch = src[i];
+    if (q) { if (ch === '"') { if (src[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true; else if (ch === sep) { row.push(f); f = ''; } else if (ch === '\n') { row.push(f.replace(/\r$/, '')); rows.push(row); row = []; f = ''; } else f += ch; }
+  if (f || row.length) { row.push(f.replace(/\r$/, '')); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim()));
+}
+// Simple typesetter: flows blocks over pages with Helvetica/Courier, repeating table headers.
+async function typeset(blocks, { size = 'a4', fs = 11, margin = 20, title = '' } = {}) {
+  const pdf = await PDFDocument.create(); const F = { r: await pdf.embedFont(StandardFonts.Helvetica), b: await pdf.embedFont(StandardFonts.HelveticaBold), m: await pdf.embedFont(StandardFonts.Courier) };
+  if (title) pdf.setTitle(title);
+  const wide = blocks.some(b => b.t === 'table' && Math.max(...b.rows.map(r => r.length)) > 6);
+  let [PW, PH] = PAPER[size] || PAPER.a4; if (wide) [PW, PH] = [PH, PW];
+  const M = margin * CU.mm, W = PW - 2 * M; let pg, y;
+  const newPage = () => { pg = pdf.addPage([PW, PH]); y = PH - M; };
+  const need = h => { if (!pg || y - h < M) newPage(); };
+  const wrap = (font, s, sz, w) => { const out = []; for (const para of String(s).split('\n')) { let line = ''; for (const word of para.split(/(\s+)/)) { if (!word) continue; const t = line + word; if (font.widthOfTextAtSize(safe(font, t.trimEnd()), sz) > w && line.trim()) { out.push(line.trimEnd()); line = word.trimStart(); while (font.widthOfTextAtSize(safe(font, line), sz) > w && line.length > 1) { let k = line.length; while (k > 1 && font.widthOfTextAtSize(safe(font, line.slice(0, k)), sz) > w) k--; out.push(line.slice(0, k)); line = line.slice(k); } } else line = t; } out.push(line.trimEnd()); } return out; };
+  const text = (s, { font = F.r, sz = fs, x = M, w = W, color = rgb(.07, .07, .08), gap = sz * .5, lh = 1.35 } = {}) => { for (const l of wrap(font, s, sz, w)) { need(sz * lh); y -= sz * lh; pg.drawText(safe(font, l), { x, y: y + sz * (lh - 1) * .5, size: sz, font, color }); } y -= gap; };
+  newPage();
+  for (const b of blocks) {
+    if (b.t === 'h1') { y -= fs * .6; text(b.s, { font: F.b, sz: fs * 1.9, gap: fs * .5 }); }
+    else if (b.t === 'h2') { y -= fs * .5; text(b.s, { font: F.b, sz: fs * 1.45, gap: fs * .4 }); }
+    else if (b.t === 'h3') { y -= fs * .3; text(b.s, { font: F.b, sz: fs * 1.15, gap: fs * .3 }); }
+    else if (b.t === 'p') text(b.s);
+    else if (b.t === 'li') { const ind = M + (b.ind || 0) * fs * 1.4; need(fs * 1.35); pg.drawText(safe(F.r, b.bullet), { x: ind, y: y - fs * 1.35 + fs * .17, size: fs, font: F.r }); text(b.s, { x: ind + fs * 1.4, w: W - (ind - M) - fs * 1.4, gap: fs * .25 }); }
+    else if (b.t === 'quote') { const y0 = y; text(b.s, { x: M + fs * 1.2, w: W - fs * 1.2, color: rgb(.35, .37, .42) }); pg.drawLine({ start: { x: M + 2, y: Math.min(y0, PH - M) }, end: { x: M + 2, y: y + fs * .5 }, thickness: 2, color: rgb(.8, .82, .86) }); }
+    else if (b.t === 'code') text(b.s, { font: F.m, sz: fs * .88, lh: 1.3, color: rgb(.15, .17, .22) });
+    else if (b.t === 'hr') { need(fs); y -= fs * .5; pg.drawLine({ start: { x: M, y }, end: { x: PW - M, y }, thickness: .7, color: rgb(.8, .8, .82) }); y -= fs * .5; }
+    else if (b.t === 'table') {
+      const rows = b.rows; const nc = Math.max(...rows.map(r => r.length)); const tsz = Math.max(6.5, Math.min(fs * .9, fs * 8 / Math.max(8, nc)));
+      const natural = [...Array(nc).keys()].map(c => Math.max(20, Math.min(220, ...rows.slice(0, 200).map(r => F.r.widthOfTextAtSize(safe(F.r, r[c] || ''), tsz) + 8))));
+      const tot = natural.reduce((a, b) => a + b, 0); const cw = natural.map(v => v * W / tot);
+      const drawRow = (r, bold, shade) => {
+        const lines = r.map((c, k) => wrap(bold ? F.b : F.r, c || '', tsz, cw[k] - 6)); const h = Math.max(1, ...lines.map(l => l.length)) * tsz * 1.25 + 5;
+        need(h); if (shade) pg.drawRectangle({ x: M, y: y - h, width: W, height: h, color: rgb(.94, .95, .97) });
+        let x = M; lines.forEach((ls, k) => { ls.forEach((l, j) => pg.drawText(safe(bold ? F.b : F.r, l), { x: x + 3, y: y - 3 - tsz - j * tsz * 1.25 + tsz * .15, size: tsz, font: bold ? F.b : F.r, color: rgb(.07, .07, .08) })); x += cw[k]; });
+        pg.drawLine({ start: { x: M, y: y - h }, end: { x: M + W, y: y - h }, thickness: .5, color: rgb(.82, .83, .86) }); y -= h; return h;
+      };
+      let pageOf = pg; drawRow(rows[0], true, true);
+      for (let k = 1; k < rows.length; k++) { const before = pg; const r = rows[k]; const lines = Math.max(1, ...r.map((c, j) => wrap(F.r, c || '', tsz, cw[j] - 6).length)); if (y - (lines * tsz * 1.25 + 5) < M) { newPage(); drawRow(rows[0], true, true); } drawRow(r, false, false); }
+      y -= fs * .8;
+    }
+  }
+  const n = pdf.getPageCount(); if (n > 1) pdf.getPages().forEach((p, k) => { const t = `${k + 1} / ${n}`; p.drawText(t, { x: PW - M - F.r.widthOfTextAtSize(t, 8), y: M / 2, size: 8, font: F.r, color: rgb(.55, .56, .6) }); });
+  return pdf.save();
+}
+async function openCreate() {
+  const C = S.create; const kinds = [['text', 'Plain text'], ['md', 'Markdown'], ['csv', 'CSV table'], ['clip', 'Clipboard']];
+  const body = el('div', '', `
+    <div class="segs" id="crK">${kinds.map(([v, l]) => `<button type="button" data-k="${v}" class="${C.kind === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="field"><label for="crTxt" id="crLbl">Paste or type, or choose a file</label><textarea id="crTxt" style="min-height:180px;font-family:var(--f-mono);font-size:12px" placeholder=""></textarea></div>
+    <div class="row"><button type="button" class="btn" id="crFile">${svg('open')}Choose file…</button><button type="button" class="btn" id="crClip">Paste from clipboard</button><span class="muted small" id="crMsg"></span></div>
+    <div class="grid2"><div class="field"><label for="crSize">Paper</label><select id="crSize" class="inp">${['a4', 'letter', 'legal', 'a5'].map(k => `<option value="${k}"${C.size === k ? ' selected' : ''}>${PAPER[k][2]}</option>`).join('')}</select></div>
+    <div class="field"><label for="crFs">Text size</label><select id="crFs" class="inp">${[9, 10, 11, 12, 14].map(v => `<option${C.fs === v ? ' selected' : ''}>${v}</option>`).join('')}</select></div></div>
+    <p class="hint" style="margin:0">Markdown headings, lists, quotes, code and tables are laid out. CSV becomes a table that repeats its header on every page. A pasted picture becomes an image page.</p>`);
+  let pastedImgs = []; let fname = '';
+  const ta = body.querySelector('#crTxt'), msg = body.querySelector('#crMsg');
+  const ph = { text: 'Type or paste text here', md: '# Title\n\nSome **bold** text.\n\n- a list\n- of things', csv: 'Name,Amount,Date\nRent,1450,2026-11-01', clip: 'Press Paste from clipboard, or Ctrl+V here (text or a picture)' };
+  const setK = k => { C.kind = k; $$('#crK button', body).forEach(b => b.classList.toggle('on', b.dataset.k === k)); ta.placeholder = ph[k]; };
+  setK(C.kind);
+  body.querySelector('#crK').onclick = e => { const b = e.target.closest('[data-k]'); if (b) setK(b.dataset.k); };
+  const inp = el('input'); inp.type = 'file'; inp.accept = '.txt,.md,.markdown,.csv,.tsv,.eml,.log,text/*'; inp.hidden = true; body.append(inp);
+  body.querySelector('#crFile').onclick = () => { inp.value = ''; inp.click(); };
+  inp.onchange = async () => { const f = inp.files[0]; if (!f) return; fname = f.name.replace(/\.\w+$/, ''); let t = await f.text(); if (/\.eml$/i.test(f.name)) { const i = t.search(/\r?\n\r?\n/); const hdr = t.slice(0, i); const pick = h => (hdr.match(new RegExp('^' + h + ':\\s*(.*)$', 'mi')) || [])[1] || ''; t = `# ${pick('Subject')}\n\nFrom: ${pick('From')}  \nTo: ${pick('To')}  \nDate: ${pick('Date')}\n\n---\n\n` + t.slice(i).trim(); setK('md'); } else setK(/\.(md|markdown)$/i.test(f.name) ? 'md' : /\.(csv|tsv)$/i.test(f.name) ? 'csv' : 'text'); ta.value = t; msg.textContent = f.name; };
+  const takeImgs = files => { pastedImgs = files; msg.textContent = files.length ? `${plural(files.length, 'picture')} pasted` : ''; if (files.length) setK('clip'); };
+  ta.addEventListener('paste', e => { const fs = [...(e.clipboardData && e.clipboardData.files || [])].filter(f => /^image\//.test(f.type)); if (fs.length) { e.preventDefault(); takeImgs(fs); } });
+  body.querySelector('#crClip').onclick = async () => {
+    try { const items = await navigator.clipboard.read(); const imgs = []; let txt = '';
+      for (const it of items) { const im = it.types.find(t => t.startsWith('image/')); if (im) imgs.push(new File([await it.getType(im)], 'Clipboard.png', { type: im })); else if (it.types.includes('text/plain')) txt += await (await it.getType('text/plain')).text(); }
+      if (imgs.length) takeImgs(imgs); else if (txt) { ta.value = txt; msg.textContent = 'Text pasted'; } else msg.textContent = 'The clipboard is empty.';
+    } catch { try { const t = await navigator.clipboard.readText(); if (t) { ta.value = t; msg.textContent = 'Text pasted'; return; } } catch {} msg.textContent = 'This view blocks clipboard access. Click in the box and press ' + MODK + 'V instead.'; }
+  };
+  const r = await modal({ title: 'Create PDF', body, actions: [{ label: 'Cancel', value: null }, { label: 'Create', primary: true, value: 'ok', validate: () => { if (!ta.value.trim() && !pastedImgs.length) { msg.textContent = 'Add some text or a picture first.'; return false; } return true; } }] });
+  if (!r) return; C.size = body.querySelector('#crSize').value; C.fs = +body.querySelector('#crFs').value; pref.set('create', C);
+  if (pastedImgs.length && C.kind === 'clip') return imagesToPdfWith(pastedImgs, Object.assign({}, S.img, { dest: 'new' }));
+  const src = ta.value; let blocks;
+  if (C.kind === 'csv') blocks = [{ t: 'table', rows: parseCsv(src) }];
+  else if (C.kind === 'md' || (C.kind === 'clip' && /^\s*(#|[-*] |\|)/m.test(src))) blocks = mdBlocks(src);
+  else blocks = src.replace(/\r/g, '').split(/\n{2,}/).map(s => ({ t: 'code', s })).map(b => C.kind === 'text' || C.kind === 'clip' ? { t: 'p', s: b.s } : b);
+  if (!blocks.length) { toast('Nothing to lay out.'); return; }
+  busy('Creating PDF…');
+  try { const name = fname || (blocks.find(b => /^h/.test(b.t)) || {}).s || (C.kind === 'csv' ? 'Table' : 'Document'); const bytes = await typeset(blocks, { size: C.size, fs: C.fs, title: name }); unbusy(); const d = await openBytes(bytes, name.slice(0, 60) + '.pdf'); if (d) { d.dirty = true; renderTabs(); } }
+  catch (e) { console.error(e); toast('Could not create the PDF: ' + e.message); } finally { unbusy(); }
+}
+
+/* ---- replace pages and overlay ---- */
+async function pickPdf() { const f = await pickFile('#insIn'); if (!f || !f[0]) return null; const bytes = new Uint8Array(await f[0].arrayBuffer()); try { const doc = await PDFDocument.load(bytes, LOAD); return { name: f[0].name, bytes, n: doc.getPageCount() }; } catch (e) { toast('Could not read ' + f[0].name + ': ' + e.message); return null; } }
+async function replacePages() {
+  const d = cur(); const sel = selPages(); const src = await pickPdf(); if (!src) return;
+  const r = await modal({ title: 'Replace pages', body: `<p class="muted" style="margin:0">Swap pages of this document for pages from <b>${esc(src.name)}</b> (${plural(src.n, 'page')}).</p>
+    <div class="grid2"><div class="field"><label for="rpA">Replace pages from</label><input id="rpA" class="inp" type="number" min="1" max="${d.info.length}" value="${sel[0] + 1}"></div><div class="field"><label for="rpB">to</label><input id="rpB" class="inp" type="number" min="1" max="${d.info.length}" value="${sel[sel.length - 1] + 1}"></div></div>
+    <div class="field"><label for="rpS">With pages starting at page</label><input id="rpS" class="inp" type="number" min="1" max="${src.n}" value="1"></div>
+    <p class="hint" id="rpInfo"></p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Replace', primary: true, value: 'ok' }] });
+  if (!r) return;
+  const a = Math.max(1, Math.min(d.info.length, parseInt($('#rpA').value) || 1)) - 1, b = Math.max(a + 1, Math.min(d.info.length, parseInt($('#rpB').value) || 1)) - 1, s = Math.max(1, Math.min(src.n, parseInt($('#rpS').value) || 1)) - 1;
+  const cnt = Math.min(b - a + 1, src.n - s); if (cnt < 1) { toast('There are not enough pages in ' + src.name); return; }
+  const ok = await editBytes(`Replaced ${plural(cnt, 'page')} from ${src.name}`, async (pdf, dd) => {
+    const sdoc = await PDFDocument.load(src.bytes, LOAD); const cps = await pdf.copyPages(sdoc, [...Array(cnt).keys()].map(k => s + k));
+    for (let k = cnt - 1; k >= 0; k--) { pdf.removePage(a + k); } cps.forEach((p, k) => { pdf.insertPage(a + k, p); dd.annots[a + k] = []; });
+  });
+  if (ok) { d.sel = new Set([...Array(cnt).keys()].map(k => a + k)); markThumbs(); gotoPage(a); if (cnt < b - a + 1) toast(`Only ${cnt} pages were available, so the rest were left as they were.`, 5000); }
+}
+async function overlayPages() {
+  const d = cur(); const src = await pickPdf(); if (!src) return;
+  const O = Object.assign({ where: 'under', mode: 'one', page: 1, fit: 'fit', opacity: 1, scope: 'all', subset: 'all' }, pref.get('overlay', {}));
+  const r = await modal({ title: 'Overlay or letterhead', body: `<p class="muted" style="margin:0">Draws pages of <b>${esc(src.name)}</b> onto this document, for a letterhead, a form background or a stamp sheet.</p>
+    <div class="field"><span class="lbl">Place it</span><div class="row"><label class="chk"><input type="radio" name="ovW" value="under" ${O.where === 'under' ? 'checked' : ''}> Behind the content (letterhead)</label><label class="chk"><input type="radio" name="ovW" value="over" ${O.where === 'over' ? 'checked' : ''}> On top</label></div></div>
+    <div class="field"><span class="lbl">Use</span><div class="row"><label class="chk"><input type="radio" name="ovM" value="one" ${O.mode === 'one' ? 'checked' : ''}> Page <input id="ovP" class="inp" type="number" min="1" max="${src.n}" value="${Math.min(O.page, src.n)}" style="width:64px;display:inline-block"> on every page</label><label class="chk"><input type="radio" name="ovM" value="match" ${O.mode === 'match' ? 'checked' : ''}> Page for page (1 on 1, 2 on 2…)</label></div></div>
+    <div class="grid2"><div class="field"><label for="ovF">Size</label><select id="ovF" class="inp"><option value="fit"${O.fit === 'fit' ? ' selected' : ''}>Fit the page</option><option value="actual"${O.fit === 'actual' ? ' selected' : ''}>Actual size, centred</option></select></div>
+    <div class="field"><label for="ovO">Opacity</label><select id="ovO" class="inp">${[1, .75, .5, .25].map(v => `<option value="${v}"${O.opacity === v ? ' selected' : ''}>${v * 100}%</option>`).join('')}</select></div></div>
+    ${scopeRow('ovS', O.scope, d)}
+    <div class="field"><span class="lbl">Only</span><div class="row">${[['all', 'All of those'], ['odd', 'Odd pages'], ['even', 'Even pages']].map(([v, l]) => `<label class="chk"><input type="radio" name="ovSub" value="${v}" ${O.subset === v ? 'checked' : ''}> ${l}</label>`).join('')}</div></div>
+    <p class="hint" style="margin:0">Behind works on typed documents. A scanned page is one picture that covers everything behind it, so use On top for scans.</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Apply', primary: true, value: 'ok' }] });
+  if (!r) return;
+  const v = n => ($(`input[name=${n}]:checked`) || {}).value;
+  Object.assign(O, { where: v('ovW'), mode: v('ovM'), page: Math.max(1, Math.min(src.n, parseInt($('#ovP').value) || 1)), fit: $('#ovF').value, opacity: +$('#ovO').value, scope: v('ovS'), subset: v('ovSub') }); pref.set('overlay', O);
+  const idx = pageScope(d, O.scope, O.subset); if (!idx.length) { toast('No pages in that range.'); return; }
+  await editBytes(`Overlaid ${src.name} on ${plural(idx.length, 'page')}`, async pdf => {
+    const L = PDFLib; const sdoc = await PDFDocument.load(src.bytes, LOAD); const cache = new Map();
+    for (const i of idx) {
+      const sp = O.mode === 'one' ? O.page - 1 : i; if (sp >= src.n) continue;
+      if (!cache.has(sp)) cache.set(sp, await pdf.embedPage(sdoc.getPage(sp)));
+      const ep = cache.get(sp); const p = pdf.getPage(i); const b = visBox(d.info[i]); const rot = d.info[i].rot % 360;
+      const bw = rot % 180 ? b.height : b.width, bh = rot % 180 ? b.width : b.height; // the page as it is shown
+      let s = O.fit === 'fit' ? Math.min(bw / ep.width, bh / ep.height) : 1; const w = ep.width * s, h = ep.height * s;
+      // Draw in displayed orientation: rotate the overlay against the page's /Rotate so it appears upright.
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2; const a = -rot * Math.PI / 180; const cs = Math.cos(a), sn = Math.sin(a);
+      const x = cx + (-w / 2) * cs - (-h / 2) * sn, y = cy + (-w / 2) * sn + (-h / 2) * cs;
+      const before = p.node.Contents(); const nBefore = before instanceof L.PDFArray ? before.size() : before ? 1 : 0;
+      p.drawPage(ep, { x, y, width: w, height: h, rotate: degrees(-rot), opacity: O.opacity });
+      if (O.where === 'under') {
+        p.node.normalize(); const arr = p.node.Contents(); if (arr instanceof L.PDFArray && arr.size() > nBefore) { const last = arr.get(arr.size() - 1); arr.remove(arr.size() - 1); arr.insert(0, last); }
+      }
+    }
+  }, 'Overlaying…');
+}
 
 async function findAll(d, q, cs) {
   const H = []; if (!q) return H; const nq = cs ? q : q.toLowerCase();
