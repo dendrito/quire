@@ -2,6 +2,8 @@ const { app, BrowserWindow, shell, ipcMain, protocol, net, session } = require('
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const os = require('os');
+const { execFile } = require('child_process');
 
 const APP_DIR = path.join(__dirname, 'app');
 let win = null;
@@ -55,6 +57,45 @@ pending.push(...pdfsIn(process.argv));
 // The scanner asks before opening the camera. Windows has no per-app prompt for desktop apps
 // (it uses Settings > Privacy > Camera), so the answer is always yes here.
 ipcMain.handle('ask-camera', async () => true);
+
+// Document scanners, through Windows Image Acquisition (scanner/wia.ps1, run by the built-in PowerShell).
+// Settings travel in environment variables, never inside the script text.
+const WIA_SCRIPT = fs.readFileSync(path.join(__dirname, 'scanner', 'wia.ps1'), 'utf8');
+function runWia(env, timeoutMs) {
+  return new Promise(resolve => {
+    const encoded = Buffer.from(WIA_SCRIPT, 'utf16le').toString('base64');
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Sta', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+      { env: { ...process.env, ...env }, windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout) => {
+        const line = String(stdout || '').trim().split(/\r?\n/).pop();
+        try { resolve(JSON.parse(line)); }
+        catch { resolve({ ok: false, error: err && err.killed ? 'The scanner took too long to answer.' : 'Could not reach Windows scanning.' }); }
+      });
+  });
+}
+ipcMain.handle('scanner-list', async () => {
+  if (process.platform !== 'win32') return { ok: false, devices: [], error: 'Scanners are supported in the Windows app.' };
+  return runWia({ QUIRE_SCAN_ACTION: 'list' }, 30000);
+});
+ipcMain.handle('scanner-scan', async (_event, opts = {}) => {
+  if (process.platform !== 'win32') return { ok: false, pages: [], error: 'Scanners are supported in the Windows app.' };
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'quire-scan-'));
+  try {
+    const r = await runWia({
+      QUIRE_SCAN_ACTION: opts.dialog ? 'dialog' : 'scan',
+      QUIRE_SCAN_DEVICE: String(opts.device || ''),
+      QUIRE_SCAN_SOURCE: ['flatbed', 'feeder', 'duplex'].includes(opts.source) ? opts.source : 'flatbed',
+      QUIRE_SCAN_DPI: String(Math.max(75, Math.min(1200, parseInt(opts.dpi, 10) || 300))),
+      QUIRE_SCAN_COLOR: ['color', 'grey', 'bw'].includes(opts.color) ? opts.color : 'color',
+      QUIRE_SCAN_OUT: out
+    }, 15 * 60 * 1000);
+    // Only files inside our own temporary folder are read back.
+    const pages = (r.files || []).filter(f => path.dirname(path.resolve(f)) === out).map(f => new Uint8Array(fs.readFileSync(f)));
+    return { ok: !!r.ok, error: r.error || '', warning: r.warning || '', pages };
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
 
 ipcMain.on('renderer-ready', () => {
   rendererReady = true;

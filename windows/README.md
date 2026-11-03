@@ -9,6 +9,17 @@ It is a twin of `mac/`: same app file, same bundled libraries, same offline rule
 - **The network is blocked.** The app refuses every `http`, `https`, WebSocket and FTP request, so nothing can be fetched or sent. Links you click open in your normal browser instead.
 - **Files stay put.** Your documents are read from disk and saved back to disk. Nothing is uploaded.
 
+## Document scanners
+
+The Scan screen has a **Document scanner** panel in the Windows app. It works with any scanner that has a Windows driver (WIA), which covers nearly all of them, including printer/scanner combos.
+
+- Pick the scanner, then **Flatbed**, **Feeder** or **Both sides** (duplex). Feeder modes scan until the feeder is empty.
+- Choose resolution (150–600 dpi) and Colour, Grey or B&W.
+- **Scanner's own settings…** opens the scanner maker's window, with every option its driver has.
+- Scanned pages land in the same strip as camera pages, so reordering, rotating, filters and margins all work the same.
+
+It runs through Windows' built-in PowerShell (`scanner/wia.ps1`). Nothing is installed and nothing leaves the PC.
+
 ## Build on a Windows PC
 
 You need Node.js 20 or newer (the LTS installer from https://nodejs.org). The internet is needed only for this one-time `npm install`.
@@ -42,7 +53,8 @@ Click **More info**, then **Run anyway**. You only need to do this once.
 | --- | --- |
 | `src/quire.html` | The whole app. Same file as `web/quire-pdf-studio.html` and `mac/src/quire.html`. |
 | `scripts/vendor.js` | Identical to the Mac one. Copies libraries, OCR data and fonts from `node_modules` into `app/vendor`, and builds `app/index.html` with every web address swapped for a local file. |
-| `main.js` | Opens the window, serves `app/` through a private `app://` address, blocks the network, allows only the camera (for the scanner), and handles PDFs opened from Explorer. Opening a second PDF sends it to the window already open. |
-| `preload.js` | Identical to the Mac one. Passes opened files to the page and answers the scanner's camera check. |
+| `main.js` | Opens the window, serves `app/` through a private `app://` address, blocks the network, allows only the camera (for the scanner), runs document scans, and handles PDFs opened from Explorer. Opening a second PDF sends it to the window already open. |
+| `preload.js` | Like the Mac one (opened files, camera check), plus `quireDesktop.scanner` for document scanners. |
+| `scanner/wia.ps1` | Lists scanners and scans pages through Windows Image Acquisition. |
 
 To update the app, replace `src/quire.html` with the newer version (copy `web/quire-pdf-studio.html` here and into `mac/src/`) and run `npm run dist` again.
