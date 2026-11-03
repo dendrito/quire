@@ -295,6 +295,18 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
   .btn .lab{display:none}
   .btn{padding:0 9px}
 }
+/* OCR language manager */
+#oLangs{display:flex;flex-direction:column;gap:12px}#oMan{align-self:flex-start}
+dialog:has(.olm){width:min(560px,calc(100vw - 32px))}
+.ol-list{max-height:min(52vh,460px);overflow:auto;border-radius:12px;box-shadow:0 0 0 1px var(--line);overscroll-behavior:contain}
+.ol-h{position:sticky;top:0;z-index:1;padding:8px 12px 6px;font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted);background:var(--solid);border-bottom:1px solid var(--line)}
+.ol-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 8px 7px 12px;border-bottom:1px solid var(--line)}
+.ol-row:last-child{border-bottom:0}
+.ol-n{display:flex;flex-direction:column;min-width:0}.ol-n b{font-weight:500}
+.ol-a{display:flex;align-items:center;gap:6px;flex:none}
+.ol-a .btn{height:28px}
+.ol-ok{color:var(--accent);display:grid;place-items:center}.ol-ok svg,.ol-a .icon-btn svg{width:18px;height:18px}
+.ol-pct{width:80px;height:6px;border-radius:3px;background:var(--hover2);overflow:hidden}.ol-pct i{display:block;height:100%;background:var(--accent);transition:width .2s}
 </style>
 
 <div id="app">
@@ -1303,6 +1315,233 @@ const head = t => `<div class="task-h"><h3>${t}</h3><button class="icon-btn" dat
 function scopeHTML(d) { const n = selPages().length; return `<div class="field"><span class="lbl">Pages</span><div class="row"><label class="chk"><input type="radio" name="scope" value="all" checked> All ${d.info.length}</label><label class="chk"><input type="radio" name="scope" value="sel"> Selected (${n})</label></div></div>`; }
 const scopeIdx = P => { const v = ($('input[name=scope]:checked', P) || {}).value; return v === 'sel' ? selPages() : [...cur().info.keys()]; };
 function bindClose(P) { $('[data-close]', P).onclick = closeTask; }
+/* ================= OCR languages ================= */
+// Tesseract models ("best_int" builds from the @tesseract.js-data packages). Each entry: code, name, download size in MB, search words.
+// The desktop apps bundle the main languages (window.QUIRE_OCR_LANGS). Any other language is downloaded once from the language
+// manager, kept in this device's IndexedDB (where Tesseract.js reads it), and works offline after that. Documents are never uploaded.
+const OCR_TOP = 'eng por ita heb ara spa jpn chi_sim chi_tra fra deu nld cat syr fas rus kor'.split(' ');
+const OCR_CAT = [
+  ['eng', 'English', 3.0], ['por', 'Portuguese', 1.4, 'português brasil'], ['ita', 'Italian', 1.7, 'italiano'], ['heb', 'Hebrew', 0.6, 'ivrit עברית aramaic square script'],
+  ['ara', 'Arabic', 1.7, 'العربية'], ['spa', 'Spanish', 2.1, 'español castellano'], ['jpn', 'Japanese', 2.0, '日本語 nihongo kanji kana'],
+  ['chi_sim', 'Chinese (Simplified)', 1.7, '简体中文 mandarin'], ['chi_tra', 'Chinese (Traditional)', 1.7, '繁體中文 mandarin cantonese taiwan hong kong'],
+  ['fra', 'French', 0.7, 'français'], ['deu', 'German', 1.3, 'deutsch'], ['nld', 'Dutch', 3.0, 'nederlands flemish'], ['cat', 'Catalan', 0.6, 'català valencian'],
+  ['syr', 'Syriac (Aramaic)', 1.6, 'aramaic ܣܘܪܝܝܐ assyrian chaldean turoyo neo-aramaic'], ['fas', 'Persian (Farsi)', 0.4, 'farsi فارسی dari'],
+  ['rus', 'Russian', 2.7, 'русский'], ['kor', 'Korean', 1.6, '한국어 hangul'],
+  ['afr', 'Afrikaans', 1.8], ['amh', 'Amharic', 2.4, 'ethiopic'], ['sqi', 'Albanian', 1.0], ['hye', 'Armenian', 1.6], ['asm', 'Assamese', 1.5],
+  ['aze', 'Azerbaijani', 1.7], ['aze_cyrl', 'Azerbaijani (Cyrillic)', 1.0], ['eus', 'Basque', 2.2, 'euskara'], ['bel', 'Belarusian', 2.1], ['ben', 'Bengali', 1.4, 'bangla'],
+  ['bos', 'Bosnian', 1.2], ['bre', 'Breton', 3.4], ['bul', 'Bulgarian', 1.4], ['mya', 'Burmese', 2.7, 'myanmar'], ['ceb', 'Cebuano', 0.5],
+  ['chr', 'Cherokee', 0.3], ['cos', 'Corsican', 1.4], ['hrv', 'Croatian', 2.3], ['ces', 'Czech', 2.2], ['dan', 'Danish', 1.8],
+  ['div', 'Dhivehi', 0.9, 'maldivian thaana'], ['dzo', 'Dzongkha', 0.4], ['enm', 'English (Middle)', 2.0, 'medieval'], ['epo', 'Esperanto', 2.1], ['est', 'Estonian', 3.1],
+  ['fao', 'Faroese', 1.9], ['fil', 'Filipino', 1.5, 'tagalog'], ['fin', 'Finnish', 3.8], ['frm', 'French (Middle)', 1.0, 'medieval'], ['glg', 'Galician', 1.7],
+  ['kat', 'Georgian', 1.1], ['kat_old', 'Georgian (Old)', 0.4], ['frk', 'German (Fraktur)', 3.4, 'gothic blackletter old'], ['ell', 'Greek', 1.3], ['grc', 'Greek (Ancient)', 1.1, 'classical koine'],
+  ['guj', 'Gujarati', 1.2], ['hat', 'Haitian Creole', 1.5], ['hin', 'Hindi', 1.4, 'devanagari'], ['hun', 'Hungarian', 2.9], ['isl', 'Icelandic', 1.7],
+  ['ind', 'Indonesian', 1.2, 'bahasa'], ['iku', 'Inuktitut', 1.5], ['gle', 'Irish', 0.7, 'gaelic'], ['ita_old', 'Italian (Old)', 1.8], ['jav', 'Javanese', 1.6],
+  ['kan', 'Kannada', 1.9], ['kaz', 'Kazakh', 2.1], ['khm', 'Khmer', 1.1, 'cambodian'], ['kir', 'Kyrgyz', 4.4], ['kmr', 'Kurdish (Kurmanji)', 1.9],
+  ['lao', 'Lao', 3.7], ['lat', 'Latin', 1.7], ['lav', 'Latvian', 1.3], ['lit', 'Lithuanian', 1.9], ['ltz', 'Luxembourgish', 1.8],
+  ['mkd', 'Macedonian', 0.7], ['msa', 'Malay', 1.2], ['mal', 'Malayalam', 2.8], ['mlt', 'Maltese', 1.2], ['mri', 'Maori', 0.5],
+  ['mar', 'Marathi', 2.0], ['mon', 'Mongolian', 1.3], ['nep', 'Nepali', 1.6], ['nor', 'Norwegian', 2.5, 'bokmål nynorsk'], ['oci', 'Occitan', 3.2],
+  ['ori', 'Odia', 1.1, 'oriya'], ['pus', 'Pashto', 1.4], ['pol', 'Polish', 2.6, 'polski'], ['pan', 'Punjabi', 1.4, 'gurmukhi'], ['que', 'Quechua', 2.6],
+  ['ron', 'Romanian', 1.7, 'moldovan'], ['san', 'Sanskrit', 5.7], ['gla', 'Scottish Gaelic', 1.7], ['srp', 'Serbian (Cyrillic)', 1.5], ['srp_latn', 'Serbian (Latin)', 1.8],
+  ['snd', 'Sindhi', 1.4], ['sin', 'Sinhala', 1.1], ['slk', 'Slovak', 2.4], ['slv', 'Slovenian', 1.3], ['spa_old', 'Spanish (Old)', 1.7],
+  ['sun', 'Sundanese', 0.8], ['swa', 'Swahili', 1.1], ['swe', 'Swedish', 2.5], ['tgk', 'Tajik', 1.2], ['tam', 'Tamil', 1.4],
+  ['tat', 'Tatar', 0.9], ['tel', 'Telugu', 1.7], ['tha', 'Thai', 0.9], ['bod', 'Tibetan', 1.3], ['tir', 'Tigrinya', 0.3],
+  ['ton', 'Tongan', 0.6], ['tur', 'Turkish', 2.1, 'türkçe'], ['ukr', 'Ukrainian', 2.1], ['urd', 'Urdu', 1.0], ['uig', 'Uyghur', 1.9],
+  ['uzb', 'Uzbek', 3.1], ['uzb_cyrl', 'Uzbek (Cyrillic)', 0.8], ['vie', 'Vietnamese', 1.4, 'tiếng việt'], ['cym', 'Welsh', 1.4, 'cymraeg'], ['fry', 'Frisian (West)', 1.3],
+  ['yid', 'Yiddish', 0.4], ['yor', 'Yoruba', 0.6]
+];
+const OCR_INFO = new Map(OCR_CAT.map(([c, n, mb, kw]) => [c, { c, n, mb, kw: kw || '' }]));
+const OCR_VERT = { jpn: 2.0, chi_sim: 1.7, chi_tra: 1.6, kor: 0.6 }; // languages that also have a model for vertical (top-to-bottom) text
+const OCR_RTL = new Set(['ara', 'heb', 'fas', 'syr', 'urd', 'pus', 'snd', 'uig', 'yid', 'div']);
+// Old desktop builds bundled these 8 and did not announce their list.
+const OCR_BUNDLED = new Set(VENDOR ? (window.QUIRE_OCR_LANGS || ['eng', 'deu', 'fra', 'spa', 'ita', 'por', 'nld', 'pol']) : []);
+const OCR_CACHE = 'quire-ocr'; // Tesseract.js looks up `${cachePath}/${code}.traineddata` in IndexedDB before it fetches anything
+const OCR_SRC = c => [`https://cdn.jsdelivr.net/npm/@tesseract.js-data/${c}@1.0.0/4.0.0_best_int/${c}.traineddata.gz`, `https://unpkg.com/@tesseract.js-data/${c}@1.0.0/4.0.0_best_int/${c}.traineddata.gz`];
+const OCR_TOTAL = OCR_CAT.reduce((s, l) => s + l.mb, 0) + Object.values(OCR_VERT).reduce((s, v) => s + v, 0);
+// The same database and store idb-keyval (inside Tesseract.js) uses.
+const OCR_DB = {
+  db: null,
+  open() { return this.db || (this.db = new Promise((res, rej) => { const r = indexedDB.open('keyval-store'); r.onupgradeneeded = () => r.result.createObjectStore('keyval'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); },
+  async run(mode, fn) { const db = await this.open(); return new Promise((res, rej) => { const tx = db.transaction('keyval', mode); const q = fn(tx.objectStore('keyval')); tx.oncomplete = () => res(q && q.result); tx.onerror = tx.onabort = () => rej(tx.error || new Error('Storage failed')); }); },
+  keys() { return this.run('readonly', s => s.getAllKeys()); },
+  put(k, v) { return this.run('readwrite', s => s.put(v, k)); },
+  del(k) { return this.run('readwrite', s => s.delete(k)); }
+};
+const OCR = { have: null, jobs: new Map(), err: new Map(), subs: new Set() };
+const ocrKey = c => `${OCR_CACHE}/${c}.traineddata`;
+const ocrNotify = () => OCR.subs.forEach(f => { try { f(); } catch (e) { console.warn(e); } });
+async function ocrLoad() {
+  if (!OCR.have) { let ks = []; try { ks = await OCR_DB.keys(); } catch (e) { console.warn('OCR language storage', e); } OCR.have = new Set(ks.map(String).filter(k => k.startsWith(OCR_CACHE + '/') && k.endsWith('.traineddata')).map(k => k.slice(OCR_CACHE.length + 1, -12))); }
+  return OCR.have;
+}
+const ocrHasFile = c => OCR_BUNDLED.has(c) || !!(OCR.have && OCR.have.has(c));
+const ocrName = c => (OCR_INFO.get(c) || { n: c }).n;
+const ocrFiles = c => c in OCR_VERT ? [c, c + '_vert'] : [c];
+const ocrMB = c => c.endsWith('_vert') ? OCR_VERT[c.slice(0, -5)] || 1 : (OCR_INFO.get(c) || { mb: 1 }).mb;
+const ocrLangMB = c => ocrFiles(c).reduce((s, f) => s + ocrMB(f), 0);
+// Installed languages in menu order: the priority list first, then A to Z, then models the user imported themselves.
+function ocrInstalled() {
+  const have = c => ocrHasFile(c) || (!VENDOR && c === 'eng'); // the web version fetches English on first use, as before
+  const known = [...OCR_TOP, ...OCR_CAT.map(l => l[0]).filter(c => !OCR_TOP.includes(c)).sort((a, b) => ocrName(a).localeCompare(ocrName(b)))].filter(have);
+  const own = [...(OCR.have || [])].filter(c => !OCR_INFO.has(c) && !(/_vert$/.test(c) && c.slice(0, -5) in OCR_VERT)).sort();
+  return [...known, ...own];
+}
+async function ocrFetch(c, onp) {
+  let err;
+  for (const url of OCR_SRC(c)) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+      const total = +r.headers.get('content-length') || ocrMB(c) * 1e6; const parts = []; let got = 0;
+      if (r.body && r.body.getReader) { const rd = r.body.getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onp(Math.min(1, got / total)); } }
+      else parts.push(new Uint8Array(await r.arrayBuffer()));
+      const b = new Uint8Array(parts.reduce((s, p) => s + p.length, 0)); let o = 0; for (const p of parts) { b.set(p, o); o += p.length; }
+      if (!(b[0] === 31 && b[1] === 139) || b.length < 1000) throw new Error('The download was not a language file');
+      return b;
+    } catch (e) { err = e; console.warn('OCR download', url, e); }
+  }
+  throw err;
+}
+function ocrInstall(c) {
+  if (OCR.jobs.has(c)) return OCR.jobs.get(c).p;
+  const job = { f: 0 }; OCR.jobs.set(c, job); OCR.err.delete(c); ocrNotify();
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+  job.p = (async () => {
+    await ocrLoad(); const files = ocrFiles(c).filter(f => !ocrHasFile(f)); const tot = files.reduce((s, f) => s + ocrMB(f), 0) || 1; let done = 0;
+    for (const f of files) { const b = await ocrFetch(f, p => { job.f = (done + p * ocrMB(f)) / tot; ocrNotify(); }); await OCR_DB.put(ocrKey(f), b); OCR.have.add(f); done += ocrMB(f); }
+  })().catch(e => { OCR.err.set(c, navigator.onLine === false ? 'No internet connection' : 'Download failed'); throw e; }).finally(() => { OCR.jobs.delete(c); ocrNotify(); });
+  return job.p;
+}
+async function ocrRemove(c) { await ocrLoad(); for (const f of ocrFiles(c)) if (OCR.have.has(f)) { await OCR_DB.del(ocrKey(f)); OCR.have.delete(f); } ocrNotify(); }
+// Model files from anywhere (another computer, a USB stick, a model someone trained): name.traineddata or name.traineddata.gz.
+async function ocrImport(files) {
+  await ocrLoad(); const ok = [], bad = [];
+  for (const f of files) {
+    const m = /^([A-Za-z0-9_-]+)\.traineddata(\.gz)?$/.exec(f.name); if (!m) { bad.push(f.name); continue; }
+    const b = new Uint8Array(await f.arrayBuffer()); if (b.length < 1000) { bad.push(f.name); continue; }
+    try { await OCR_DB.put(ocrKey(m[1]), b); OCR.have.add(m[1]); ok.push(m[1]); } catch (e) { console.warn(e); bad.push(f.name); }
+  }
+  ocrNotify();
+  toast([ok.length ? `Added ${ok.map(ocrName).join(', ')}` : '', bad.length ? `Not a Tesseract language file: ${bad.join(', ')}` : ''].filter(Boolean).join('. '), 5000);
+}
+
+/* ---- language manager ---- */
+async function openOcrLangs() {
+  await ocrLoad();
+  const box = el('div', 'olm', `<p class="hint" style="margin:0">Choose the languages you read. Each one downloads once, stays on this device and works offline from then on. Your documents are never uploaded.</p>
+    <input type="search" class="inp" id="olQ" placeholder="Search ${OCR_CAT.length} languages" aria-label="Search languages">
+    <div class="ol-list" id="olList"></div>
+    <div class="row"><button type="button" class="btn" id="olAll"></button><button type="button" class="btn" id="olImp">${svg('open')}Import files…</button><input type="file" id="olFile" accept=".traineddata,.gz" multiple hidden></div>
+    <p class="hint" style="margin:0" id="olFoot"></p>`);
+  const q = $('#olQ', box), list = $('#olList', box);
+  const row = c => {
+    const i = OCR_INFO.get(c) || { n: c, mb: 0 }; const job = OCR.jobs.get(c); const built = ocrFiles(c).every(f => OCR_BUNDLED.has(f)); const have = ocrHasFile(c);
+    const tags = [OCR_RTL.has(c) ? 'right to left' : '', c in OCR_VERT ? 'vertical text too' : '', !OCR_INFO.has(c) ? 'your own model' : ''].filter(Boolean).join(' · ');
+    const act = job ? `<span class="ol-pct"><i style="width:${Math.round(job.f * 100)}%"></i></span>`
+      : built ? '<span class="muted small">Built in</span>'
+      : have ? `<span class="ol-ok">${svg('check')}</span><button type="button" class="icon-btn" data-rm="${c}" aria-label="Remove ${esc(i.n)}" data-tip="Remove">${svg('del')}</button>`
+      : `${OCR.err.has(c) ? `<span class="small" style="color:var(--danger)">${esc(OCR.err.get(c))}</span>` : ''}<button type="button" class="btn" data-get="${c}">${OCR.err.has(c) ? 'Retry' : 'Download'}</button>`;
+    return `<div class="ol-row" data-c="${c}"><div class="ol-n"><b>${esc(i.n)}</b><span class="muted small">${[i.mb ? ocrLangMB(c).toFixed(1) + ' MB' : '', tags].filter(Boolean).join(' · ')}</span></div><div class="ol-a">${act}</div></div>`;
+  };
+  const draw = () => {
+    const t = q.value.trim().toLowerCase(); const hit = c => { const i = OCR_INFO.get(c) || { n: c, kw: '' }; return !t || (i.n + ' ' + c + ' ' + i.kw).toLowerCase().includes(t); };
+    const rest = OCR_CAT.map(l => l[0]).filter(c => !OCR_TOP.includes(c)).sort((a, b) => ocrName(a).localeCompare(ocrName(b)));
+    const own = ocrInstalled().filter(c => !OCR_INFO.has(c));
+    const sec = (h, cs) => { cs = cs.filter(hit); return cs.length ? `<div class="ol-h">${h}</div>${cs.map(row).join('')}` : ''; };
+    const sy = list.scrollTop;
+    list.innerHTML = (sec('Your languages', OCR_TOP) + sec('More languages', rest) + sec('Imported models', own)) || '<p class="muted small" style="padding:12px">No language matches. Tesseract has no model for it, but you can import a .traineddata file if you have one.</p>';
+    list.scrollTop = sy;
+    const left = OCR_CAT.map(l => l[0]).filter(c => !ocrFiles(c).every(ocrHasFile) && !OCR.jobs.has(c));
+    const b = $('#olAll', box); b.disabled = !left.length || OCR.jobs.size > 0;
+    b.textContent = OCR.jobs.size ? `Downloading ${OCR.jobs.size}…` : left.length ? `Download all (${Math.round(left.reduce((s, c) => s + ocrLangMB(c), 0))} MB)` : 'Every language is installed';
+    const n = OCR_CAT.filter(l => ocrHasFile(l[0])).length;
+    $('#olFoot', box).innerHTML = `${n} of ${OCR_CAT.length} languages ready. <b>Aramaic:</b> there is no ready-made model. Use Syriac for Aramaic written in Syriac script, or Hebrew for Aramaic in square script (Biblical, Targum, Talmud), which reads the letters but knows Hebrew words, so expect more mistakes.`;
+  };
+  const get = c => ocrInstall(c).catch(() => {});
+  list.onclick = async e => {
+    const g = e.target.closest('[data-get]'), r = e.target.closest('[data-rm]');
+    if (g) get(g.dataset.get);
+    if (r) { await ocrRemove(r.dataset.rm); toast(`Removed ${ocrName(r.dataset.rm)}`); }
+  };
+  q.oninput = draw;
+  $('#olAll', box).onclick = async () => {
+    const left = OCR_CAT.map(l => l[0]).filter(c => !ocrFiles(c).every(ocrHasFile)); let k = 0;
+    const lane = async () => { while (k < left.length) await get(left[k++]); };
+    await Promise.all([lane(), lane(), lane()]);
+    const failed = left.filter(c => OCR.err.has(c)).length; toast(failed ? `${failed} language${failed > 1 ? 's' : ''} could not be downloaded. Try again later.` : 'Every language is installed.', 4000);
+  };
+  $('#olImp', box).onclick = () => $('#olFile', box).click();
+  $('#olFile', box).onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) ocrImport(f); };
+  OCR.subs.add(draw); draw();
+  setTimeout(() => q.focus(), 50);
+  await modal({ title: 'OCR languages', body: box, actions: [{ label: 'Done', primary: true, value: 'ok' }] });
+  OCR.subs.delete(draw);
+  if (S.task === 'ocr') renderPanel();
+}
+
+/* ---- invisible text layer ---- */
+// A font with one empty glyph. Every character maps to it and ToUnicode maps each code back to its character, so text in any
+// script (Hebrew, Arabic, CJK, Cyrillic…) can be searched, selected and copied while the scan underneath stays as it is.
+// This is the same approach Tesseract's own PDF output uses.
+const GLYPHLESS_TTF = 'AAEAAAAKAIAAAwAgT1MvMkT/RUAAAAEoAAAAYGNtYXAADABzAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZC02fFQAAACsAAAANmhoZWED6QH2AAAA5AAAACRobXR4AfQAAAAAAYgAAAAGbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lGZ8ZNAAAAdAAAABycG9zdABOAAAAAAJEAAAAJgABAAAAAQAAgXrill8PPPUAAwPoAAAAAOcQHboAAAAA5xAdugAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAPoAAAAAAH0AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwH0AZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAPz8/PwAAACAAIAPoAAAAAAPoAAAAAAAAAAAAAAAAAAAAAAAgAAAB9AAAAAAAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAAAIP//AAAAIP///+EAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQANAAAAAQAAAAAAAgAHAA0AAwABBAkAAQAaABQAAwABBAkAAgAOAC5HbHlwaExlc3NGb250UmVndWxhcgBHAGwAeQBwAGgATABlAHMAcwBGAG8AbgB0AFIAZQBnAHUAbABhAHIAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAABKAAA=';
+function ocrFont(pdf) {
+  const L = PDFLib, ctx = pdf.context;
+  const ttf = Uint8Array.from(atob(GLYPHLESS_TTF), ch => ch.charCodeAt(0));
+  const map = new Uint8Array(131072); for (let k = 1; k < map.length; k += 2) map[k] = 1; // every CID shows glyph 1 (empty)
+  const cmap = '/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n1 beginbfrange\n<0000> <FFFF> <0000>\nendbfrange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n';
+  const ff = ctx.register(ctx.flateStream(ttf, { Length1: ttf.length }));
+  const desc = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: 'GlyphLessFont', Flags: 5, FontBBox: [0, 0, 500, 1000], ItalicAngle: 0, Ascent: 1000, Descent: 0, CapHeight: 1000, StemV: 80, FontFile2: ff }));
+  const cid = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'GlyphLessFont', CIDSystemInfo: { Registry: L.PDFString.of('Adobe'), Ordering: L.PDFString.of('Identity'), Supplement: 0 }, FontDescriptor: desc, DW: 500, CIDToGIDMap: ctx.register(ctx.flateStream(map)) }));
+  return ctx.register(ctx.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'GlyphLessFont', Encoding: 'Identity-H', DescendantFonts: [cid], ToUnicode: ctx.register(ctx.flateStream(cmap)) }));
+}
+const OCR_RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+const ocrGraphemes = s => typeof Intl !== 'undefined' && Intl.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map(x => x.segment) : [...s];
+// PDF text is stored in the order it is drawn, left to right, and readers turn right-to-left runs back into reading order
+// when you copy or search. So a Hebrew or Arabic word is written reversed (keeping each letter with its vowel marks),
+// while digits and Latin letters inside it keep their order.
+function ocrVisual(s) {
+  if (!OCR_RTL_RE.test(s)) return s;
+  const runs = []; for (const g of ocrGraphemes(s)) { const ltr = /^[0-9A-Za-zÀ-ɏ]/.test(g); const last = runs[runs.length - 1]; if (last && last.ltr === ltr) last.g.push(g); else runs.push({ ltr, g: [g] }); }
+  return runs.reverse().map(r => (r.ltr ? r.g : r.g.reverse()).join('')).join('');
+}
+const ocrHex = s => { let h = ''; for (let k = 0; k < s.length; k++) h += s.charCodeAt(k).toString(16).padStart(4, '0'); return h; };
+// Adds one page's recognised words as invisible text. Words in a vertical column (from a *_vert model) are written top to bottom.
+function ocrLayer(pdf, font, r, vertical) {
+  const L = PDFLib, ctx = pdf.context, p = pdf.getPage(r.i); const n = v => +v.toFixed(3);
+  p.node.normalize(); const F = p.node.newFontDictionary('QuireOCR', font).asString();
+  let ops = `q BT 3 Tr ${F} 1 Tf\n`;
+  for (const w of r.words) {
+    const t = ocrVisual(w.text.trim()); const len = t.length; if (!len) continue;
+    const b = w.bbox; const A = r.vp.convertToPdfPoint(b.x0, b.y1), B = r.vp.convertToPdfPoint(b.x1, b.y0);
+    const x = Math.min(A[0], B[0]), y = Math.min(A[1], B[1]), W = Math.abs(A[0] - B[0]), H = Math.abs(A[1] - B[1]); if (W < .1 || H < .1) continue;
+    ops += vertical && H > W * 1.3 && ocrGraphemes(t).length > 1
+      ? `0 ${n(-H / (len * .5))} ${n(W)} 0 ${n(x)} ${n(y + H)} Tm <${ocrHex(t)}> Tj\n`
+      : `${n(W / (len * .5))} 0 0 ${n(H)} ${n(x)} ${n(y)} Tm <${ocrHex(t)}> Tj\n`;
+  }
+  ops += 'ET Q\n';
+  p.node.wrapContentStreams(ctx.register(ctx.contentStream([L.pushGraphicsState()])), ctx.register(ctx.contentStream([L.popGraphicsState()])));
+  p.node.addContentStream(ctx.register(ctx.flateStream(ops)));
+}
+IC.check = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+// Tesseract returns Chinese and Japanese mostly one character at a time. Joining the characters of each line into one
+// word lets a search for 東京 find the text, across and down.
+const OCR_CJK_RE = /^[\u3000-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF01-\uFF60]+$/;
+function ocrWords(data) {
+  const ok = w => w.text.trim() && w.confidence > 30;
+  if (!data.lines || !data.lines.length) return (data.words || []).filter(ok);
+  const out = [];
+  for (const ln of data.lines) {
+    let run = null;
+    for (const w of ln.words || []) {
+      if (!ok(w)) { run = null; continue; }
+      const t = w.text.trim(), b = w.bbox, cjk = OCR_CJK_RE.test(t);
+      if (cjk && run) { run.text += t; const r = run.bbox; r.x0 = Math.min(r.x0, b.x0); r.y0 = Math.min(r.y0, b.y0); r.x1 = Math.max(r.x1, b.x1); r.y1 = Math.max(r.y1, b.y1); }
+      else { const n = { text: t, bbox: { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 } }; out.push(n); run = cjk ? n : null; }
+    }
+  }
+  return out;
+}
+Object.assign(ACTS, { ocrLangs: ['OCR languages', 'ocr', () => openOcrLangs()] });
+queueMicrotask(() => { NODOC_ACTS.add('ocrLangs'); Object.assign(CMD_KW, { ocrLangs: 'ocr download language pack hebrew arabic japanese chinese korean aramaic persian russian offline', ocr: 'recognise text searchable scan language' }); });
+
 const TASKS = {
   search(P, d) {
     P.innerHTML = `<section class="sec">${head('Search')}<div class="field"><input id="q" type="search" class="inp" placeholder="Find text in this PDF" value="${esc(S.search.q)}" aria-label="Search text"></div>
@@ -1398,33 +1637,62 @@ const TASKS = {
     };
   },
   ocr(P, d) {
-    const langs = [['eng', 'English'], ['deu', 'German'], ['fra', 'French'], ['spa', 'Spanish'], ['ita', 'Italian'], ['por', 'Portuguese'], ['nld', 'Dutch'], ['pol', 'Polish']];
-    P.innerHTML = `<section class="sec">${head('OCR')}<p class="hint">Recognises text in scanned pages and adds an invisible text layer, so you can search, select and copy. ${VENDOR ? 'Runs entirely on this computer.' : 'Language data (about 10 MB) downloads the first time.'}</p>
-      <div class="field"><label for="oL">Language</label><select id="oL" class="inp">${langs.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>
-      ${scopeHTML(d)}<button class="btn primary" id="oGo">Recognise text</button><div class="prog" hidden id="oPr"><i></i></div><p class="muted small" id="oMsg"></p></section>`;
+    const O = S.ocr || (S.ocr = Object.assign({ lang: 'eng', also: '', dir: 'h', skip: true }, pref.get('ocr', {})));
+    const save = () => pref.set('ocr', O);
+    P.innerHTML = `<section class="sec">${head('OCR')}<p class="hint">Recognises text in scanned pages and adds an invisible text layer, so you can search, select and copy. Runs entirely on this device.</p>
+      <div id="oLangs"><p class="muted small">Checking languages…</p></div>
+      ${scopeHTML(d)}<label class="chk"><input type="checkbox" id="oSkip" ${O.skip ? 'checked' : ''}> Skip pages that already have text</label>
+      <button class="btn primary" id="oGo">Recognise text</button><div class="prog" hidden id="oPr"><i></i></div><p class="muted small" id="oMsg"></p></section>`;
     bindClose(P);
+    $('#oSkip', P).onchange = e => { O.skip = e.target.checked; save(); };
+    const opts = (list, v) => list.map(c => `<option value="${esc(c)}"${c === v ? ' selected' : ''}>${esc(ocrName(c))}</option>`).join('');
+    const fill = () => {
+      const box = $('#oLangs', P); if (!box) return;
+      const inst = ocrInstalled(); if (!inst.includes(O.lang)) O.lang = inst[0] || 'eng'; if (O.also && (!inst.includes(O.also) || O.also === O.lang)) O.also = '';
+      const vc = [O.lang, O.also].find(c => c in OCR_VERT && ocrHasFile(c + '_vert'));
+      box.innerHTML = `<div class="field"><label for="oL">Language</label><select id="oL" class="inp">${opts(inst, O.lang)}</select></div>
+        <div class="field"><label for="oA">Also recognise</label><select id="oA" class="inp"><option value="">Nothing else</option>${opts(inst.filter(c => c !== O.lang), O.also)}</select></div>
+        ${vc ? `<div class="field"><label for="oD">${esc(ocrName(vc))} text runs</label><select id="oD" class="inp">${[['h', 'Across (horizontal)'], ['v', 'Down (vertical columns)'], ['m', 'Both on the same page']].map(([v, l]) => `<option value="${v}"${O.dir === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}
+        ${[O.lang, O.also].some(c => OCR_RTL.has(c)) ? '<p class="hint" style="margin:0">Right-to-left text is stored in reading order, so search and copy give the words the right way round.</p>' : ''}
+        <button type="button" class="btn" id="oMan">${svg('plus')}More languages (${OCR_CAT.filter(l => ocrHasFile(l[0])).length} of ${OCR_CAT.length})</button>`;
+      $('#oL', P).onchange = e => { O.lang = e.target.value; save(); fill(); };
+      $('#oA', P).onchange = e => { O.also = e.target.value; save(); fill(); };
+      const dd = $('#oD', P); if (dd) dd.onchange = e => { O.dir = e.target.value; save(); };
+      $('#oMan', P).onclick = openOcrLangs;
+    };
+    ocrLoad().then(fill);
     $('#oGo', P).onclick = async () => {
-      const idx = scopeIdx(P), lang = $('#oL', P).value; const msg = m => { const n = $('#oMsg', P); if (n) n.textContent = m; }; const bar = $('#oPr', P); bar.hidden = false; $('#oGo', P).disabled = true;
+      await ocrLoad(); fill();
+      const langs = [];
+      for (const c of [O.lang, O.also].filter(Boolean)) {
+        const v = c in OCR_VERT && ocrHasFile(c + '_vert') ? O.dir : 'h';
+        if (v !== 'v') langs.push(c); if (v !== 'h') langs.push(c + '_vert');
+      }
+      const vertical = langs.some(c => /_vert$/.test(c));
+      let idx = scopeIdx(P); const msg = m => { const n = $('#oMsg', P); if (n) n.textContent = m; }; const bar = $('#oPr', P); bar.hidden = false; $('#oGo', P).disabled = true;
+      const stop = m => { $('#oGo', P).disabled = false; bar.hidden = true; msg(m); };
+      if (O.skip) { const keep = []; for (const i of idx) { const tc = await pageText(d, i); if (tc.items.map(t => t.str).join('').replace(/\s/g, '').length < 20) keep.push(i); } const skipped = idx.length - keep.length; idx = keep; if (!idx.length) { stop(`${skipped === 1 ? 'That page already has' : 'Those pages already have'} text. Untick "Skip pages that already have text" to read them again.`); return; } }
       const results = [];
       try {
         msg('Loading OCR engine…'); await loadScript(TESS_URL);
-        const worker = await Promise.race([Tesseract.createWorker(lang, 1, TESS_OPTS), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 60000))]);
+        msg(`Loading ${langs.map(c => ocrName(c.replace(/_vert$/, ''))).filter((v, k, a) => a.indexOf(v) === k).join(' and ')}…`);
+        const worker = await Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: OCR_CACHE, cacheMethod: VENDOR ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))]);
+        // Tesseract.js reads each page as one block by default; automatic layout finds columns and vertical CJK text.
+        await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+        if (!VENDOR) { OCR.have = null; ocrLoad(); }
         for (let k = 0; k < idx.length; k++) {
           const i = idx[k]; msg(`Reading page ${i + 1} (${k + 1} of ${idx.length})…`); bar.firstChild.style.width = (k / idx.length * 100) + '%';
           const { c, vp } = await renderToCanvas(d, i, 2.2, { rot0: true }); const { data } = await worker.recognize(c);
-          results.push({ i, vp, words: (data.words || []).filter(w => w.text.trim() && w.confidence > 30) });
+          results.push({ i, vp, words: ocrWords(data) });
         }
         await worker.terminate(); bar.firstChild.style.width = '100%';
       } catch (e) {
-        console.error(e); $('#oGo', P).disabled = false; bar.hidden = true;
-        msg(!VENDOR && /timeout|fetch|network|load/i.test(String(e && e.message || e)) ? 'The OCR engine could not download its language data in this view. OCR works in the Mac app or when you open the HTML file directly in a browser.' : 'OCR failed: ' + (e.message || e)); return;
+        console.error(e);
+        stop(!VENDOR && /timeout|fetch|network|load/i.test(String(e && e.message || e)) ? 'The OCR engine could not load its language data in this view. Download the language from More languages, or use the desktop app.' : 'OCR failed: ' + (e && e.message || e)); return;
       }
       const n = results.reduce((s, r) => s + r.words.length, 0);
-      if (!n) { msg('No text was recognised on those pages.'); $('#oGo', P).disabled = false; return; }
-      await editBytes(`OCR added ${n} words`, async pdf => {
-        const f = await pdf.embedFont(StandardFonts.Helvetica);
-        for (const r of results) { const p = pdf.getPage(r.i); for (const w of r.words) { const t = safe(f, w.text); const b = w.bbox; const bl = r.vp.convertToPdfPoint(b.x0, b.y1), tr = r.vp.convertToPdfPoint(b.x1, b.y0); const wPt = Math.abs(tr[0] - bl[0]), hPt = Math.abs(tr[1] - bl[1]); const size = Math.max(2, Math.min(hPt * 1.1, wPt / Math.max(f.widthOfTextAtSize(t, 1), .01))); p.drawText(t, { x: Math.min(bl[0], tr[0]), y: Math.min(bl[1], tr[1]) + hPt * .15, size, font: f, opacity: 0 }); } }
-      }, 'Adding text layer…');
+      if (!n) { stop('No text was recognised on those pages. Check that the language is right.'); return; }
+      await editBytes(`OCR added text to ${plural(results.filter(r => r.words.length).length, 'page')}`, async pdf => { const font = ocrFont(pdf); for (const r of results) ocrLayer(pdf, font, r, vertical); }, 'Adding text layer…');
     };
   },
   crop(P, d) {

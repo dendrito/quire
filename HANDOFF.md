@@ -9,7 +9,7 @@ A personal PDF editor modelled on PDF-XChange Pro. It runs entirely on the devic
 - `web/quire-pdf-studio.html`: the whole app in one file (vanilla JS, pdf.js 3.11.174, pdf-lib 1.17.1, JSZip 3.10.1 and Tesseract.js 5.1.1 loaded lazily). It is also published as a private claude.ai artifact: https://claude.ai/artifact/T3vz7q5rYGkmzAJ63Q7L1F. The file has no `<html>`/`<head>` because the artifact publisher adds them.
 - `mac/`: an Electron wrapper that runs 100% offline.
   - `src/quire.html` is a copy of the app file. Re-copy it after every change.
-  - `scripts/vendor.js` (run on `npm install`, `npm start` and `npm run dist`) copies the libraries, Tesseract core, 8 OCR languages and the Caveat font from `node_modules` into `app/vendor`. It builds `app/index.html` with the CDN URLs swapped for local ones and sets `window.QUIRE_VENDOR = "vendor/"`.
+  - `scripts/vendor.js` (run on `npm install`, `npm start` and `npm run dist`) copies the libraries, Tesseract core, the bundled OCR languages (`OCR_LANGS`, announced to the page as `window.QUIRE_OCR_LANGS`) and the Caveat font from `node_modules` into `app/vendor`. It builds `app/index.html` with the CDN URLs swapped for local ones and sets `window.QUIRE_VENDOR = "vendor/"`.
   - `main.js` serves `app/` over a privileged `app://` scheme so workers and fetch work, blocks every http(s)/ws/ftp request, and forwards PDFs opened from Finder through `preload.js`.
   - `.github/workflows/build-mac.yml` builds the `.dmg` on GitHub's macOS runners.
   - The app is unsigned (`identity: null`). The README covers the Gatekeeper workaround.
@@ -72,3 +72,14 @@ Write-up: https://claude.ai/artifact/WvGqbDxrxE6QRiPpnYaCH5. The code lives in t
 
 - Test by serving the files over localhost. The artifact file needs a `<!doctype html>…<body>` wrapper to run as a standalone page.
 - After each change: copy `web/quire-pdf-studio.html` to `mac/src/quire.html` (and the Windows wrapper's copy) and republish the artifact (same URL).
+
+## OCR languages (done, 3 Nov 2026)
+
+Code: the "OCR languages" block just above `TASKS`, plus `TASKS.ocr`.
+
+- **Engine:** Tesseract.js 5.1.1 with the 4.0.0 `best_int` models from the `@tesseract.js-data/<code>@1.0.0` npm packages. `OCR_CAT` lists all 119 languages (about 210 MB in total, most 1 to 3 MB). Japanese, both Chinese and Korean also have a `_vert` model, which is downloaded with them.
+- **Built in (desktop):** the priority list plus Polish, about 36 MB (`OCR_LANGS` in both `scripts/vendor.js`).
+- **Language manager** (OCR → More languages, or the command "OCR languages"): search, download, remove, Download all, Import files (`.traineddata` or `.traineddata.gz`, including your own models). Downloads come from jsDelivr, with unpkg as a fallback, and are stored in IndexedDB `keyval-store`/`keyval` under `quire-ocr/<code>.traineddata`. That's where Tesseract.js looks first (`cachePath: 'quire-ocr'`), so they work offline. The Electron `main.js` lets through only GET requests that match `OCR_DOWNLOAD`.
+- **Text layer:** an invisible glyphless Type0 font (Identity-H, ToUnicode identity, the same idea as Tesseract's own PDF output), so any script survives. The old Helvetica layer dropped everything outside WinAnsi, including Polish ł. Right-to-left words are written in visual order (`ocrVisual`) so readers give them back in reading order. Vertical CJK is written rotated, top to bottom. CJK characters on one line are joined (`ocrWords`) so that a search for 東京 finds the text. PSM is 3 (auto layout) because Tesseract.js defaults to 6, which breaks vertical text and columns.
+- **Tested** in Chromium with pdf.js and pdftotext: Hebrew, Arabic, Persian, Polish, Ukrainian (downloaded), and Japanese across and down all come back as the right text, and search finds Hebrew and vertical Japanese words.
+- **Aramaic:** Tesseract has no model for it. Syriac (`syr`) covers Syriac script, and Hebrew reads square-script Aramaic with more mistakes. A community model can be added with Import files.

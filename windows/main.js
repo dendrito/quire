@@ -140,9 +140,11 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(file).toString());
   });
 
-  // Offline guarantee: refuse every request that would leave this computer.
+  // Offline guarantee: refuse every request that would leave this computer. The one exception is downloading an OCR
+  // language the user picked in the language manager (a read-only GET of a public model file; nothing is sent).
+  const OCR_DOWNLOAD = /^https:\/\/(cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@tesseract\.js-data\/[a-z_]+@1\.0\.0\/4\.0\.0_best_int\/[a-z_]+\.traineddata\.gz$/;
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const blocked = /^(https?|wss?|ftp):/i.test(details.url);
+    const blocked = /^(https?|wss?|ftp):/i.test(details.url) && !(details.method === 'GET' && OCR_DOWNLOAD.test(details.url));
     if (blocked) console.warn('Blocked network request:', details.url);
     callback({ cancel: blocked });
   });

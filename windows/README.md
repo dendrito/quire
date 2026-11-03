@@ -5,7 +5,7 @@ It is a twin of `mac/`: same app file, same bundled libraries, same offline rule
 
 ## Offline by design
 
-- **Everything is bundled.** PDF engines (pdf.js, pdf-lib), zip export (JSZip), OCR (Tesseract with English, German, French, Spanish, Italian, Portuguese, Dutch and Polish) and fonts are copied into the app when you build it.
+- **Everything is bundled.** PDF engines (pdf.js, pdf-lib), zip export (JSZip), OCR (Tesseract, with 17 languages built in: English, Portuguese, Italian, Hebrew, Arabic, Spanish, Japanese, Chinese Simplified and Traditional, French, German, Dutch, Catalan, Syriac, Persian, Russian, Korean, plus Polish) and fonts are copied into the app when you build it. Another 100 or so OCR languages can be downloaded from inside the app (OCR → More languages). That download is the only network request the app allows, and it only fetches the language file you picked.
 - **The network is blocked.** The app refuses every `http`, `https`, WebSocket and FTP request, so nothing can be fetched or sent. Links you click open in your normal browser instead.
 - **Files stay put.** Your documents are read from disk and saved back to disk. Nothing is uploaded.
 

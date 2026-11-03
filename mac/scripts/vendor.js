@@ -9,7 +9,8 @@ const nm = path.join(root, 'node_modules');
 const appDir = path.join(root, 'app');
 const vendor = path.join(appDir, 'vendor');
 
-const OCR_LANGS = ['eng', 'deu', 'fra', 'spa', 'ita', 'por', 'nld', 'pol'];
+// OCR languages bundled with the app (about 36 MB). Every other language is downloaded from the app's language manager.
+const OCR_LANGS = ['eng', 'por', 'ita', 'heb', 'ara', 'spa', 'jpn', 'jpn_vert', 'chi_sim', 'chi_sim_vert', 'chi_tra', 'chi_tra_vert', 'fra', 'deu', 'nld', 'cat', 'syr', 'fas', 'rus', 'kor', 'kor_vert', 'pol'];
 // The interface uses the Mac's own system font; only the handwriting font for typed signatures is bundled.
 const FONTS = [
   ['Caveat', 'caveat', [600]]
@@ -61,7 +62,7 @@ if (/<script src="https?:|<link[^>]+href="https?:/.test(html)) { console.error('
 const head = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
   + '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
   + '<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>'
-  + '<script>window.QUIRE_VENDOR = "vendor/";</script>'
+  + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';</script>'
   + '</head><body>';
 fs.writeFileSync(path.join(appDir, 'index.html'), head + html + '</body></html>');
 console.log(`Bundled ${copies.length} files into app/vendor and built app/index.html. The app runs fully offline.`);
