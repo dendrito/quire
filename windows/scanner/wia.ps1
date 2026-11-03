@@ -5,6 +5,8 @@
 #   QUIRE_SCAN_SOURCE  flatbed | feeder | duplex
 #   QUIRE_SCAN_DPI     e.g. 300
 #   QUIRE_SCAN_COLOR   color | grey | bw
+#   QUIRE_SCAN_PAPER   auto | a4 | letter | legal | a5
+#   QUIRE_SCAN_MAX     feeder: stop after this many pages (0 = until empty)
 #   QUIRE_SCAN_OUT     folder for the scanned JPEG files
 # Output: one line of JSON on stdout.
 $ErrorActionPreference = 'Stop'
@@ -50,14 +52,26 @@ try {
       if ($source -eq 'duplex' -and (Set-Prop $dev.Properties 3088 1)) { $warn = 'This scanner has no two-sided mode, so only the front of each page was scanned.' }
       else { Out-Json @{ ok = $false; error = 'This scanner has no document feeder. Choose Flatbed instead.' }; exit 0 }
     }
-    [void](Set-Prop $dev.Properties 3096 0)  # Pages: 0 = scan until the feeder is empty
+    $max = [int]$env:QUIRE_SCAN_MAX; if ($max -lt 0) { $max = 0 }
+    [void](Set-Prop $dev.Properties 3096 $max)  # Pages: 0 = scan until the feeder is empty
   } else { [void](Set-Prop $dev.Properties 3088 2) }
+
+  # Paper size: millimetres, plus the WIA page-size code feeders understand (3097: 0 A4, 1 Letter, 3 Legal, 2 custom)
+  $paper = switch ($env:QUIRE_SCAN_PAPER) { 'a4' { @(210, 297, 0) } 'letter' { @(215.9, 279.4, 1) } 'legal' { @(215.9, 355.6, 3) } 'a5' { @(148, 210, 2) } default { $null } }
+  if ($paper -and $feeder) { [void](Set-Prop $dev.Properties 3097 $paper[2]) }
 
   $item = $dev.Items.Item(1)
   $dpi = [int]$env:QUIRE_SCAN_DPI; if ($dpi -lt 75) { $dpi = 300 }
   [void](Set-Prop $item.Properties 6146 $intent)  # colour intent
   [void](Set-Prop $item.Properties 6147 $dpi)     # horizontal resolution
   [void](Set-Prop $item.Properties 6148 $dpi)     # vertical resolution
+  if ($paper) {
+    # Scan area from the top-left corner, in pixels at the chosen resolution. A size larger than the glass is clipped by the driver.
+    [void](Set-Prop $item.Properties 6149 0); [void](Set-Prop $item.Properties 6150 0)
+    $w = [int][Math]::Round($paper[0] / 25.4 * $dpi); $h = [int][Math]::Round($paper[1] / 25.4 * $dpi)
+    if (-not (Set-Prop $item.Properties 6151 $w)) { foreach ($p in $item.Properties) { if ($p.PropertyID -eq 6151) { try { $p.Value = $p.SubTypeMax } catch {} } } }
+    if (-not (Set-Prop $item.Properties 6152 $h)) { foreach ($p in $item.Properties) { if ($p.PropertyID -eq 6152) { try { $p.Value = $p.SubTypeMax } catch {} } } }
+  }
 
   $files = @(); $n = 0
   while ($true) {
@@ -73,7 +87,7 @@ try {
       Out-Json @{ ok = $false; error = $msg; files = $files }; exit 0
     }
     $n++; $f = Join-Path $out ('page-{0:D3}.jpg' -f $n); $img.SaveFile($f); $files += $f
-    if (-not $feeder -or $n -ge 500) { break }
+    if (-not $feeder -or $n -ge 500 -or ($max -gt 0 -and $n -ge $max)) { break }
   }
   Out-Json @{ ok = $true; files = $files; warning = $warn }
 } catch {

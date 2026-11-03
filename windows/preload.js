@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('quireDesktop', {
   ready: () => ipcRenderer.send('renderer-ready'),
   askCamera: () => ipcRenderer.invoke('ask-camera'),
   // Document scanners (Windows): list() -> { ok, devices: [{ id, name }] }
-  // scan({ device, source: 'flatbed'|'feeder'|'duplex', dpi, color: 'color'|'grey'|'bw', dialog }) -> { ok, error, warning, pages: [Uint8Array JPEG] }
+  // scan({ device, source: 'flatbed'|'feeder'|'duplex', dpi, color: 'color'|'grey'|'bw', paper: 'auto'|'a4'|'letter'|'legal'|'a5', max, dialog }) -> { ok, error, warning, pages: [Uint8Array JPEG] }
   scanner: {
     list: () => ipcRenderer.invoke('scanner-list'),
     scan: opts => ipcRenderer.invoke('scanner-scan', opts)

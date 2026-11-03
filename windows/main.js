@@ -87,6 +87,8 @@ ipcMain.handle('scanner-scan', async (_event, opts = {}) => {
       QUIRE_SCAN_SOURCE: ['flatbed', 'feeder', 'duplex'].includes(opts.source) ? opts.source : 'flatbed',
       QUIRE_SCAN_DPI: String(Math.max(75, Math.min(1200, parseInt(opts.dpi, 10) || 300))),
       QUIRE_SCAN_COLOR: ['color', 'grey', 'bw'].includes(opts.color) ? opts.color : 'color',
+      QUIRE_SCAN_MAX: String(Math.max(0, Math.min(500, parseInt(opts.max, 10) || 0))),
+      QUIRE_SCAN_PAPER: ['a4', 'letter', 'legal', 'a5'].includes(opts.paper) ? opts.paper : 'auto',
       QUIRE_SCAN_OUT: out
     }, 15 * 60 * 1000);
     // Only files inside our own temporary folder are read back.
