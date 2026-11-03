@@ -2345,7 +2345,7 @@ async function imagesToPdfWith(items, o = S.img) {
   try {
     const imgs = []; for (const it of items) imgs.push(await imgCanvas(it));
     const sizes = imgs.map(m => naturalPt(m.c.width, m.c.height)); const { pages, place } = imgLayout(o, sizes);
-    const toCur = o.dest === 'cur' && cur() && !cur().encrypted;
+    const dest = o.dest === 'cur' ? 'after' : o.dest; const toCur = dest !== 'new' && cur() && !cur().encrypted;
     const pdf = await PDFDocument.create(); const font = await pdf.embedFont(StandardFonts.Helvetica); const pgs = pages.map(([w, h]) => pdf.addPage([w, h])); const marks = [];
     for (let n = 0; n < imgs.length; n++) {
       $('#busyMsg').textContent = `Adding image ${n + 1} of ${imgs.length}…`; await new Promise(r => setTimeout(r, 0));
@@ -2364,8 +2364,13 @@ async function imagesToPdfWith(items, o = S.img) {
       }
     }
     if (toCur) {
-      const d = cur(); const at = (selPages().slice(-1)[0] ?? d.cur) + 1; const bytes = await pdf.save(); unbusy();
-      const ok = await editBytes(`Added ${plural(imgs.length, 'image')}`, async (dst, dd) => { const src = await PDFDocument.load(bytes); const cps = await dst.copyPages(src, src.getPageIndices()); cps.forEach((p, k) => { dst.insertPage(at + k, p); dd.annots.splice(at + k, 0, []); }); if (o.bookmarks) addOutline(dst, marks.map(([t, p]) => [t, at + p])); });
+      const d = cur(); const n = d.info.length; const sel = selPages(); const bytes = await pdf.save(); unbusy();
+      const del = dest === 'replace' ? (sel.length ? sel : [d.cur]) : [];
+      if (del.length >= n && dest === 'replace' && pages.length < 1) { toast('Nothing to replace with.'); return false; }
+      const at = { after: (sel.slice(-1)[0] ?? d.cur) + 1, before: sel[0] ?? d.cur, start: 0, end: n, page: Math.max(0, Math.min(n, o.destPage || 0)), replace: del[0] }[dest] ?? n;
+      const ok = await editBytes(dest === 'replace' ? `Replaced ${plural(del.length, 'page')} with ${plural(imgs.length, 'image')}` : `Added ${plural(imgs.length, 'image')}`, async (dst, dd) => {
+        for (const i of [...del].reverse()) { dst.removePage(i); dd.annots.splice(i, 1); }
+        const src = await PDFDocument.load(bytes); const cps = await dst.copyPages(src, src.getPageIndices()); cps.forEach((p, k) => { dst.insertPage(at + k, p); dd.annots.splice(at + k, 0, []); }); if (o.bookmarks) addOutline(dst, marks.map(([t, p]) => [t, at + p])); });
       if (ok) { d.sel = new Set([at]); markThumbs(); gotoPage(at); if (o.ocr) startOcr(); }
       return ok;
     }
@@ -2432,7 +2437,7 @@ async function imageOptionsDialog(items) {
         <label class="chk"><input type="checkbox" id="ioDesp" ${o.despeckle ? 'checked' : ''}> Despeckle (remove dust dots)</label>
         <label class="chk"><input type="checkbox" id="ioOcr" ${o.ocr ? 'checked' : ''}> Make text searchable (OCR) afterwards</label>
       </div>
-      <div class="field"><span class="lbl">Put the pages</span><div class="row"><label class="chk"><input type="radio" name="ioDest" value="new" ${o.dest !== 'cur' || !cur() ? 'checked' : ''}> In a new PDF</label><label class="chk"><input type="radio" name="ioDest" value="cur" ${o.dest === 'cur' && cur() ? 'checked' : ''} ${cur() ? '' : 'disabled'}> After the current page</label></div></div>
+      <div class="field"><label for="ioDest">Put the pages</label><div class="row"><select id="ioDest" class="inp" style="flex:1;min-width:0">${(() => { const dv = o.dest === 'cur' ? 'after' : o.dest; const has = !!cur(); return [['new', 'In a new PDF'], ['after', 'After the current page'], ['before', 'Before the current page'], ['start', 'At the start'], ['end', 'At the end'], ['page', 'After page…'], ['replace', 'Replacing the selected pages']].map(([v, l]) => `<option value="${v}"${(has ? dv : 'new') === v ? ' selected' : ''}${v !== 'new' && !has ? ' disabled' : ''}>${l}</option>`).join(''); })()}</select><input id="ioDestP" class="inp" type="number" min="0" max="${cur() ? cur().info.length : 0}" value="${Math.min(o.destPage ?? 1, cur() ? cur().info.length : 0)}" style="width:72px" aria-label="After page number" ${o.dest === 'page' ? '' : 'hidden'}></div>${cur() ? '' : '<span class="muted small">Open a PDF to add the pages to it.</span>'}</div>
     </div>
     <div class="imgdlg-r"><canvas id="ioPrev"></canvas><p class="muted small" id="ioSum"></p></div>`);
   const $b = s => body.querySelector(s);
@@ -2470,7 +2475,8 @@ async function imageOptionsDialog(items) {
     else if (id === 'ioQ') { o.quality = +n.value; $b('#ioQ-o').textContent = Math.round(o.quality * 100) + '%'; }
     else if (id === 'ioDpi') o.maxDpi = +n.value;
     else if (id === 'ioLT') o.labelText = n.value;
-    else if (n.name === 'ioDest') o.dest = n.value;
+    else if (id === 'ioDest') { o.dest = n.value; $b('#ioDestP').hidden = o.dest !== 'page'; }
+    else if (id === 'ioDestP') o.destPage = Math.max(0, parseInt(n.value) || 0);
     else { const sel = { ioSize: 'size', ioRot: 'rot', ioFit: 'fit', ioH: 'h', ioV: 'v', ioColor: 'color' }[id]; const chk = { ioKeep: 'keep', ioLabel: 'label', ioLA: 'labelAbove', ioBM: 'bookmarks', ioDesk: 'deskew', ioDesp: 'despeckle', ioOcr: 'ocr' }[id]; if (sel) o[sel] = n.value; if (chk) o[chk] = n.checked; }
     if (id === 'ioUnit') sync(); else drawPrev();
   });
