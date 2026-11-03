@@ -1,0 +1,32 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['web/**', 'windows/**', '.github/workflows/windows-build.yml']
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the web app is in the repo
+        shell: bash
+        run: |
+          if [ ! -f web/quire-pdf-studio.html ]; then
+            echo "::error::web/quire-pdf-studio.html is missing. Commit the web app first."
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build installer and portable app
+        working-directory: windows
+        run: |
+          npm install
+          npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Quire-PDF-Studio-Windows
+          path: windows/dist/*.exe

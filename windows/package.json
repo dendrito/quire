@@ -1,0 +1,44 @@
+{
+  "name": "quire-pdf-studio",
+  "productName": "Quire PDF Studio",
+  "version": "1.0.0",
+  "description": "Quire PDF Studio for Windows. Runs fully offline; documents never leave the computer.",
+  "main": "main.js",
+  "author": "Curió",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "sync-web": "node scripts/sync-web.js",
+    "start": "npm run sync-web && electron .",
+    "dist": "npm run sync-web && electron-builder --win nsis portable --x64 --arm64",
+    "dist:x64": "npm run sync-web && electron-builder --win nsis portable --x64"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "studio.quire.pdf",
+    "productName": "Quire PDF Studio",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.js", "preload.js", "app/**/*", "package.json"],
+    "fileAssociations": [
+      { "ext": "pdf", "name": "PDF Document", "description": "PDF document", "role": "Editor" }
+    ],
+    "win": {
+      "artifactName": "Quire-PDF-Studio-${version}-${arch}-${target}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "Quire-PDF-Studio-${version}-${arch}-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Quire PDF Studio"
+    },
+    "portable": {
+      "artifactName": "Quire-PDF-Studio-${version}-${arch}-portable.${ext}"
+    }
+  }
+}
