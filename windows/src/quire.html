@@ -3199,6 +3199,720 @@ async function applyHF(s, idx, label) {
   });
 }
 
+/* ================= index & library: bookmarks, page labels, library info (Acrobat · Calibre · Estante), full-text and book index ================= */
+// Modelled on Acrobat Pro's Bookmarks panel (New Bookmarks from Structure), Page Labels, Document Properties
+// (Description, Initial View, Additional Metadata / XMP) and its embedded search index. Three output profiles:
+// "Acrobat" writes the standard Info dictionary and XMP; "Calibre" adds calibre's own XMP namespace (series, sort
+// fields, identifiers, rating) and its file naming; "Estante" is Calibre plus a direct upload to the owner's Estante
+// server (localhost:8484) with its metadata headers and tag suggestions from Estante's smart shelves.
+Object.assign(IC, {
+  bookmark: '<path d="M7 3h10v18l-5-4-5 4z"/>',
+  labels: '<path d="M4 12V5a1 1 0 011-1h7l8 8-8 8z"/><circle cx="8.5" cy="8.5" r="1.3"/>',
+  library: '<path d="M4 4h3v16H4zM9 4h3v16H9z"/><path d="M14.5 5.2l2.9-.8 3.6 15-2.9.8z"/>',
+  bookindex: '<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11M9 7.5h6M9 10.5h4"/>',
+  send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
+  target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  indent: '<path d="M4 6h16M10 12h10M10 18h10M4 10l3 2-3 2z"/>',
+  outdent: '<path d="M4 6h16M10 12h10M10 18h10M7 10l-3 2 3 2z"/>'
+});
+(function () { const st = document.createElement('style'); st.textContent = `
+.bm-tree{list-style:none;margin:0 -6px;padding:0;display:flex;flex-direction:column;gap:1px;max-height:46vh;overflow:auto}
+.bm-tree li{display:grid;grid-template-columns:16px 1fr auto;align-items:center;gap:4px;border-radius:7px;padding-right:6px;min-height:28px;cursor:pointer;font-size:12.5px}
+.bm-tree li:hover{background:var(--hover)}.bm-tree li.on{background:var(--accent-soft)}
+.bm-tree li.none{display:block;padding:6px 8px;cursor:default;background:none}
+.bm-car{border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font-size:11px;width:16px;height:22px}
+.bm-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bm-p{font:500 10.5px var(--f-mono);color:var(--faint)}
+.bm-tools .icon-btn:disabled{opacity:.3;cursor:default}
+.lb-checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.lb-checks li{display:grid;grid-template-columns:14px 1fr;gap:6px;color:var(--muted)}
+.lb-checks li.ok span{color:#2f9e5b;font-weight:700}.lb-checks li.bad{color:var(--fg)}.lb-checks li.bad span{color:var(--danger);font-weight:700}
+.tagchip{border:0;background:var(--hover);border-radius:20px;padding:3px 9px;font-size:11.5px;cursor:pointer;color:var(--fg)}.tagchip:hover{background:var(--hover2)}
+#lbProf button{padding:0 10px}`; document.head.append(st); })();
+Object.assign(ACTS, {
+  bookmarks: ['Bookmarks', 'bookmark', () => openTask('bookmarks')],
+  labels: ['Page labels', 'labels', () => openTask('labels')],
+  library: ['Library info: Acrobat, Calibre or Estante', 'library', () => openTask('library')],
+  bookindex: ['Index: search index and book index', 'bookindex', () => openTask('bookindex')],
+  estante: ['Send to Estante', 'send', () => sendToEstante()]
+});
+Object.assign(RLBL, { bookmarks: 'Bookmarks', labels: 'Labels', library: 'Library', bookindex: 'Index', estante: 'Estante' });
+Object.assign(CMD_KW, {
+  bookmarks: 'outline table of contents toc chapters headings structure navigation',
+  labels: 'page numbering roman numerals front matter logical page numbers',
+  library: 'metadata properties calibre estante isbn series author title cover xmp initial view ebook book',
+  bookindex: 'search index catalog full text embedded back of book terms concordance ocr coverage',
+  estante: 'calibre library upload send shelf'
+});
+RIB.index = { label: 'Index', items: ['@bookmarks', '@labels', '|', '@library', '@estante', '|', '@bookindex'] };
+
+/* ---- low-level PDF helpers ---- */
+const LX = { N: n => PDFLib.PDFName.of(n), T: s => PDFLib.PDFHexString.fromText(String(s)) };
+function lxStr(o) { if (!o) return ''; try { if (o.decodeText) return o.decodeText(); if (o.asString) return o.asString(); } catch {} return String(o); }
+function lxNum(o) { return o instanceof PDFLib.PDFNumber ? o.asNumber() : null; }
+function lxDropTree(ctx, ref, seen = new Set()) { // deletes an old outline tree so its objects are not written again
+  while (ref instanceof PDFLib.PDFRef && !seen.has(ref.tag)) {
+    seen.add(ref.tag); const d = ctx.lookup(ref); if (!(d instanceof PDFLib.PDFDict)) break;
+    lxDropTree(ctx, d.get(LX.N('First')), seen); const nx = d.get(LX.N('Next')); ctx.delete(ref); ref = nx;
+  }
+}
+// Lines of text on a page: [{y, x, size, text}], top to bottom. Hyphenated line ends are kept so callers can join them.
+async function ixLines(d, i) {
+  d.ixLines = d.ixLines && d.ixLines.bytes === d.bytes ? d.ixLines : { bytes: d.bytes, p: [] };
+  if (d.ixLines.p[i]) return d.ixLines.p[i];
+  const tc = await pageText(d, i); const L = []; let ln = null;
+  for (const it of tc.items) {
+    if (!it.str || !it.transform) { if (it.hasEOL) ln = null; continue; }
+    const t = it.transform; const size = Math.round((it.height || Math.hypot(t[2], t[3])) * 2) / 2; const x = t[4], y = t[5];
+    if (!(size > 0)) continue;
+    if (ln && Math.abs(ln.y - y) < Math.max(ln.size, size) * .45 && x >= ln.x1 - size * 2) {
+      const gap = x - ln.x1; ln.text += (gap > size * .18 && !/\s$/.test(ln.text) && !/^\s/.test(it.str) ? ' ' : '') + it.str;
+      ln.x1 = x + (it.width || 0); ln.size = Math.max(ln.size, size); ln.chars += it.str.length;
+    } else { ln = { y, x, x1: x + (it.width || 0), size, text: it.str, chars: it.str.length }; L.push(ln); }
+    if (it.hasEOL) ln = null;
+  }
+  L.forEach(l => l.text = l.text.replace(/\s+/g, ' ').trim());
+  const out = L.filter(l => l.text).sort((a, b) => b.y - a.y || a.x - b.x);
+  d.ixLines.p[i] = out; return out;
+}
+// Accent- and case-insensitive form used by the full-text index and index search.
+const ixFold = s => s.normalize('NFKD').replace(/[̀-֑ͯ-ׇ]/g, '').toLowerCase().replace(/[ﬁ]/g, 'fi').replace(/[ﬂ]/g, 'fl').replace(/ß/g, 'ss');
+// One string per page with hyphenated line breaks joined ("biblio-\ngraphy" → "bibliography").
+async function ixPageString(d, i) {
+  const ls = await ixLines(d, i); let s = '';
+  for (const l of ls) { if (/[\p{L}]-$/u.test(s) && /^[\p{Ll}]/u.test(l.text)) s = s.slice(0, -1) + l.text; else s += (s ? '\n' : '') + l.text; }
+  return s;
+}
+
+/* ---- page labels ---- */
+const PL_STYLES = [['D', '1, 2, 3'], ['r', 'i, ii, iii'], ['R', 'I, II, III'], ['a', 'a, b, c'], ['A', 'A, B, C'], ['', 'None (prefix only)']];
+function plRoman(n) { const m = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']]; let o = ''; for (const [v, s] of m) while (n >= v) { o += s; n -= v; } return o; }
+function plFmt(style, n) { if (style === 'D') return String(n); if (style === 'r') return plRoman(n); if (style === 'R') return plRoman(n).toUpperCase(); if (style === 'a' || style === 'A') { const c = String.fromCharCode(97 + (n - 1) % 26).repeat(Math.floor((n - 1) / 26) + 1); return style === 'A' ? c.toUpperCase() : c; } return ''; }
+function plLabels(ranges, count) { // ranges sorted by start → label per page
+  const out = []; const R = [...ranges].sort((a, b) => a.start - b.start);
+  for (let i = 0; i < count; i++) { let r = null; for (const x of R) if (x.start <= i) r = x; out.push(r ? (r.prefix || '') + plFmt(r.style, (r.st || 1) + i - r.start) : String(i + 1)); }
+  return out;
+}
+function plRead(pdf) { // reads /PageLabels (number tree, any depth) into [{start, style, prefix, st}]
+  const out = []; const root = pdf.catalog.lookup(LX.N('PageLabels'));
+  const walk = node => {
+    if (!(node instanceof PDFLib.PDFDict)) return;
+    const nums = node.lookup(LX.N('Nums')); if (nums instanceof PDFLib.PDFArray) for (let k = 0; k + 1 < nums.size(); k += 2) {
+      const start = lxNum(nums.lookup(k)); const dct = nums.lookup(k + 1); if (start == null || !(dct instanceof PDFLib.PDFDict)) continue;
+      const s = dct.lookup(LX.N('S')); out.push({ start, style: s ? s.asString().replace('/', '') : '', prefix: lxStr(dct.lookup(LX.N('P'))), st: lxNum(dct.lookup(LX.N('St'))) || 1 });
+    }
+    const kids = node.lookup(LX.N('Kids')); if (kids instanceof PDFLib.PDFArray) for (let k = 0; k < kids.size(); k++) walk(kids.lookup(k));
+  };
+  walk(root); return out.sort((a, b) => a.start - b.start);
+}
+function plWrite(pdf, ranges) {
+  const R = ranges.filter(r => r.start >= 0 && r.start < pdf.getPageCount()).sort((a, b) => a.start - b.start).filter((r, k, a) => !k || a[k - 1].start !== r.start);
+  if (!R.length || (R.length === 1 && R[0].start === 0 && R[0].style === 'D' && !R[0].prefix && (R[0].st || 1) === 1)) { pdf.catalog.delete(LX.N('PageLabels')); return; }
+  if (R[0].start !== 0) R.unshift({ start: 0, style: 'D', prefix: '', st: 1 });
+  const nums = [];
+  for (const r of R) { const o = {}; if (r.style) o.S = r.style; if (r.prefix) o.P = LX.T(r.prefix); if ((r.st || 1) !== 1) o.St = r.st; nums.push(r.start, pdf.context.obj(o)); }
+  pdf.catalog.set(LX.N('PageLabels'), pdf.context.obj({ Nums: nums }));
+}
+async function docLabels(d) { if (d.plCache && d.plCache.bytes === d.bytes) return d.plCache.l; let l = null; try { l = await d.pdf.getPageLabels(); } catch {} d.plCache = { bytes: d.bytes, l }; return l; }
+const pgName = (labels, i) => labels && labels[i] && labels[i] !== String(i + 1) ? `${labels[i]} (${i + 1})` : String(i + 1);
+
+TASKS.labels = async function (P, d) {
+  P.innerHTML = `<section class="sec">${head('Page labels')}<p class="muted">Reading…</p></section>`; bindClose(P);
+  if (!d.plEdit || d.plEdit.bytes !== d.bytes) { let r = []; try { r = plRead(await PDFDocument.load(d.bytes, LOAD)); } catch {} d.plEdit = { bytes: d.bytes, ranges: r.length ? r : [{ start: 0, style: 'D', prefix: '', st: 1 }] }; }
+  if (S.task !== 'labels' || cur() !== d) return;
+  const R = d.plEdit.ranges; const n = d.info.length;
+  const draw = () => {
+    R.sort((a, b) => a.start - b.start); const lab = plLabels(R, n);
+    P.innerHTML = `<section class="sec">${head('Page labels')}
+      <p class="hint">The numbers a reader shows instead of the physical page number, like Acrobat's Page Labels: roman numerals for the front matter, then 1, 2, 3 from chapter one. Calibre, Estante, Acrobat and Preview all show them.</p>
+      <div class="row"><button class="btn" id="plFront">Roman front matter, 1 from this page</button></div>
+      <div id="plRows" style="display:flex;flex-direction:column;gap:10px">${R.map((r, k) => `<div class="pl-r" data-k="${k}" style="display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:10px;background:var(--hover)">
+        <div class="row" style="justify-content:space-between"><span class="lbl">From page</span>${k ? `<button class="icon-btn sm" data-del="${k}" aria-label="Remove this range">${svg('x')}</button>` : ''}</div>
+        <div class="grid2"><input class="inp" type="number" min="1" max="${n}" data-f="start" value="${r.start + 1}" ${k ? '' : 'disabled'} aria-label="First page of the range"><select class="inp" data-f="style" aria-label="Numbering style">${PL_STYLES.map(([v, l]) => `<option value="${v}"${r.style === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="grid2"><input class="inp" data-f="prefix" placeholder="Prefix, e.g. A-" value="${esc(r.prefix)}" aria-label="Prefix"><input class="inp" type="number" min="1" data-f="st" value="${r.st || 1}" aria-label="Start numbering at"></div>
+        <span class="muted small">Shows as ${esc(lab[r.start] || '')}${r.start + 1 < n ? ', ' + esc(lab[r.start + 1]) : ''}${r.start + 2 < n ? ', ' + esc(lab[r.start + 2]) + '…' : ''}</span></div>`).join('')}</div>
+      <div class="row"><button class="btn" id="plAdd">${svg('plus')}Range from page ${d.cur + 1}</button></div>
+      <dl class="kv"><dt>This page</dt><dd>${esc(pgName(lab, d.cur))}</dd><dt>Last page</dt><dd>${esc(pgName(lab, n - 1))}</dd></dl>
+      <div class="row"><button class="btn primary" id="plGo">Apply labels</button><button class="btn" id="plClear">Plain 1, 2, 3</button></div></section>`;
+    bindClose(P);
+    $$('[data-f]', P).forEach(inp => inp.onchange = () => { const r = R[+inp.closest('[data-k]').dataset.k]; const f = inp.dataset.f; r[f] = f === 'start' ? Math.max(0, Math.min(n - 1, (+inp.value || 1) - 1)) : f === 'st' ? Math.max(1, +inp.value || 1) : inp.value; draw(); });
+    $$('[data-del]', P).forEach(b => b.onclick = () => { R.splice(+b.dataset.del, 1); draw(); });
+    $('#plAdd', P).onclick = () => { if (!R.some(r => r.start === d.cur)) R.push({ start: d.cur, style: 'D', prefix: '', st: 1 }); draw(); };
+    $('#plFront', P).onclick = () => { if (d.cur === 0) { toast('Go to the page where chapter one starts first'); return; } R.length = 0; R.push({ start: 0, style: 'r', prefix: '', st: 1 }, { start: d.cur, style: 'D', prefix: '', st: 1 }); draw(); };
+    $('#plClear', P).onclick = () => { R.length = 0; R.push({ start: 0, style: 'D', prefix: '', st: 1 }); draw(); };
+    $('#plGo', P).onclick = async () => { const keep = R.map(r => ({ ...r })); if (await editBytes('Page labels applied', pdf => plWrite(pdf, keep))) { d.plEdit = { bytes: d.bytes, ranges: keep }; } };
+  };
+  draw();
+};
+
+/* ---- bookmarks ---- */
+async function bmRead(d) {
+  let ol = null; try { ol = await d.pdf.getOutline(); } catch {}
+  const conv = async items => {
+    const out = [];
+    for (const it of items || []) {
+      let page = null, top = null;
+      try {
+        let dest = it.dest; if (typeof dest === 'string') dest = await d.pdf.getDestination(dest);
+        if (Array.isArray(dest)) {
+          page = dest[0] && typeof dest[0] === 'object' ? await d.pdf.getPageIndex(dest[0]) : Number.isInteger(dest[0]) ? dest[0] : null;
+          const kind = dest[1] && dest[1].name; if (kind === 'XYZ' && typeof dest[3] === 'number') top = dest[3]; else if ((kind === 'FitH' || kind === 'FitBH') && typeof dest[2] === 'number') top = dest[2];
+        }
+      } catch {}
+      out.push({ title: it.title || '', page, top, url: it.url || null, bold: !!it.bold, italic: !!it.italic, color: it.color && (it.color[0] || it.color[1] || it.color[2]) ? [...it.color] : null, open: false, kids: await conv(it.items) });
+    }
+    return out;
+  };
+  return conv(ol);
+}
+function bmWrite(pdf, tree, mode) {
+  const ctx = pdf.context, cat = pdf.catalog, N = LX.N; const pages = pdf.getPages();
+  const old = cat.get(N('Outlines')); if (old instanceof PDFLib.PDFRef) { const od = ctx.lookup(old); if (od instanceof PDFLib.PDFDict) lxDropTree(ctx, od.get(N('First'))); ctx.delete(old); }
+  cat.delete(N('Outlines'));
+  if (tree.length) {
+    const rootRef = ctx.nextRef(); const root = ctx.obj({ Type: 'Outlines' });
+    const build = (nodes, parentRef, parent) => {
+      const refs = nodes.map(() => ctx.nextRef()); let visible = 0;
+      nodes.forEach((n, k) => {
+        const it = ctx.obj({ Title: LX.T(n.title || 'Untitled'), Parent: parentRef });
+        if (n.page != null && pages[n.page]) it.set(N('Dest'), ctx.obj([pages[n.page].ref, 'XYZ', null, n.top != null ? Math.round(n.top) : null, null]));
+        else if (n.url) it.set(N('A'), ctx.obj({ S: 'URI', URI: PDFLib.PDFString.of(n.url) }));
+        if (k) it.set(N('Prev'), refs[k - 1]); if (k < nodes.length - 1) it.set(N('Next'), refs[k + 1]);
+        if (n.bold || n.italic) it.set(N('F'), ctx.obj((n.italic ? 1 : 0) + (n.bold ? 2 : 0)));
+        if (n.color) it.set(N('C'), ctx.obj(n.color.map(v => +(v / 255).toFixed(3))));
+        visible++;
+        if (n.kids && n.kids.length) { const c = build(n.kids, refs[k], it); it.set(N('Count'), ctx.obj(n.open ? c : -n.kids.length)); if (n.open) visible += c; }
+        ctx.assign(refs[k], it);
+      });
+      parent.set(N('First'), refs[0]); parent.set(N('Last'), refs[refs.length - 1]); return visible;
+    };
+    root.set(N('Count'), ctx.obj(build(tree, rootRef, root))); ctx.assign(rootRef, root); cat.set(N('Outlines'), rootRef);
+  }
+  if (mode) cat.set(N('PageMode'), N(mode));
+  else if (tree.length && !cat.get(N('PageMode'))) cat.set(N('PageMode'), N('UseOutlines'));
+  else if (!tree.length) { const pm = cat.get(N('PageMode')); if (pm && pm.asString() === '/UseOutlines') cat.delete(N('PageMode')); }
+}
+const bmFlat = (tree, lvl = 0, out = [], parent = tree) => { tree.forEach((n, k) => { out.push({ n, lvl, arr: parent, k }); if (n.open && n.kids.length) bmFlat(n.kids, lvl + 1, out, n.kids); }); return out; };
+const bmCount = t => t.reduce((s, n) => s + 1 + bmCount(n.kids), 0);
+function bmFindParent(tree, node) { for (const n of tree) { if (n.kids.includes(node)) return n; const p = bmFindParent(n.kids, node); if (p) return p; } return null; }
+function bmNest(items) { // [{title, page, top, lvl}] → tree
+  const root = []; const stack = [{ lvl: -1, kids: root }];
+  for (const it of items) { const n = { title: it.title, page: it.page, top: it.top ?? null, open: it.lvl === 0, kids: [] }; while (stack.length > 1 && stack[stack.length - 1].lvl >= it.lvl) stack.pop(); stack[stack.length - 1].kids.push(n); stack.push({ lvl: it.lvl, kids: n.kids }); }
+  return root;
+}
+// "New bookmarks from structure" for untagged files: headings are lines set noticeably larger than the body text.
+async function bmFromHeadings(d, { levels = 3, ratio = 1.15, onProgress } = {}) {
+  const n = d.info.length; const all = []; const hist = new Map();
+  for (let i = 0; i < n; i++) {
+    if (onProgress) onProgress(i, n);
+    for (const l of await ixLines(d, i)) { all.push({ ...l, page: i }); hist.set(l.size, (hist.get(l.size) || 0) + l.chars); }
+  }
+  if (!all.length) return { items: [], body: 0 };
+  const body = [...hist].sort((a, b) => b[1] - a[1])[0][0];
+  const key = t => t.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ');
+  const reps = new Map(); for (const l of all) if (l.size >= body * ratio) reps.set(key(l.text), (reps.get(key(l.text)) || new Set()).add(l.page));
+  const runLimit = Math.max(3, n * .2);
+  let cands = all.filter(l => l.size >= body * ratio && l.text.length >= 2 && l.text.length <= 160 && /\p{L}/u.test(l.text) && !/^(page|p\.)?\s*[\divxlc]+\s*$/i.test(l.text) && reps.get(key(l.text)).size < runLimit);
+  const merged = [];
+  for (const l of cands) { const p = merged[merged.length - 1]; if (p && p.page === l.page && Math.abs(p.size - l.size) < .6 && p.yLast - l.y < l.size * 1.9 && p.yLast > l.y) { p.title += (/-$/.test(p.title) ? '' : ' ') + l.text; p.yLast = l.y; } else merged.push({ title: l.text, page: l.page, top: l.y + l.size, size: l.size, yLast: l.y }); }
+  const sizes = [...new Set(merged.map(m => m.size))].sort((a, b) => b - a);
+  // A size used only once at the very start (a cover title) should not become the top level of every chapter.
+  if (sizes.length > 1 && merged.filter(m => m.size === sizes[0]).length === 1 && merged.find(m => m.size === sizes[0]).page <= 1) { sizes.shift(); }
+  const lv = new Map(sizes.slice(0, levels).map((s, k) => [s, k]));
+  const items = merged.filter(m => lv.has(m.size)).map(m => ({ title: m.title.slice(0, 200), page: m.page, top: m.top, lvl: lv.get(m.size) }));
+  return { items, body };
+}
+const TOC_WORDS = /\b(contents|table of contents|índice|indice|sumário|sumario|conteúdo|tabla de contenido|inhalt|inhaltsverzeichnis|sommaire|table des matières|indice generale|spis treści|inhoud)\b/i;
+async function bmFindTocPages(d) { const lim = Math.min(d.info.length, 30); for (let i = 0; i < lim; i++) { const ls = await ixLines(d, i); if (ls.slice(0, 6).some(l => TOC_WORDS.test(l.text) && l.text.length < 50)) { const out = [i]; for (let j = i + 1; j < Math.min(d.info.length, i + 12); j++) { const e = await bmTocEntries(d, [j]); if (e.length >= 3) out.push(j); else break; } return out; } } return []; }
+async function bmTocEntries(d, pages) {
+  const out = [];
+  for (const i of pages) for (const l of await ixLines(d, i)) {
+    const m = l.text.match(/^(.*?\p{L}.*?)(?:\s*[.·…_․‥\-–—]{2,}\s*|\s+)(\d{1,4}|[ivxlcdm]{1,8})$/iu);
+    if (!m || TOC_WORDS.test(l.text) && l.text.length < 40) continue;
+    const title = m[1].replace(/[.·…_\s]+$/, '').trim(); if (title.length < 2) continue;
+    const num = m[2]; const dots = (title.match(/^(\d+(?:\.\d+)*)\.?\s/) || [])[1];
+    out.push({ title, num, x: l.x, depth: dots ? dots.split('.').length - 1 : null, src: i });
+  }
+  return out;
+}
+async function bmFromToc(d, pages, offset) {
+  const E = await bmTocEntries(d, pages); if (!E.length) return { items: [], offset: 0 };
+  const labels = await docLabels(d); const after = Math.max(...pages) + 1;
+  const toPage = (num, off) => { if (labels) { const k = labels.findIndex((l, i) => i >= after && l.toLowerCase() === num.toLowerCase()); if (k >= 0) return k; } return /^\d+$/.test(num) ? +num - 1 + off : null; };
+  if (offset == null) { // find each of the first entries in the body to learn how printed numbers map to physical pages
+    const votes = new Map(); const norm = s => ixFold(s).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    for (const e of E.filter(e => /^\d+$/.test(e.num)).slice(0, 8)) {
+      const want = norm(e.title.replace(/^\d+(\.\d+)*\.?\s*/, '')).slice(0, 30); if (want.length < 4) continue;
+      for (let i = after; i < d.info.length; i++) { const hay = norm(await ixPageString(d, i)); if (hay.includes(want)) { const o = i - (+e.num - 1); votes.set(o, (votes.get(o) || 0) + 1); break; } }
+    }
+    offset = votes.size ? [...votes].sort((a, b) => b[1] - a[1])[0][0] : 0;
+  }
+  const xs = [...new Set(E.map(e => Math.round(e.x / 6) * 6))].sort((a, b) => a - b).slice(0, 4);
+  const items = E.map(e => ({ title: e.title, page: toPage(e.num, offset), top: null, lvl: e.depth != null ? Math.min(e.depth, 3) : Math.max(0, xs.indexOf(Math.round(e.x / 6) * 6)) })).filter(e => e.page != null && e.page >= 0 && e.page < d.info.length);
+  return { items, offset };
+}
+S.bmGen = Object.assign({ src: 'head', levels: 3, ratio: 1.15, every: 10, how: 'replace' }, pref.get('bmGen', {}));
+TASKS.bookmarks = async function (P, d) {
+  if (!d.bm || (d.bm.bytes !== d.bytes && !d.bm.dirty)) { P.innerHTML = `<section class="sec">${head('Bookmarks')}<p class="muted">Reading…</p></section>`; bindClose(P); const tree = await bmRead(d); d.bm = { bytes: d.bytes, tree, sel: null, dirty: false }; if (S.task !== 'bookmarks' || cur() !== d) return; }
+  const B = d.bm; const G = S.bmGen; const labels = await docLabels(d); if (S.task !== 'bookmarks' || cur() !== d) return;
+  const draw = () => {
+    const F = bmFlat(B.tree); const sel = B.sel && F.find(f => f.n === B.sel);
+    P.innerHTML = `<section class="sec">${head('Bookmarks')}
+      <div class="row bm-tools" style="gap:2px">${[['add', 'plus', 'Add a bookmark for this page'], ['ren', 'text', 'Rename'], ['here', 'target', 'Point at the current page'], ['up', 'up', 'Move up'], ['down', 'down', 'Move down'], ['out', 'outdent', 'Move out a level'], ['in', 'indent', 'Move in a level'], ['del', 'del', 'Delete']].map(([k, ic, t]) => `<button class="icon-btn sm" data-bm="${k}" data-tip="${t}" aria-label="${t}" ${k !== 'add' && !sel ? 'disabled' : ''}>${svg(ic)}</button>`).join('')}</div>
+      <ul class="bm-tree" role="tree" aria-label="Bookmarks">${F.length ? F.map(f => `<li role="treeitem" aria-level="${f.lvl + 1}" ${f.n.kids.length ? `aria-expanded="${f.n.open}"` : ''} class="${f.n === B.sel ? 'on' : ''}" data-i="${F.indexOf(f)}" style="padding-left:${4 + f.lvl * 14}px"><button class="bm-car" data-tog="${F.indexOf(f)}" aria-label="${f.n.open ? 'Collapse' : 'Expand'}" ${f.n.kids.length ? '' : 'disabled'}>${f.n.kids.length ? (f.n.open ? '▾' : '▸') : ''}</button><span class="bm-t" style="${f.n.bold ? 'font-weight:600;' : ''}${f.n.italic ? 'font-style:italic' : ''}">${esc(f.n.title || 'Untitled')}</span><span class="bm-p">${f.n.page != null ? esc(labels && labels[f.n.page] || String(f.n.page + 1)) : f.n.url ? 'link' : '—'}</span></li>`).join('') : '<li class="none muted small">No bookmarks yet. Add one for this page, or generate them below.</li>'}</ul>
+      <span class="muted small">${bmCount(B.tree)} bookmark${bmCount(B.tree) === 1 ? '' : 's'}${B.dirty ? ' · not saved yet' : ''}. Double-click to rename.</span>
+      <div class="row"><button class="btn primary" id="bmSave" ${B.dirty ? '' : 'disabled'}>Save bookmarks</button>${B.dirty ? '<button class="btn" id="bmRevert">Discard changes</button>' : ''}<button class="btn" id="bmAll">${bmFlat(B.tree).length === bmCount(B.tree) ? 'Collapse all' : 'Expand all'}</button></div>
+    </section>
+    <section class="sec"><h3>Generate</h3>
+      <div class="field"><label for="bmSrc">From</label><select id="bmSrc" class="inp"><option value="head"${G.src === 'head' ? ' selected' : ''}>Headings (larger text)</option><option value="toc"${G.src === 'toc' ? ' selected' : ''}>The book's contents page</option><option value="every"${G.src === 'every' ? ' selected' : ''}>Every N pages</option><option value="first"${G.src === 'first' ? ' selected' : ''}>Each page's first line</option></select></div>
+      <div id="bmOpts"></div>
+      <div class="segs" id="bmHow"><button type="button" data-h="replace" class="${G.how === 'replace' ? 'on' : ''}">Replace</button><button type="button" data-h="append" class="${G.how === 'append' ? 'on' : ''}">Add to the end</button></div>
+      <button class="btn" id="bmGen">Generate</button><p class="hint" id="bmMsg">You can check and edit the result before you save it.</p></section>`;
+    bindClose(P);
+    const opts = $('#bmOpts', P);
+    if (G.src === 'head') opts.innerHTML = `<div class="grid2"><div class="field"><label for="bmLv">Levels</label><select id="bmLv" class="inp">${[1, 2, 3, 4].map(v => `<option${G.levels === v ? ' selected' : ''}>${v}</option>`).join('')}</select></div><div class="field"><label for="bmRt">At least</label><select id="bmRt" class="inp">${[[1.08, '8% larger'], [1.15, '15% larger'], [1.3, '30% larger'], [1.6, '60% larger']].map(([v, l]) => `<option value="${v}"${G.ratio === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div><p class="hint">Running headers that repeat on many pages are left out. Scanned pages need OCR first.</p>`;
+    else if (G.src === 'toc') opts.innerHTML = `<div class="grid2"><div class="field"><label for="bmTp">Contents pages</label><input id="bmTp" class="inp" placeholder="auto, or e.g. 5-7" value="${esc(G.tocPages || '')}"></div><div class="field"><label for="bmOff">Page offset</label><input id="bmOff" class="inp" placeholder="auto" value="${G.off ?? ''}"></div></div><p class="hint">Reads lines like "Chapter 3 ...... 41". Quire finds the contents page and works out how printed page numbers map to pages in the file; page labels are used when the file has them.</p>`;
+    else if (G.src === 'every') opts.innerHTML = `<div class="field"><label for="bmEv">Every</label><input id="bmEv" class="inp" type="number" min="1" value="${G.every}"></div>`;
+    else opts.innerHTML = '<p class="hint">Uses the first line of text on each page as its bookmark.</p>';
+    $('#bmSrc', P).onchange = e => { G.src = e.target.value; pref.set('bmGen', G); draw(); };
+    $$('#bmHow button', P).forEach(b => b.onclick = () => { G.how = b.dataset.h; pref.set('bmGen', G); $$('#bmHow button', P).forEach(x => x.classList.toggle('on', x === b)); });
+    const rows = $$('.bm-tree li[data-i]', P);
+    rows.forEach(li => {
+      const f = F[+li.dataset.i];
+      li.onclick = e => { if (e.target.closest('[data-tog]')) return; B.sel = f.n; if (f.n.page != null) { gotoPage(f.n.page); if (f.n.top != null) { const v = cur().views[f.n.page]; const b = vrect(v.vp, { x1: 0, y1: f.n.top, x2: 1, y2: f.n.top }); $('#viewer').scrollTop = v.wrap.offsetTop + b.y - 12; } } draw(); };
+      li.ondblclick = () => { B.sel = f.n; rename(); };
+    });
+    $$('[data-tog]', P).forEach(b => b.onclick = () => { const n = F[+b.dataset.tog].n; n.open = !n.open; draw(); });
+    const change = () => { B.dirty = true; draw(); };
+    const rename = async () => { const n = B.sel; if (!n) return; const r = await modal({ title: 'Rename bookmark', body: `<div class="field"><label for="bmName">Title</label><input id="bmName" class="inp" value="${esc(n.title)}"></div><div class="row"><label class="chk"><input type="checkbox" id="bmB" ${n.bold ? 'checked' : ''}> Bold</label><label class="chk"><input type="checkbox" id="bmI" ${n.italic ? 'checked' : ''}> Italic</label></div>`, actions: [{ label: 'Cancel', value: null }, { label: 'Rename', primary: true, value: 'ok' }] }); if (!r) return; n.title = $('#bmName').value.trim() || n.title; n.bold = $('#bmB').checked; n.italic = $('#bmI').checked; change(); };
+    $$('[data-bm]', P).forEach(b => b.onclick = async () => {
+      const k = b.dataset.bm; const s = sel;
+      if (k === 'add') {
+        const pg = d.cur; let title = `Page ${labels && labels[pg] || pg + 1}`; try { const ls = await ixLines(d, pg); const big = [...ls].sort((a, b) => b.size - a.size)[0]; if (big) title = big.text.slice(0, 120); } catch {}
+        const n = { title, page: pg, top: null, open: false, kids: [] };
+        if (s) s.arr.splice(s.k + 1, 0, n); else { const at = B.tree.findIndex(x => x.page != null && x.page > pg); at < 0 ? B.tree.push(n) : B.tree.splice(at, 0, n); }
+        B.sel = n; B.dirty = true; draw(); rename(); return;
+      }
+      if (!s) return;
+      if (k === 'ren') return rename();
+      if (k === 'here') { s.n.page = d.cur; s.n.top = null; }
+      if (k === 'del') { s.arr.splice(s.k, 1); B.sel = s.arr[s.k] || s.arr[s.k - 1] || null; }
+      if (k === 'up' && s.k > 0) [s.arr[s.k - 1], s.arr[s.k]] = [s.arr[s.k], s.arr[s.k - 1]];
+      if (k === 'down' && s.k < s.arr.length - 1) [s.arr[s.k + 1], s.arr[s.k]] = [s.arr[s.k], s.arr[s.k + 1]];
+      if (k === 'in' && s.k > 0) { const prev = s.arr[s.k - 1]; s.arr.splice(s.k, 1); prev.kids.push(s.n); prev.open = true; }
+      if (k === 'out') { const par = bmFindParent(B.tree, s.n); if (par) { const gp = bmFindParent(B.tree, par); const arr = gp ? gp.kids : B.tree; s.arr.splice(s.k, 1); arr.splice(arr.indexOf(par) + 1, 0, s.n); } }
+      change();
+    });
+    $('#bmAll', P).onclick = () => { const open = bmFlat(B.tree).length !== bmCount(B.tree); const walk = t => t.forEach(n => { n.open = open; walk(n.kids); }); walk(B.tree); draw(); };
+    if ($('#bmRevert', P)) $('#bmRevert', P).onclick = () => { d.bm = null; TASKS.bookmarks(P, d); };
+    $('#bmSave', P).onclick = async () => { const tree = B.tree; if (await editBytes('Bookmarks saved', pdf => bmWrite(pdf, tree))) { d.bm = { bytes: d.bytes, tree, sel: B.sel, dirty: false }; } };
+    $('#bmGen', P).onclick = async () => {
+      const msg = $('#bmMsg', P); let items = [];
+      try {
+        if (G.src === 'head') { G.levels = +$('#bmLv', P).value; G.ratio = +$('#bmRt', P).value; busy('Looking for headings…'); const r = await bmFromHeadings(d, { levels: G.levels, ratio: G.ratio, onProgress: (i, n) => $('#busyMsg').textContent = `Reading page ${i + 1} of ${n}…` }); items = r.items; if (!r.body) { unbusy(); msg.textContent = 'This file has no text to read headings from. Run OCR (Tools → OCR) first.'; return; } }
+        else if (G.src === 'toc') {
+          G.tocPages = $('#bmTp', P).value.trim(); const ov = $('#bmOff', P).value.trim(); G.off = ov === '' || ov === 'auto' ? null : +ov; busy('Reading the contents page…');
+          let pages = G.tocPages && G.tocPages !== 'auto' ? parseRanges(G.tocPages, d.info.length) : await bmFindTocPages(d);
+          if (!pages.length) { unbusy(); msg.textContent = 'No contents page found in the first 30 pages. Type its page numbers, e.g. 5-7.'; return; }
+          const r = await bmFromToc(d, pages, G.off); items = r.items; msg.textContent = `Contents on page ${pages.map(p => p + 1).join(', ')}; printed page 1 is page ${1 + r.offset} of the file.`;
+        }
+        else if (G.src === 'every') { G.every = Math.max(1, +$('#bmEv', P).value || 10); for (let i = 0; i < d.info.length; i += G.every) items.push({ title: `Pages ${labels && labels[i] || i + 1}–${labels && labels[Math.min(d.info.length, i + G.every) - 1] || Math.min(d.info.length, i + G.every)}`, page: i, lvl: 0 }); }
+        else { busy('Reading pages…'); for (let i = 0; i < d.info.length; i++) { const l = (await ixLines(d, i))[0]; items.push({ title: l ? l.text.slice(0, 100) : `Page ${i + 1}`, page: i, top: l ? l.y + l.size : null, lvl: 0 }); } }
+      } catch (e) { console.error(e); toast('Could not generate bookmarks: ' + (e.message || e)); return; } finally { unbusy(); }
+      pref.set('bmGen', G);
+      if (!items.length) { msg.textContent = G.src === 'toc' ? 'No entries with page numbers were found on that page.' : 'Nothing found. Try a lower size setting, or run OCR on scanned pages.'; return; }
+      const tree = bmNest(items); if (G.how === 'replace') B.tree = tree; else B.tree.push(...tree);
+      B.dirty = true; B.sel = null; draw(); $('#bmMsg', P).textContent = (G.src === 'toc' ? msg.textContent + ' ' : '') + `${items.length} bookmarks made. Check them, then Save bookmarks.`;
+    };
+  };
+  draw();
+};
+function parseRanges(s, n) { const out = []; for (const part of s.split(/[,;\s]+/)) { const m = part.match(/^(\d+)(?:-(\d+))?$/); if (!m) continue; const a = +m[1], b = m[2] ? +m[2] : a; for (let i = Math.max(1, a); i <= Math.min(n, b); i++) out.push(i - 1); } return [...new Set(out)]; }
+
+/* ---- library info: metadata, XMP, initial view, profiles ---- */
+const LIB_PROFILES = {
+  acrobat: { label: 'Acrobat', hint: 'Standard PDF properties and XMP, like Acrobat\'s Document Properties. Works in every PDF reader.' },
+  calibre: { label: 'Calibre', hint: 'Adds calibre\'s own XMP fields (series and number, sort names, identifiers, rating), joins authors with "&" and names the file "Title - Author".' },
+  estante: { label: 'Estante', hint: 'Everything in the Calibre profile, plus tags from your Estante shelves and a button that sends the book straight to Estante.' }
+};
+const XNS = { x: 'adobe:ns:meta/', rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#', dc: 'http://purl.org/dc/elements/1.1/', pdf: 'http://ns.adobe.com/pdf/1.3/', xmp: 'http://ns.adobe.com/xap/1.0/', xmpMM: 'http://ns.adobe.com/xap/1.0/mm/', xmpidq: 'http://ns.adobe.com/xmp/Identifier/qual/1.0/', prism: 'http://prismstandard.org/namespaces/basic/2.0/', calibre: 'http://calibre-ebook.com/xmp-namespace', calibreSI: 'http://calibre-ebook.com/xmp-namespace-series-index' };
+const LIB_LANGS = [['', '—'], ['en', 'English'], ['pt', 'Portuguese'], ['es', 'Spanish'], ['he', 'Hebrew'], ['lad', 'Ladino'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['ja', 'Japanese'], ['zh', 'Chinese'], ['ar', 'Arabic'], ['nl', 'Dutch'], ['ru', 'Russian'], ['la', 'Latin'], ['yi', 'Yiddish'], ['arc', 'Aramaic']];
+function isbnClean(s) { return String(s || '').replace(/[^0-9Xx]/g, '').toUpperCase(); }
+function isbnValid(s) { const v = isbnClean(s); if (v.length === 10) { let t = 0; for (let i = 0; i < 10; i++) t += (v[i] === 'X' ? 10 : +v[i]) * (10 - i); return t % 11 === 0 && !/X./.test(v); } if (v.length === 13 && /^\d+$/.test(v)) { let t = 0; for (let i = 0; i < 13; i++) t += +v[i] * (i % 2 ? 3 : 1); return t % 10 === 0; } return false; }
+function isbn13(s) { const v = isbnClean(s); if (v.length !== 10) return v; const b = '978' + v.slice(0, 9); let t = 0; for (let i = 0; i < 12; i++) t += +b[i] * (i % 2 ? 3 : 1); return b + ((10 - t % 10) % 10); }
+async function findIsbns(d) {
+  const n = d.info.length; const pages = [...new Set([...Array(Math.min(n, 15)).keys(), ...Array.from({ length: Math.min(n, 6) }, (_, k) => n - 1 - k)])]; const found = new Map();
+  for (const i of pages) { const s = await ixPageString(d, i); for (const m of s.matchAll(/(?:ISBN(?:-1[03])?[:\s]*)?((?:97[89][\s-]?)?\d[\d\s-]{7,14}[\dXx])/g)) { const v = isbnClean(m[1]); if ((v.length === 10 || v.length === 13) && isbnValid(v) && (/ISBN/i.test(m[0]) || v.length === 13)) { const k = isbn13(v); if (!found.has(k)) found.set(k, { isbn: k, page: i, ctx: s.slice(Math.max(0, m.index - 30), m.index + m[0].length + 10).replace(/\s+/g, ' ') }); } } }
+  return [...found.values()];
+}
+function lxReadXmp(pdf) {
+  try {
+    const s = pdf.catalog.lookup(LX.N('Metadata')); if (!s) return null;
+    let bytes = s.contents; if (s.dict && s.dict.get(LX.N('Filter')) && PDFLib.decodePDFRawStream) bytes = PDFLib.decodePDFRawStream(s).decode();
+    const doc = new DOMParser().parseFromString(new TextDecoder().decode(bytes).replace(/^[^<]+/, ''), 'application/xml'); if (doc.querySelector('parsererror')) return null;
+    const one = (ns, n) => { const e = doc.getElementsByTagNameNS(ns, n)[0]; if (!e) return null; const li = e.getElementsByTagNameNS(XNS.rdf, 'li'); if (li.length) return [...li].map(x => x.textContent.trim()).filter(Boolean); const v = e.getElementsByTagNameNS(XNS.rdf, 'value')[0]; return v ? v.textContent.trim() : e.textContent.trim(); };
+    const attr = (ns, n) => { for (const e of doc.getElementsByTagNameNS(XNS.rdf, 'Description')) { const v = e.getAttributeNS(ns, n); if (v) return v; } return null; };
+    const get = (ns, n) => one(ns, n) ?? attr(ns, n);
+    const first = v => Array.isArray(v) ? v[0] : v;
+    const ids = {}; for (const li of doc.getElementsByTagNameNS(XNS.xmp, 'Identifier')[0]?.getElementsByTagNameNS(XNS.rdf, 'li') || []) { const sch = li.getElementsByTagNameNS(XNS.xmpidq, 'Scheme')[0]?.textContent || li.getAttributeNS(XNS.xmpidq, 'Scheme'); const val = li.getElementsByTagNameNS(XNS.rdf, 'value')[0]?.textContent || li.textContent; if (sch && val) ids[sch.toLowerCase()] = val.trim(); }
+    const dcid = get(XNS.dc, 'identifier'); for (const v of [].concat(dcid || [])) { const m = /^(?:urn:)?(isbn|doi)[:\s]*(.+)$/i.exec(v); if (m) ids[m[1].toLowerCase()] ??= m[2]; }
+    const ser = doc.getElementsByTagNameNS(XNS.calibre, 'series')[0];
+    return {
+      title: first(get(XNS.dc, 'title')), authors: [].concat(get(XNS.dc, 'creator') || []), description: first(get(XNS.dc, 'description')), tags: [].concat(get(XNS.dc, 'subject') || []), publisher: first(get(XNS.dc, 'publisher')), language: first(get(XNS.dc, 'language')), date: first(get(XNS.dc, 'date')), ids,
+      series: ser ? (ser.getElementsByTagNameNS(XNS.rdf, 'value')[0]?.textContent || ser.textContent).trim() : null, seriesIndex: ser ? ser.getElementsByTagNameNS(XNS.calibreSI, 'series_index')[0]?.textContent : null,
+      titleSort: first(get(XNS.calibre, 'title_sort')), authorSort: first(get(XNS.calibre, 'author_sort')), rating: first(get(XNS.calibre, 'rating')) ?? first(get(XNS.xmp, 'Rating')), isbn: first(get(XNS.prism, 'isbn'))
+    };
+  } catch (e) { console.warn('XMP', e); return null; }
+}
+const xe = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function xmpPacket(m, profile) {
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z'); const cal = profile !== 'acrobat';
+  const alt = v => `<rdf:Alt><rdf:li xml:lang="x-default">${xe(v)}</rdf:li></rdf:Alt>`; const seq = a => `<rdf:Seq>${a.map(v => `<rdf:li>${xe(v)}</rdf:li>`).join('')}</rdf:Seq>`; const bag = a => `<rdf:Bag>${a.map(v => `<rdf:li>${xe(v)}</rdf:li>`).join('')}</rdf:Bag>`;
+  const ids = Object.entries(m.ids || {}).filter(([, v]) => v);
+  const dc = [m.title && `<dc:title>${alt(m.title)}</dc:title>`, m.authors.length && `<dc:creator>${seq(m.authors)}</dc:creator>`, m.description && `<dc:description>${alt(m.description)}</dc:description>`, m.tags.length && `<dc:subject>${bag(m.tags)}</dc:subject>`, m.publisher && `<dc:publisher>${bag([m.publisher])}</dc:publisher>`, m.language && `<dc:language>${bag([m.language])}</dc:language>`, m.date && `<dc:date>${seq([m.date])}</dc:date>`, ids.length && `<dc:identifier>${xe(ids.map(([k, v]) => k === 'isbn' ? 'urn:isbn:' + v : k + ':' + v)[0])}</dc:identifier>`, '<dc:format>application/pdf</dc:format>'].filter(Boolean).join('\n   ');
+  const idx = ids.length ? `<xmp:Identifier><rdf:Bag>${ids.map(([k, v]) => `<rdf:li rdf:parseType="Resource"><xmpidq:Scheme>${xe(k)}</xmpidq:Scheme><rdf:value>${xe(v)}</rdf:value></rdf:li>`).join('')}</rdf:Bag></xmp:Identifier>` : '';
+  const calx = cal ? [m.series && `<calibre:series rdf:parseType="Resource"><rdf:value>${xe(m.series)}</rdf:value><calibreSI:series_index>${xe((+m.seriesIndex || 1).toFixed(1))}</calibreSI:series_index></calibre:series>`, m.titleSort && `<calibre:title_sort>${xe(m.titleSort)}</calibre:title_sort>`, m.authorSort && `<calibre:author_sort>${xe(m.authorSort)}</calibre:author_sort>`, m.rating && `<calibre:rating>${xe(+m.rating * 2)}</calibre:rating>`, `<calibre:timestamp>${now}</calibre:timestamp>`].filter(Boolean).join('\n   ') : '';
+  const body = `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Quire PDF Studio">
+ <rdf:RDF xmlns:rdf="${XNS.rdf}">
+  <rdf:Description rdf:about="" xmlns:dc="${XNS.dc}">
+   ${dc}
+  </rdf:Description>
+  <rdf:Description rdf:about="" xmlns:pdf="${XNS.pdf}">
+   <pdf:Producer>Quire PDF Studio</pdf:Producer>${m.tags.length ? `<pdf:Keywords>${xe(m.tags.join(', '))}</pdf:Keywords>` : ''}
+  </rdf:Description>
+  <rdf:Description rdf:about="" xmlns:xmp="${XNS.xmp}" xmlns:xmpidq="${XNS.xmpidq}">
+   <xmp:CreatorTool>Quire PDF Studio</xmp:CreatorTool><xmp:ModifyDate>${now}</xmp:ModifyDate><xmp:MetadataDate>${now}</xmp:MetadataDate>${m.created ? `<xmp:CreateDate>${xe(m.created)}</xmp:CreateDate>` : ''}${m.rating ? `<xmp:Rating>${xe(m.rating)}</xmp:Rating>` : ''}
+   ${idx}
+  </rdf:Description>
+  <rdf:Description rdf:about="" xmlns:xmpMM="${XNS.xmpMM}"><xmpMM:DocumentID>${xe(m.docId)}</xmpMM:DocumentID></rdf:Description>${m.ids && m.ids.isbn ? `
+  <rdf:Description rdf:about="" xmlns:prism="${XNS.prism}"><prism:isbn>${xe(m.ids.isbn)}</prism:isbn></rdf:Description>` : ''}${calx ? `
+  <rdf:Description rdf:about="" xmlns:calibre="${XNS.calibre}" xmlns:calibreSI="${XNS.calibreSI}">
+   ${calx}
+  </rdf:Description>` : ''}
+ </rdf:RDF>
+</x:xmpmeta>
+${' '.repeat(1500)}
+<?xpacket end="w"?>`;
+  return new TextEncoder().encode(body);
+}
+const splitAuthors = s => String(s || '').split(/\s*(?:&|;|\n|\band\b(?=\s+\p{Lu}))\s*/u).map(x => x.trim()).filter(Boolean);
+const authorSortOf = a => { const p = a.trim().split(/\s+/); if (p.length < 2 || /,/.test(a)) return a; const sfx = /^(jr\.?|sr\.?|ii|iii|iv)$/i.test(p[p.length - 1]) ? ' ' + p.pop() : ''; return p.pop() + ', ' + p.join(' ') + sfx; };
+const titleSortOf = t => t.replace(/^(the|a|an|o|a|os|as|um|uma|el|la|los|las|le|les|der|die|das)\s+(.+)$/i, (_, a, b) => `${b}, ${a}`);
+const calibreName = m => `${(m.title || 'Untitled').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120)} - ${(m.authors[0] || 'Unknown').replace(/[\\/:*?"<>|]+/g, '_')}.pdf`;
+async function libRead(d) {
+  const pdf = await PDFDocument.load(d.bytes, LOAD); const x = lxReadXmp(pdf) || {}; const cat = pdf.catalog; const N = LX.N;
+  const vp = cat.lookup(N('ViewerPreferences')); const oa = cat.lookup(N('OpenAction'));
+  let openPage = 1, zoom = ''; if (oa instanceof PDFLib.PDFArray && oa.size()) { const r = oa.get(0); const k = pdf.getPages().findIndex(p => r instanceof PDFLib.PDFRef && p.ref.tag === r.tag); if (k >= 0) openPage = k + 1; const kind = oa.lookup(1); zoom = kind ? kind.asString().replace('/', '') : ''; if (zoom === 'XYZ') { const z = lxNum(oa.lookup(4)); zoom = z === 1 ? 'XYZ100' : ''; } }
+  const info = { title: pdf.getTitle() || '', author: pdf.getAuthor() || '', subject: pdf.getSubject() || '', keywords: pdf.getKeywords() || '' };
+  const ids = Object.assign({}, x.ids || {}); if (!ids.isbn && x.isbn) ids.isbn = x.isbn;
+  const pm = cat.lookup(N('PageMode')), pl = cat.lookup(N('PageLayout'));
+  const cd = pdf.getCreationDate();
+  return {
+    title: x.title || info.title, authors: x.authors && x.authors.length ? x.authors : splitAuthors(info.author), description: x.description || info.subject, tags: x.tags && x.tags.length ? x.tags : info.keywords.split(/\s*[,;]\s*/).filter(Boolean),
+    publisher: x.publisher || '', language: x.language || lxStr(cat.lookup(N('Lang'))) || '', date: (x.date || '').slice(0, 10), ids, series: x.series || '', seriesIndex: x.seriesIndex ? +x.seriesIndex : '', titleSort: x.titleSort || '', authorSort: x.authorSort || '', rating: x.rating ? Math.round(+x.rating > 5 ? +x.rating / 2 : +x.rating) : '',
+    pageMode: pm ? pm.asString().replace('/', '') : '', pageLayout: pl ? pl.asString().replace('/', '') : '', openPage, zoom, showTitle: !!(vp instanceof PDFLib.PDFDict && vp.lookup(N('DisplayDocTitle')) === PDFLib.PDFBool.True),
+    created: cd ? cd.toISOString().replace(/\.\d+Z$/, 'Z') : null, docId: 'uuid:' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36))
+  };
+}
+function libApply(pdf, m, profile) {
+  const N = LX.N, ctx = pdf.context, cat = pdf.catalog; const cal = profile !== 'acrobat';
+  pdf.setTitle(m.title || '', { showInWindowTitleBar: !!m.showTitle }); pdf.setAuthor(m.authors.join(cal ? ' & ' : '; ')); pdf.setSubject(m.description || ''); pdf.setProducer('Quire PDF Studio'); pdf.setModificationDate(new Date());
+  const info = pdf.getInfoDict(); for (const k of ['ISBN', 'Publisher', 'Series']) info.delete(N(k)); info.set(N('Keywords'), LX.T(m.tags.join(', '))); // calibre splits Keywords on commas
+  if (m.ids.isbn) info.set(N('ISBN'), LX.T(m.ids.isbn)); if (m.publisher) info.set(N('Publisher'), LX.T(m.publisher)); if (m.series) info.set(N('Series'), LX.T(m.series + (m.seriesIndex ? ' ' + m.seriesIndex : '')));
+  if (m.language) cat.set(N('Lang'), PDFLib.PDFString.of(m.language)); else cat.delete(N('Lang'));
+  const old = cat.get(N('Metadata')); if (old instanceof PDFLib.PDFRef) ctx.delete(old);
+  cat.set(N('Metadata'), ctx.register(ctx.stream(xmpPacket(m, profile), { Type: 'Metadata', Subtype: 'XML' })));
+  if (m.pageMode) cat.set(N('PageMode'), N(m.pageMode)); else cat.delete(N('PageMode'));
+  if (m.pageLayout) cat.set(N('PageLayout'), N(m.pageLayout)); else cat.delete(N('PageLayout'));
+  const pages = pdf.getPages(); const op = Math.max(1, Math.min(pages.length, +m.openPage || 1)) - 1;
+  if (op || m.zoom) cat.set(N('OpenAction'), ctx.obj(m.zoom === 'Fit' ? [pages[op].ref, 'Fit'] : m.zoom === 'FitH' ? [pages[op].ref, 'FitH', null] : m.zoom === 'XYZ100' ? [pages[op].ref, 'XYZ', null, null, 1] : [pages[op].ref, 'XYZ', null, null, null]));
+  else { const oa = cat.lookup(N('OpenAction')); if (oa instanceof PDFLib.PDFArray) cat.delete(N('OpenAction')); }
+  // Tagged-PDF hint readers use for reflow; only claimed when the file really has a structure tree.
+  if (cat.get(N('StructTreeRoot')) && !cat.get(N('MarkInfo'))) cat.set(N('MarkInfo'), ctx.obj({ Marked: true }));
+}
+function opfFor(m) {
+  const ids = Object.entries(m.ids).filter(([, v]) => v);
+  return `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier opf:scheme="uuid" id="uuid_id">${xe(m.docId.replace(/^uuid:/, ''))}</dc:identifier>
+${ids.map(([k, v]) => `    <dc:identifier opf:scheme="${xe(k.toUpperCase())}">${xe(v)}</dc:identifier>`).join('\n')}
+    <dc:title>${xe(m.title)}</dc:title>
+${m.authors.map(a => `    <dc:creator opf:role="aut" opf:file-as="${xe(m.authorSort || authorSortOf(a))}">${xe(a)}</dc:creator>`).join('\n')}
+${m.description ? `    <dc:description>${xe(m.description)}</dc:description>\n` : ''}${m.publisher ? `    <dc:publisher>${xe(m.publisher)}</dc:publisher>\n` : ''}${m.date ? `    <dc:date>${xe(m.date)}</dc:date>\n` : ''}${m.language ? `    <dc:language>${xe(m.language)}</dc:language>\n` : ''}${m.tags.map(t => `    <dc:subject>${xe(t)}</dc:subject>`).join('\n')}
+${m.series ? `    <meta name="calibre:series" content="${xe(m.series)}"/>\n    <meta name="calibre:series_index" content="${xe(m.seriesIndex || 1)}"/>\n` : ''}${m.rating ? `    <meta name="calibre:rating" content="${xe(+m.rating * 2)}"/>\n` : ''}    <meta name="calibre:title_sort" content="${xe(m.titleSort || titleSortOf(m.title))}"/>
+  </metadata>
+  <guide><reference type="cover" title="Cover" href="cover.jpg"/></guide>
+</package>`;
+}
+S.lib = Object.assign({ profile: 'calibre', rename: true }, pref.get('lib', {}));
+const EST = Object.assign({ base: 'http://localhost:8484', key: '' }, pref.get('estante', {}));
+async function estFetch(path, opts = {}, ms = 4000) {
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), ms);
+  try { return await fetch(EST.base.replace(/\/+$/, '') + path, { ...opts, signal: ac.signal, headers: { ...(EST.key ? { Authorization: 'Bearer ' + EST.key } : {}), ...(opts.headers || {}) } }); }
+  finally { clearTimeout(t); }
+}
+async function estProbe() {
+  try { const r = await estFetch('/api/info', {}, 2500); if (r.status === 401) return { state: 'login' }; const j = await r.json(); return { state: j.needs_login ? 'login' : 'ok', info: j, features: j.features || [] }; }
+  catch { return { state: 'unreachable' }; }
+}
+async function estShelfTags() {
+  try { const r = await estFetch('/api/shelf'); if (!r.ok) return null; const j = await r.json(); return (j.shelves || []).map(s => ({ name: (s.emoji ? s.emoji + ' ' : '') + s.name, tags: [...String(s.query || '').matchAll(/tag:(?:"([^"]+)"|\\"([^"\\]+)\\"|(\S+))/g)].map(m => m[1] || m[2] || m[3]) })).filter(s => s.tags.length); }
+  catch { return null; }
+}
+function libFormRead(P, base) {
+  const g = id => ($('#' + id, P) || {}).value ?? '';
+  const ids = { ...(base.ids || {}) }; ids.isbn = isbnClean(g('lbIsbn')) || ''; for (const k of Object.keys(ids)) if (k !== 'isbn') delete ids[k];
+  for (const part of g('lbIds').split(/[,\n]+/)) { const m = part.trim().match(/^([a-z][\w-]*)\s*:\s*(.+)$/i); if (m) ids[m[1].toLowerCase()] = m[2].trim(); }
+  return Object.assign({}, base, { title: g('lbTitle').trim(), authors: splitAuthors(g('lbAuth')), titleSort: g('lbTS').trim(), authorSort: g('lbAS').trim(), series: g('lbSer').trim(), seriesIndex: g('lbSerN') ? +g('lbSerN') : '', publisher: g('lbPub').trim(), date: g('lbDate'), language: g('lbLang'), ids, tags: g('lbTags').split(/\s*,\s*/).map(t => t.trim()).filter(Boolean), rating: g('lbRate') ? +g('lbRate') : '', description: g('lbDesc').trim(), pageMode: g('lbMode'), pageLayout: g('lbLay'), openPage: +g('lbOpen') || 1, zoom: g('lbZoom'), showTitle: !!($('#lbShowT', P) || {}).checked });
+}
+async function libChecks(d, m, profile) {
+  const out = []; const ok = (state, text) => out.push({ state, text }); const cal = profile !== 'acrobat';
+  ok(m.title ? 'ok' : 'bad', m.title ? 'Title is set' : 'No title: libraries will use the file name');
+  ok(m.authors.length ? 'ok' : 'bad', m.authors.length ? `Author${m.authors.length > 1 ? 's' : ''}: ${m.authors.join(cal ? ' & ' : '; ')}` : 'No author: it will be filed under Unknown');
+  if (cal) ok(m.ids.isbn ? (isbnValid(m.ids.isbn) ? 'ok' : 'bad') : 'info', m.ids.isbn ? (isbnValid(m.ids.isbn) ? 'ISBN is valid, so calibre can fetch covers and reviews' : 'The ISBN fails its check digit') : 'No ISBN. Try "Find in book".');
+  ok(m.language ? 'ok' : 'info', m.language ? `Language: ${m.language}` : 'No language set (screen readers and calibre use it)');
+  if (cal) ok(m.series ? 'ok' : 'info', m.series ? `Series: ${m.series} #${m.seriesIndex || 1}` : 'Not part of a series');
+  const bm = d.bm && !d.bm.dirty ? d.bm.tree : await bmRead(d); ok(bm.length ? 'ok' : 'info', bm.length ? `${bmCount(bm)} bookmarks (shown as the table of contents)` : 'No bookmarks: readers will have no table of contents. Index → Bookmarks can make them.');
+  const lab = await docLabels(d); ok(lab ? 'ok' : 'info', lab ? `Page labels: starts ${lab[0]}, ends ${lab[lab.length - 1]}` : 'No page labels: page numbers follow the file, not the printed book');
+  if (cal) ok('info', 'Calibre and Estante make the cover from page 1. Check that page 1 is the cover.');
+  return out;
+}
+TASKS.library = async function (P, d) {
+  P.innerHTML = `<section class="sec">${head('Library info')}<p class="muted">Reading…</p></section>`; bindClose(P);
+  if (!d.lib || d.lib.bytes !== d.bytes) { try { d.lib = { bytes: d.bytes, m: await libRead(d) }; } catch (e) { P.querySelector('p').textContent = 'Cannot read this file\'s properties: ' + e.message; return; } }
+  if (S.task !== 'library' || cur() !== d) return;
+  let m = d.lib.m; const prof = () => S.lib.profile; let shelves = null;
+  const opt = (v, l, cur) => `<option value="${v}"${String(cur) === String(v) ? ' selected' : ''}>${l}</option>`;
+  const draw = () => {
+    const cal = prof() !== 'acrobat'; const ids = Object.entries(m.ids || {}).filter(([k, v]) => k !== 'isbn' && v).map(([k, v]) => `${k}:${v}`).join(', ');
+    P.innerHTML = `<section class="sec">${head('Library info')}
+      <div class="segs" id="lbProf" role="radiogroup" aria-label="Profile">${Object.entries(LIB_PROFILES).map(([k, p]) => `<button type="button" role="radio" aria-checked="${prof() === k}" data-p="${k}" class="${prof() === k ? 'on' : ''}">${p.label}</button>`).join('')}</div>
+      <p class="hint">${LIB_PROFILES[prof()].hint}</p>
+      <ul class="lb-checks" id="lbChecks"><li class="muted small">Checking…</li></ul></section>
+    <section class="sec"><h3>Book</h3>
+      <div class="field"><label for="lbTitle">Title</label><input id="lbTitle" class="inp" value="${esc(m.title)}"></div>
+      <div class="field"><label for="lbAuth">Authors</label><input id="lbAuth" class="inp" value="${esc(m.authors.join(' & '))}" placeholder="Separate authors with &"></div>
+      ${cal ? `<div class="grid2"><div class="field"><label for="lbTS">Title sort</label><input id="lbTS" class="inp" value="${esc(m.titleSort)}" placeholder="${esc(titleSortOf(m.title || ''))}"></div><div class="field"><label for="lbAS">Author sort</label><input id="lbAS" class="inp" value="${esc(m.authorSort)}" placeholder="${esc(m.authors.map(authorSortOf).join(' & '))}"></div></div>
+      <div class="grid2" style="grid-template-columns:1fr 70px"><div class="field"><label for="lbSer">Series</label><input id="lbSer" class="inp" value="${esc(m.series)}"></div><div class="field"><label for="lbSerN">Number</label><input id="lbSerN" class="inp" type="number" step="any" min="0" value="${esc(m.seriesIndex)}"></div></div>` : ''}
+      <div class="grid2"><div class="field"><label for="lbPub">Publisher</label><input id="lbPub" class="inp" value="${esc(m.publisher)}"></div><div class="field"><label for="lbDate">Published</label><input id="lbDate" class="inp" type="date" value="${esc(m.date)}"></div></div>
+      <div class="grid2"><div class="field"><label for="lbLang">Language</label><select id="lbLang" class="inp">${LIB_LANGS.map(([v, l]) => opt(v, l, m.language)).join('')}${m.language && !LIB_LANGS.some(([v]) => v === m.language) ? opt(m.language, m.language, m.language) : ''}</select></div>${cal ? `<div class="field"><label for="lbRate">Rating</label><select id="lbRate" class="inp">${opt('', '—', m.rating)}${[1, 2, 3, 4, 5].map(v => opt(v, '★'.repeat(v), m.rating)).join('')}</select></div>` : '<div></div>'}</div>
+      <div class="field"><label for="lbIsbn">ISBN</label><div class="row" style="flex-wrap:nowrap"><input id="lbIsbn" class="inp" value="${esc(m.ids.isbn || '')}" inputmode="numeric"><button class="btn" id="lbFind" style="flex:none">Find in book</button></div><span class="muted small" id="lbIsbnMsg"></span></div>
+      <div class="field"><label for="lbIds">Other identifiers</label><input id="lbIds" class="inp" value="${esc(ids)}" placeholder="doi:10.1000/xyz, goodreads:123"></div>
+      <div class="field"><label for="lbTags">Tags</label><input id="lbTags" class="inp" value="${esc(m.tags.join(', '))}" placeholder="Separate tags with commas"><div class="row" id="lbShelves"></div></div>
+      <div class="field"><label for="lbDesc">Description</label><textarea id="lbDesc">${esc(m.description)}</textarea></div></section>
+    <section class="sec"><h3>When the file opens</h3>
+      <div class="grid2"><div class="field"><label for="lbMode">Side panel</label><select id="lbMode" class="inp">${[['', 'Reader default'], ['UseNone', 'Page only'], ['UseOutlines', 'Bookmarks'], ['UseThumbs', 'Page thumbnails'], ['FullScreen', 'Full screen']].map(([v, l]) => opt(v, l, m.pageMode)).join('')}</select></div>
+      <div class="field"><label for="lbLay">Layout</label><select id="lbLay" class="inp">${[['', 'Reader default'], ['SinglePage', 'Single page'], ['OneColumn', 'Scrolling'], ['TwoPageLeft', 'Two-up'], ['TwoPageRight', 'Two-up, cover alone'], ['TwoColumnRight', 'Two-up scrolling, cover alone']].map(([v, l]) => opt(v, l, m.pageLayout)).join('')}</select></div></div>
+      <div class="grid2"><div class="field"><label for="lbOpen">Open at page</label><input id="lbOpen" class="inp" type="number" min="1" max="${d.info.length}" value="${m.openPage || 1}"></div><div class="field"><label for="lbZoom">Zoom</label><select id="lbZoom" class="inp">${[['', 'Reader default'], ['Fit', 'Fit page'], ['FitH', 'Fit width'], ['XYZ100', '100%']].map(([v, l]) => opt(v, l, m.zoom)).join('')}</select></div></div>
+      <label class="chk"><input type="checkbox" id="lbShowT" ${m.showTitle ? 'checked' : ''}> Show the title, not the file name, in the window</label></section>
+    <section class="sec">${cal ? `<label class="chk"><input type="checkbox" id="lbRen" ${S.lib.rename ? 'checked' : ''}> Name the file "Title - Author.pdf"</label>` : ''}
+      <div class="row"><button class="btn primary" id="lbGo">Apply to PDF</button>${cal ? '<button class="btn" id="lbOpf">Save .opf</button>' : ''}${prof() === 'estante' ? `<button class="btn" id="lbEst">${svg('send')}Send to Estante</button>` : ''}</div>
+      <p class="hint">${cal ? 'The .opf file is calibre\'s metadata format; keep it next to the PDF (as metadata.opf in the book\'s folder) and calibre reads it when you add the folder.' : 'Writes the Info dictionary and an XMP packet, the two places Acrobat\'s Document Properties read.'}</p></section>`;
+    bindClose(P);
+    $$('#lbProf button', P).forEach(b => b.onclick = () => { m = libFormRead(P, m); d.lib.m = m; S.lib.profile = b.dataset.p; pref.set('lib', S.lib); draw(); });
+    const recheck = async () => { const list = $('#lbChecks', P); if (!list) return; const c = await libChecks(d, libFormRead(P, m), prof()); if (!list.isConnected) return; list.innerHTML = c.map(x => `<li class="${x.state}"><span aria-hidden="true">${x.state === 'ok' ? '✓' : x.state === 'bad' ? '!' : '·'}</span>${esc(x.text)}</li>`).join(''); };
+    recheck(); $$('input,select,textarea', P).forEach(n => n.addEventListener('change', recheck));
+    $('#lbFind', P).onclick = async () => { const out = $('#lbIsbnMsg', P); out.textContent = 'Looking in the first and last pages…'; const f = await findIsbns(d); if (!f.length) { out.textContent = 'No valid ISBN found in the text. Scanned books need OCR first.'; return; } $('#lbIsbn', P).value = f[0].isbn; out.textContent = `Found on page ${f[0].page + 1}${f.length > 1 ? ` (also ${f.slice(1, 4).map(x => x.isbn).join(', ')})` : ''}: “${f[0].ctx}”`; recheck(); };
+    if (prof() === 'estante') (async () => {
+      const box = $('#lbShelves', P); if (!box) return; if (!shelves) { box.innerHTML = '<span class="muted small">Asking Estante for your shelves…</span>'; shelves = await estShelfTags() || []; }
+      if (!box.isConnected) return;
+      box.innerHTML = shelves.length ? shelves.map((s, k) => `<button type="button" class="tagchip" data-sh="${k}" title="Adds the tag ${esc(s.tags[0])}">${esc(s.name)}</button>`).join('') : `<span class="muted small">Estante is not answering at ${esc(EST.base)}, so its shelves can't be suggested.</span>`;
+      $$('[data-sh]', box).forEach(b => b.onclick = () => { const t = $('#lbTags', P); const cur0 = t.value.split(/\s*,\s*/).filter(Boolean); const add = shelves[+b.dataset.sh].tags[0]; if (!cur0.some(x => x.toLowerCase() === add.toLowerCase())) t.value = [...cur0, add].join(', '); });
+    })();
+    const ren = $('#lbRen', P); if (ren) ren.onchange = () => { S.lib.rename = ren.checked; pref.set('lib', S.lib); };
+    $('#lbGo', P).onclick = async () => {
+      const v = libFormRead(P, m); if (v.ids.isbn && !isbnValid(v.ids.isbn)) { toast('That ISBN fails its check digit. Fix it or clear it.'); return; }
+      const p = prof(); if (p !== 'acrobat') { if (!v.titleSort && v.title) v.titleSort = titleSortOf(v.title); if (!v.authorSort && v.authors.length) v.authorSort = v.authors.map(authorSortOf).join(' & '); }
+      if (await editBytes('Library info saved', pdf => libApply(pdf, v, p))) { d.lib = { bytes: d.bytes, m: v }; if (p !== 'acrobat' && S.lib.rename && v.title) { d.name = calibreName(v); renderTabs(); } }
+    };
+    const opf = $('#lbOpf', P); if (opf) opf.onclick = () => { const v = libFormRead(P, m); saveFile(baseName({ name: calibreName(v) }) + '.opf', new Blob([opfFor(v)], { type: 'application/oebps-package+xml' })); };
+    const es = $('#lbEst', P); if (es) es.onclick = () => { d.lib.m = libFormRead(P, m); sendToEstante(); };
+  };
+  draw();
+};
+async function sendToEstante() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  if (!d.lib || d.lib.bytes !== d.bytes) { try { d.lib = { bytes: d.bytes, m: await libRead(d) }; } catch { d.lib = null; } }
+  const m = d.lib ? d.lib.m : { title: baseName(d), authors: [], tags: [], ids: {}, description: '' };
+  const name = m.title ? calibreName(m) : d.name;
+  const r = await modal({ title: 'Send to Estante', body: `<p class="muted" style="margin:0">Adds this PDF to your Calibre library through Estante. Markup is drawn into the pages first.</p>
+    <dl class="kv"><dt>Title</dt><dd>${esc(m.title || '—')}</dd><dt>Authors</dt><dd>${esc(m.authors.join(' & ') || '—')}</dd><dt>Tags</dt><dd>${esc(m.tags.join(', ') || '—')}</dd><dt>ISBN</dt><dd>${esc(m.ids.isbn || '—')}</dd><dt>File</dt><dd>${esc(name)}</dd></dl>
+    <div class="field"><label for="esBase">Estante address</label><input id="esBase" class="inp" value="${esc(EST.base)}"></div>
+    <div class="field"><label for="esKey">API key (only if Estante has a password)</label><input id="esKey" class="inp" type="password" value="${esc(EST.key)}" placeholder="est_…" autocomplete="off"></div>
+    <p class="hint" style="margin:0">Fill in the book's details first in Index → Library info (Estante profile) so Calibre files it correctly.</p>`,
+    actions: [{ label: 'Cancel', value: null }, { label: 'Send', primary: true, value: 'ok' }] });
+  if (!r) return;
+  EST.base = $('#esBase').value.trim() || 'http://localhost:8484'; EST.key = $('#esKey').value.trim(); pref.set('estante', EST);
+  busy('Connecting to Estante…');
+  try {
+    const p = await estProbe();
+    if (p.state === 'unreachable') { unbusy(); await modal({ title: 'Estante is not answering', body: `<p style="margin:0">Nothing answered at <b>${esc(EST.base)}</b>. Either Estante isn't running, or it doesn't allow Quire yet. In Estante, open <b>Sync &amp; settings → Allowed web apps</b> and add <code>${esc(location.origin)}</code>, then try again.</p>`, actions: [{ label: 'OK', primary: true, value: 1 }] }); return; }
+    if (p.state === 'login') { unbusy(); toast('Estante has a password. Make an API key in Estante → API keys and paste it here.', 6000); return; }
+    $('#busyMsg').textContent = 'Preparing the PDF…'; const bytes = await buildOutput(d, { editable: false });
+    const H = { 'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(name) };
+    if (p.features.includes('upload-meta')) {
+      if (m.title) H['X-Title'] = encodeURIComponent(m.title); if (m.authors.length) H['X-Authors'] = encodeURIComponent(m.authors.join(' & '));
+      if (m.tags.length) H['X-Tags'] = encodeURIComponent(m.tags.join(', ')); if (m.description) H['X-Comments'] = encodeURIComponent(m.description);
+      const id = m.ids.isbn ? 'isbn:' + m.ids.isbn : Object.entries(m.ids).filter(([, v]) => v).map(([k, v]) => k + ':' + v)[0]; if (id) H['X-Identifier'] = encodeURIComponent(id);
+    }
+    $('#busyMsg').textContent = 'Sending to Estante…';
+    const res = await estFetch('/api/upload', { method: 'POST', headers: H, body: bytes }, 120000);
+    let j = {}; try { j = await res.json(); } catch {}
+    if (res.status === 401) toast('Estante wants a key. Make one in Estante → API keys.', 6000);
+    else if (res.status === 403) toast('Estante refused: ' + (j.error || j.message || 'this key cannot upload'), 6000);
+    else if (!res.ok) toast('Estante could not add it: ' + (j.error || j.message || res.status), 6000);
+    else toast({ added: 'Added to your Calibre library', auto_add: 'Handed to Calibre\'s auto-add folder', queued: 'Queued: Calibre adds it when it is free', duplicate: 'Calibre already has this book, so nothing was added' }[j.state] || 'Sent to Estante', 6000);
+  } catch (e) { toast('Could not send to Estante: ' + (e.message || e), 6000); }
+  finally { unbusy(); }
+}
+
+/* ---- index: embedded full-text index (Acrobat's "embedded index"), index search, coverage, back-of-book index ---- */
+const IX_FILE = 'quire-search-index.json';
+const IX_WORD = /[\p{L}\p{N}][\p{L}\p{N}\p{M}'’]*/gu;
+async function ixBuild(d, onProgress) {
+  const n = d.info.length; const words = new Map(); const textless = []; let chars = 0;
+  for (let i = 0; i < n; i++) {
+    if (onProgress && i % 5 === 0) onProgress(i, n);
+    const s = ixFold(await ixPageString(d, i)); chars += s.length; if (s.replace(/\s/g, '').length < 20) textless.push(i);
+    for (const m of s.matchAll(IX_WORD)) { const w = m[0].replace(/['’]s$/, ''); if (w.length < 2) continue; let a = words.get(w); if (!a) words.set(w, a = []); if (a[a.length - 1] !== i) a.push(i); }
+  }
+  const fp = await ixFingerprint(d);
+  return { v: 1, app: 'Quire PDF Studio', created: new Date().toISOString(), pages: n, fp, textless, chars, words: Object.fromEntries([...words].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([w, a]) => [w, ixPack(a)])) };
+}
+// Page lists are stored as ranges ("3-7,12") so a book's index stays small.
+const ixPack = a => { const o = []; for (let k = 0; k < a.length; k++) { let j = k; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; o.push(j > k ? `${a[k]}-${a[j]}` : `${a[k]}`); k = j; } return o.join(','); };
+const ixUnpack = s => { const o = []; for (const p of String(s).split(',')) { if (!p) continue; const [a, b] = p.split('-').map(Number); for (let i = a; i <= (isNaN(b) ? a : b); i++) o.push(i); } return o; };
+async function ixFingerprint(d) { let h = d.info.length * 2654435761 >>> 0; for (let i = 0; i < d.info.length; i++) { const tc = await pageText(d, i); let len = 0; for (const it of tc.items) len += (it.str || '').length; h = Math.imul(h ^ len ^ (i << 7), 2246822519) >>> 0; } return h.toString(36); }
+async function ixLoad(d) {
+  if (d.ix && d.ix.bytes === d.bytes) return d.ix.idx;
+  let idx = null; try { const att = await d.pdf.getAttachments(); const a = att && att[IX_FILE]; if (a) idx = JSON.parse(new TextDecoder().decode(a.content)); } catch {}
+  d.ix = { bytes: d.bytes, idx }; return idx;
+}
+function ixDetach(pdf) { // removes a previous copy of the index from the EmbeddedFiles name tree
+  const N = LX.N; const names = pdf.catalog.lookup(N('Names')); if (!(names instanceof PDFLib.PDFDict)) return;
+  const ef = names.lookup(N('EmbeddedFiles')); if (!(ef instanceof PDFLib.PDFDict)) return;
+  const strip = node => { const arr = node.lookup(N('Names')); if (arr instanceof PDFLib.PDFArray) { for (let k = arr.size() - 2; k >= 0; k -= 2) if (lxStr(arr.lookup(k)) === IX_FILE) { arr.remove(k + 1); arr.remove(k); } } const kids = node.lookup(N('Kids')); if (kids instanceof PDFLib.PDFArray) for (let k = 0; k < kids.size(); k++) strip(kids.lookup(k)); };
+  strip(ef);
+  const af = pdf.catalog.lookup(N('AF')); if (af instanceof PDFLib.PDFArray) for (let k = af.size() - 1; k >= 0; k--) { const fs = af.lookup(k); if (fs instanceof PDFLib.PDFDict && lxStr(fs.lookup(N('F'))) === IX_FILE) af.remove(k); }
+}
+// Search the index: every word must match (accents and case ignored); a word ending in * matches as a prefix;
+// "quoted words" must appear together on the page; -word excludes pages.
+async function ixSearch(d, idx, q) {
+  const terms = []; q.replace(/"([^"]+)"|(\S+)/g, (_, ph, w) => { terms.push(ph ? { phrase: ixFold(ph) } : w[0] === '-' && w.length > 1 ? { not: ixFold(w.slice(1)) } : { word: ixFold(w) }); });
+  const keys = Object.keys(idx.words); const pagesFor = w => { const pre = w.endsWith('*'); const base = pre ? w.slice(0, -1) : w; const s = new Set(); for (const k of pre ? keys.filter(k => k.startsWith(base)) : [base]) for (const p of ixUnpack(idx.words[k] || '')) s.add(p); return s; };
+  let hit = null;
+  for (const t of terms) { const words = t.phrase ? t.phrase.match(IX_WORD) || [] : t.word ? [t.word] : []; for (const w of words) { const s = pagesFor(w); hit = hit ? new Set([...hit].filter(p => s.has(p))) : s; } }
+  if (!hit) return [];
+  for (const t of terms) if (t.not) { const s = pagesFor(t.not); hit = new Set([...hit].filter(p => !s.has(p))); }
+  const out = [];
+  for (const p of [...hit].sort((a, b) => a - b)) {
+    if (p >= d.info.length) continue; const raw = await ixPageString(d, p); const f = ixFold(raw);
+    if (terms.some(t => t.phrase && !f.replace(/\s+/g, ' ').includes(t.phrase.replace(/\s+/g, ' ')))) continue;
+    const first = terms.find(t => t.phrase || t.word); const needle = first.phrase || first.word.replace(/\*$/, ''); const k = f.indexOf(needle);
+    out.push({ page: p, snip: k >= 0 ? raw.slice(Math.max(0, k - 40), k + needle.length + 60).replace(/\s+/g, ' ') : raw.slice(0, 90).replace(/\s+/g, ' '), at: k >= 0 ? Math.min(40, k) : -1, len: needle.length });
+  }
+  return out;
+}
+// Back-of-book index: terms (with variants) → page numbers, set in two columns with linked page numbers.
+async function bixCollect(d, terms, onProgress) {
+  const n = d.info.length; const pages = []; for (let i = 0; i < n; i++) { if (onProgress && i % 5 === 0) onProgress(i, n); pages.push(ixFold(await ixPageString(d, i)).replace(/\s+/g, ' ')); }
+  return terms.map(t => { const res = new Set(); for (const v of [t.term, ...t.alts]) { const f = ixFold(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'); const re = new RegExp(`(?<![\\p{L}\\p{N}])${f}(?![\\p{L}\\p{N}])`, 'u'); pages.forEach((s, i) => { if (re.test(s)) res.add(i); }); } return { ...t, pages: [...res].sort((a, b) => a - b) }; });
+}
+function bixParse(text) { return text.split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [a, b] = l.split(/\s*=\s*/); const sub = a.split(/\s*>\s*/); return { term: sub[sub.length - 1], parent: sub.length > 1 ? sub[0] : null, alts: (b || '').split(/\s*;\s*/).filter(Boolean) }; }); }
+async function bixSuggest(d, onProgress) {
+  const n = d.info.length; const counts = new Map(); const lower = new Map(); const STOP = new Set('the a an and or but in on at of for to from by with as is was this that these those it its he she they we you i my our your his her their there here when where what which who how why if then so not no yes all any some one two first chapter page part section figure table contents index introduction notes appendix also however therefore thus mr mrs dr st de da do la el le los las del o os um uma em no na para por com que se é and'.split(' '));
+  for (let i = 0; i < n; i++) {
+    if (onProgress && i % 5 === 0) onProgress(i, n);
+    const s = await ixPageString(d, i); const seen = new Set();
+    for (const m of s.matchAll(/\b\p{L}[\p{L}'’-]+/gu)) { const w = m[0]; if (/^\p{Ll}/u.test(w)) lower.set(w, (lower.get(w) || 0) + 1); }
+    for (const m of s.matchAll(/(?<![.!?:;"“]\s{0,3})(?<![\p{L}\p{N}'’-])(\p{Lu}[\p{L}'’-]+(?:[ \t]+(?:(?:of|de|da|do|dos|das|del|la|von|van|der|ben|bar|ibn|al|el|y|e|and)[ \t]+)?\p{Lu}[\p{L}'’-]+){0,3})/gmu)) {
+      let t = m[1].replace(/['’]s$/, ''); while (/\s/.test(t) && STOP.has(t.split(/\s+/)[0].toLowerCase())) t = t.replace(/^\S+\s+/, ''); const first = t.split(/\s+/)[0]; if (STOP.has(first.toLowerCase()) && !t.includes(' ')) continue; if (t.length < 3 || seen.has(t)) continue; seen.add(t); counts.set(t, (counts.get(t) || 0) + 1);
+    }
+  }
+  const maxPages = Math.max(3, n * .4);
+  return [...counts].filter(([t, c]) => c >= 2 && c <= maxPages && !STOP.has(t.toLowerCase()) && (t.includes(' ') || (lower.get(t.toLowerCase()) || 0) < c)).sort((a, b) => b[1] - a[1]).slice(0, 80).map(([t]) => t).sort((a, b) => a.localeCompare(b));
+}
+async function bixWrite(pdf, d, entries, o) {
+  const labels = o.useLabels ? await docLabels(d) : null; const lab = i => labels ? labels[i] : String(i + 1);
+  const F = await pdf.embedFont(StandardFonts.Helvetica), FB = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const src = pdf.getPage(pdf.getPageCount() - 1).getSize(); const W = src.width, H = src.height; const M = Math.max(40, Math.min(W, H) * .09);
+  const cols = W > 400 ? 2 : 1, gut = 18, cw = (W - 2 * M - gut * (cols - 1)) / cols; const fs = o.size || 9.5, lh = fs * 1.38;
+  const pageRefs = pdf.getPages().map(p => p.ref); const first = pdf.getPageCount();
+  const ranges = ps => { const out = []; for (let k = 0; k < ps.length; k++) { let j = k; while (j + 1 < ps.length && ps[j + 1] === ps[j] + 1 && /^\d+$/.test(lab(ps[j + 1])) && /^\d+$/.test(lab(ps[j]))) j++; out.push({ text: j > k ? `${lab(ps[k])}–${lab(ps[j])}` : lab(ps[k]), page: ps[k] }); k = j; } return out; };
+  let page, x, y, col; const newPage = () => { page = pdf.addPage([W, H]); col = 0; x = M; y = H - M; };
+  newPage(); page.drawText(safe(FB, o.title || 'Index'), { x: M, y: y - 18, size: 18, font: FB }); y -= 18 + lh * 2; const top0 = y;
+  const nextLine = (need = lh) => { y -= need; if (y < M) { col++; if (col >= cols) { newPage(); y = H - M; } else { y = (pdf.getPageCount() - 1 === first ? top0 : H - M); } x = M + col * (cw + gut); } };
+  const links = []; let letter = '';
+  const sorted = [...entries].filter(e => e.pages.length || e.kids?.length).sort((a, b) => a.term.localeCompare(b.term, undefined, { sensitivity: 'base' }));
+  const put = (e, indent) => {
+    const L = ixFold(e.term)[0]?.toUpperCase() || '#';
+    if (!indent && L !== letter && o.letters) { letter = L; if (y !== top0) nextLine(lh * .6); page.drawText(safe(FB, /\p{L}/u.test(L) ? L : '#'), { x: x, y, size: fs + 2, font: FB }); nextLine(); }
+    const toks = [{ t: safe(F, e.term) + (e.pages.length ? ',' : '') }].concat(ranges(e.pages).map((r, k, a) => ({ t: r.text + (k < a.length - 1 ? ',' : ''), page: r.page })));
+    let cx = x + indent; const max = x + cw;
+    toks.forEach((tk, k) => { const tw = F.widthOfTextAtSize(tk.t, fs); const sp = k ? F.widthOfTextAtSize(' ', fs) : 0; if (k && cx + sp + tw > max) { nextLine(); cx = x + indent + 12; } else cx += sp; page.drawText(tk.t, { x: cx, y, size: fs, font: F }); if (tk.page != null && o.links) links.push({ page, rect: [cx - 1, y - 2, cx + tw - (tk.t.endsWith(',') ? F.widthOfTextAtSize(',', fs) : 0) + 1, y + fs], to: tk.page }); cx += tw; });
+    nextLine();
+    for (const c of e.kids || []) put(c, indent + 12);
+  };
+  for (const e of sorted) put(e, 0);
+  for (const l of links) { const a = pdf.context.register(pdf.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: l.rect, Border: [0, 0, 0], Dest: [pageRefs[l.to], 'XYZ', null, null, null] })); l.page.node.addAnnot(a); }
+  return first;
+}
+S.bix = Object.assign({ terms: '', title: 'Index', links: true, letters: true, useLabels: true, bookmark: true }, pref.get('bix', {}));
+TASKS.bookindex = async function (P, d) {
+  P.innerHTML = `<section class="sec">${head('Index')}<p class="muted">Reading…</p></section>`; bindClose(P);
+  const idx = await ixLoad(d); if (S.task !== 'bookindex' || cur() !== d) return;
+  const stale = idx && (idx.pages !== d.info.length || (idx.fp && idx.fp !== await ixFingerprint(d)));
+  if (S.task !== 'bookindex' || cur() !== d) return;
+  const B = S.bix; const nWords = idx ? Object.keys(idx.words).length : 0;
+  P.innerHTML = `<section class="sec">${head('Index')}
+      <p class="hint">Like Acrobat's embedded index: a word list stored inside the PDF, so a large book is searched at once instead of page by page. Quire's index ignores accents and case and joins words broken across lines.</p>
+      ${idx ? `<dl class="kv"><dt>Index</dt><dd>${nWords.toLocaleString()} words · ${idx.pages} pages</dd><dt>Built</dt><dd>${new Date(idx.created).toLocaleString()}</dd><dt>Text</dt><dd>${idx.textless.length ? `${idx.pages - idx.textless.length} of ${idx.pages} pages have text` : 'Every page has text'}</dd></dl>${stale ? '<p class="hint" style="color:var(--danger)">The pages have changed since the index was built. Rebuild it.</p>' : ''}` : '<p class="muted small" style="margin:0">This PDF has no embedded index yet.</p>'}
+      <div class="row"><button class="btn ${idx && !stale ? '' : 'primary'}" id="ixGo">${idx ? 'Rebuild index' : 'Build index'}</button>${idx ? '<button class="btn" id="ixDel">Remove</button>' : ''}</div>
+      <div id="ixCov"></div>
+      ${idx ? `<div class="field"><label for="ixQ">Search the index</label><input id="ixQ" type="search" class="inp" placeholder='e.g. inquisi* "new christians" -lisbon'></div><span class="muted small">word* matches the start of words · "two words" together · -word leaves pages out</span><ol class="results" id="ixRes"></ol>` : ''}
+    </section>
+    <section class="sec"><h3>Book index</h3>
+      <p class="hint">Adds index pages at the end of the book, with page numbers that link to the page. One term per line. <code>Term = other spelling; abbreviation</code> finds variants; <code>Main &gt; sub-term</code> nests.</p>
+      <div class="field"><textarea id="bxT" style="min-height:120px" placeholder="Maimonides = Rambam; Moses ben Maimon&#10;Inquisition&#10;Inquisition > Lisbon">${esc(B.terms)}</textarea></div>
+      <div class="row"><button class="btn" id="bxSug">Suggest terms</button><span class="muted small" id="bxMsg"></span></div>
+      <div class="grid2"><div class="field"><label for="bxTitle">Heading</label><input id="bxTitle" class="inp" value="${esc(B.title)}"></div><div></div></div>
+      <label class="chk"><input type="checkbox" id="bxL" ${B.links ? 'checked' : ''}> Link page numbers to their pages</label>
+      <label class="chk"><input type="checkbox" id="bxA" ${B.letters ? 'checked' : ''}> Letter headings (A, B, C…)</label>
+      <label class="chk"><input type="checkbox" id="bxPL" ${B.useLabels ? 'checked' : ''}> Use page labels (printed numbers)</label>
+      <label class="chk"><input type="checkbox" id="bxBM" ${B.bookmark ? 'checked' : ''}> Add an "Index" bookmark</label>
+      <div class="row"><button class="btn" id="bxPrev">Preview</button><button class="btn primary" id="bxGo">Add index pages</button></div>
+      <ol class="results" id="bxRes"></ol></section>`;
+  bindClose(P);
+  const cov = $('#ixCov', P);
+  if (idx && idx.textless.length) { cov.innerHTML = `<p class="hint">${idx.textless.length} page${idx.textless.length > 1 ? 's have' : ' has'} no text (${idx.textless.slice(0, 8).map(i => i + 1).join(', ')}${idx.textless.length > 8 ? '…' : ''}), so ${idx.textless.length > 1 ? 'they are' : 'it is'} invisible to search, Calibre's full-text search and Estante. </p><button class="btn" id="ixOcr">Run OCR</button>`; $('#ixOcr', cov).onclick = () => openTask('ocr'); }
+  $('#ixGo', P).onclick = async () => {
+    busy('Building the index…'); let built;
+    try { built = await ixBuild(d, (i, n) => $('#busyMsg').textContent = `Indexing page ${i + 1} of ${n}…`); } catch (e) { unbusy(); toast('Could not build the index: ' + (e.message || e)); return; }
+    unbusy();
+    const json = new TextEncoder().encode(JSON.stringify(built));
+    if (await editBytes('Index built', async pdf => { ixDetach(pdf); await pdf.attach(json, IX_FILE, { mimeType: 'application/json', description: 'Quire PDF Studio: full-text search index', creationDate: new Date(), modificationDate: new Date() }); })) { d.ix = { bytes: d.bytes, idx: built }; toast(`Indexed ${Object.keys(built.words).length.toLocaleString()} words on ${built.pages} pages${built.textless.length ? `; ${built.textless.length} pages have no text` : ''}`, 5000); }
+  };
+  if ($('#ixDel', P)) $('#ixDel', P).onclick = () => editBytes('Index removed', pdf => ixDetach(pdf)).then(ok => { if (ok) d.ix = { bytes: d.bytes, idx: null }; });
+  const q = $('#ixQ', P); if (q) { let job = 0; q.oninput = async () => { const my = ++job; const v = q.value.trim(); const res = $('#ixRes', P); if (!v) { res.innerHTML = ''; return; } const H = await ixSearch(d, idx, v); if (my !== job) return; const labels = await docLabels(d); res.innerHTML = (H.length ? '' : '<li class="muted small">No pages match.</li>') + H.slice(0, 200).map(h => `<li><button data-p="${h.page}"><span class="muted">p.${esc(labels ? labels[h.page] : h.page + 1)}</span> ${h.at >= 0 ? `${esc(h.snip.slice(0, h.at))}<b>${esc(h.snip.slice(h.at, h.at + h.len))}</b>${esc(h.snip.slice(h.at + h.len))}` : esc(h.snip)}</button></li>`).join(''); $$('[data-p]', res).forEach(b => b.onclick = () => gotoPage(+b.dataset.p)); }; }
+  const save = () => { Object.assign(B, { terms: $('#bxT', P).value, title: $('#bxTitle', P).value.trim() || 'Index', links: $('#bxL', P).checked, letters: $('#bxA', P).checked, useLabels: $('#bxPL', P).checked, bookmark: $('#bxBM', P).checked }); pref.set('bix', B); };
+  $$('#bxT,#bxTitle,#bxL,#bxA,#bxPL,#bxBM', P).forEach(n => n.onchange = save);
+  $('#bxSug', P).onclick = async () => { busy('Looking for names and terms…'); try { const s = await bixSuggest(d, (i, n) => $('#busyMsg').textContent = `Reading page ${i + 1} of ${n}…`); const ta = $('#bxT', P); const have = new Set(bixParse(ta.value).map(t => t.term.toLowerCase())); const add = s.filter(t => !have.has(t.toLowerCase())); ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + add.join('\n'); save(); $('#bxMsg', P).textContent = add.length ? `${add.length} added. Delete the ones you don't want.` : 'Nothing new found.'; } finally { unbusy(); } };
+  const collect = async () => {
+    save(); const T = bixParse(B.terms); if (!T.length) { toast('Type some terms first, or press Suggest terms'); return null; }
+    busy('Finding the terms…'); try { const found = await bixCollect(d, T, (i, n) => $('#busyMsg').textContent = `Reading page ${i + 1} of ${n}…`); const top = []; const byName = new Map();
+      for (const e of found.filter(e => !e.parent)) { const x = { ...e, kids: [] }; top.push(x); byName.set(e.term.toLowerCase(), x); }
+      for (const e of found.filter(e => e.parent)) { let p = byName.get(e.parent.toLowerCase()); if (!p) { p = (await bixCollect(d, [{ term: e.parent, alts: [], parent: null }]))[0]; p.kids = []; top.push(p); byName.set(e.parent.toLowerCase(), p); } const own = new Set(p.pages); p.kids.push({ ...e, pages: e.pages.filter(x => own.has(x)), kids: [] }); } // a sub-term counts only on pages that also mention its main term
+      top.forEach(t => t.kids.sort((a, b) => a.term.localeCompare(b.term))); return top; } finally { unbusy(); }
+  };
+  $('#bxPrev', P).onclick = async () => { const top = await collect(); if (!top) return; const labels = B.useLabels ? await docLabels(d) : null; const L = i => labels ? labels[i] : i + 1; const flat = []; for (const t of top.sort((a, b) => a.term.localeCompare(b.term))) { flat.push([t, 0]); t.kids.forEach(k => flat.push([k, 1])); } const miss = flat.filter(([e]) => !e.pages.length && !(e.kids || []).length).length; $('#bxRes', P).innerHTML = (miss ? `<li class="muted small">${miss} term${miss > 1 ? 's were' : ' was'} not found and will be left out.</li>` : '') + flat.map(([e, lv]) => `<li><button ${e.pages.length ? `data-p="${e.pages[0]}"` : 'disabled'} style="padding-left:${8 + lv * 14}px">${esc(e.term)} <span class="muted">${e.pages.length ? e.pages.slice(0, 12).map(L).join(', ') + (e.pages.length > 12 ? '…' : '') : '—'}</span></button></li>`).join(''); $$('#bxRes [data-p]', P).forEach(b => b.onclick = () => gotoPage(+b.dataset.p)); };
+  $('#bxGo', P).onclick = async () => {
+    const top = await collect(); if (!top) return; if (!top.some(t => t.pages.length || t.kids.some(k => k.pages.length))) { toast('None of the terms appear in the text. Scanned pages need OCR first.'); return; }
+    const opts = { ...B }; const bm = d.bm && d.bm.dirty ? null : true;
+    if (await editBytes('Index pages added', async pdf => { const at = await bixWrite(pdf, d, top, opts); if (opts.bookmark && bm) { const tree = await bmRead(d); tree.push({ title: opts.title, page: at, top: null, open: false, kids: [] }); bmWrite(pdf, tree); } const r = plRead(pdf); if (r.length) { r.push({ start: at, style: 'D', prefix: opts.title + ' ', st: 1 }); plWrite(pdf, r); } }, 'Setting the index…')) { d.bm = null; gotoPage(d.info.length - 1); }
+  };
+};
+
 /* ================= signature ================= */
 async function signatureDialog() {
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';

@@ -143,8 +143,10 @@ app.whenReady().then(() => {
   // Offline guarantee: refuse every request that would leave this computer. The one exception is downloading an OCR
   // language the user picked in the language manager (a read-only GET of a public model file; nothing is sent).
   const OCR_DOWNLOAD = /^https:\/\/(cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@tesseract\.js-data\/[a-z_]+@1\.0\.0\/4\.0\.0_best_int\/[a-z_]+\.traineddata\.gz$/;
+  // Estante, the owner's own Calibre server, runs on this computer; Send to Estante may reach its API there.
+  const ESTANTE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/api\//;
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const blocked = /^(https?|wss?|ftp):/i.test(details.url) && !(details.method === 'GET' && OCR_DOWNLOAD.test(details.url));
+    const blocked = /^(https?|wss?|ftp):/i.test(details.url) && !(details.method === 'GET' && OCR_DOWNLOAD.test(details.url)) && !ESTANTE.test(details.url);
     if (blocked) console.warn('Blocked network request:', details.url);
     callback({ cancel: blocked });
   });
