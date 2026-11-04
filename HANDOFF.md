@@ -165,3 +165,21 @@ One block above "compression and combine", after merging vzqdhg d949056.
 - Initials on every page (Markup, initialsDialog): own initials pad (pref 'initials'), corner, size, margin, pages, skip first; also fills signature and initials placeholders with visual marks.
 - Send by email (Tools, emailDialog): share sheet with the PDF when the system has one, otherwise saves the PDF and opens a mailto message. mac/windows main.js now pass mailto: links to the system.
 - Not done: Replace fonts (needs the Edit tab's font machinery).
+
+## Closing the gaps with Acrobat, ABBYY and PDF-XChange (done, 4 Nov 2026)
+Branch claude/project-thread-vzqdhg. Every block sits above `/* ================= signature ================= */`. Tested in headless Chromium against veraPDF 1.28, pdfsig, pyHanko, LibreOffice and python-docx.
+- **Protect tab** (RIB.protect): Sign with certificate, Signatures, Password, Unlock, Sanitize, Redact, PDF/A, Accessible.
+- **Certificate signatures** (`sig*`). Signs with a .p12/.pfx file or a self-made digital ID (node-forge 1.4.0, vendored), using PKCS#7 detached written as an incremental update. Certify mode is optional. The Signatures panel checks every signature and reports whether the file changed after signing.
+- **PDF/A-2b** (`pdfa*`). Builds the sRGB OutputIntent and keeps XMP and Info in sync. Any page that cannot be fixed (unembedded fonts, CMYK) is turned into an image, with its text kept as an invisible layer. Passes veraPDF, including on signed and OCR'd books.
+- **Word and Excel** (`cv*`). Reading order by XY-cut, plus tables, headings, lists, pictures, two-column joins and right-to-left text.
+- **True redaction** (`rx*`). Deletes the glyphs and blacks out image pixels under each mark. If the read-back still finds anything, that page falls back to an image.
+- **Accessibility** (`a11y*`). The checker covers title, language, tags, real text, embedded fonts, Unicode, alt text, bookmarks, tab order, links, field tooltips and security. Auto-tagging produces H1–H3, P, Figure, Link and Form, and marks decoration as artifacts. There is also a picture description dialog. veraPDF ua1 then fails only on unembedded fonts.
+- **OCR accuracy.**
+  - `ocrPrepare` reads pages at about 300 dpi, evens out the lighting and straightens tilt, using the scanner thread's helpers. On a 150 dpi, 3° test scan, words read went from 0% to 100%.
+  - Words follow the page's tilt (`ocrPlace`).
+  - Words below 75% confidence are saved in the page's /PieceInfo /Quire and flagged in Proofread OCR text (`ocrDoubt*`).
+  - Up to 3 Tesseract workers run in parallel.
+  - The GlyphLess ToUnicode is now written as 256 valid ranges.
+- **Speed.** Only pages near the screen keep canvases (`v.near`); off-screen pages are shrunk to 1×1. A 1,500-page file opens in 0.5 s instead of 64 s, and a 24 s edit reload now takes 1 s.
+- **Mac build.** `.github/workflows/build-mac.yml` at the repository root (GitHub ignores mac/.github). It builds mac/ with the current web file on push to this branch, on tags and on demand, and uploads the .dmg as a run artifact.
+- Test scripts live outside the repo. `mkscan.py` makes realistic book scans (skew, gutter shadow, noise, JPEG).
