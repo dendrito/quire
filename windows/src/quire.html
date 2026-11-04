@@ -9881,7 +9881,7 @@ TASKS.a11y = function (P, d) {
 const HTR_ORT_VER = '1.20.1';
 const HTR_ORT = VENDOR ? VENDOR + 'onnxruntime/' : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${HTR_ORT_VER}/dist/`;
 // the commit that holds models/htr (a commit, not a branch, so the links never move; jsDelivr serves files up to 20 MB, raw GitHub the rest)
-const HTR_REV = '69b4e55a70f9a498eefea2ec561c826a29960adb';
+const HTR_REV = 'e789a1dffc9c189c358fe5ff44a70f6771867740';
 const HTR_SRC = () => window.QUIRE_HTR ? [window.QUIRE_HTR] : VENDOR ? [VENDOR + 'htr/'] : [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
 // first is the default: on a 17th-century Torre do Tombo Inquisition page TraPrInq made 13% character errors, the others 32-42%
 const HTR_READERS = [
@@ -9895,6 +9895,24 @@ const HTR_READERS = [
     about: 'Caroline, gothic textualis, cursiva, hybrida and humanist scripts from over 200 manuscripts. Abbreviations are kept as written (MUFI characters such as ꝑ ꝗ ꝯ).', doi: '10.5281/zenodo.15030337' },
   { id: 'tridis', name: 'Medieval and early modern documents (charters, registers)', short: 'TRIDIS', mb: 25, langs: 'Latin, French, Castilian, German, Czech',
     about: 'Documentary hands from 1100 to 1600. Expands abbreviations into full words, which makes the text easier to search.', doi: '10.5281/zenodo.10800223' },
+  { id: 'frolat-expan', name: 'Medieval Latin and French, abbreviations written out', short: 'Medieval Latin/French', mb: 16, langs: 'Latin, French',
+    about: 'Book and document hands from 1100 to 1500. Writes abbreviations out in full, so the text can be searched.', doi: '10.5281/zenodo.7516057' },
+  { id: 'regfiii-damage', name: 'Damaged, stained or faded documents', short: 'Damaged pages', mb: 25, langs: 'Latin, German',
+    about: 'Trained on worn 15th-century registers with stains, holes and fading. Try it when the page is in poor condition.', doi: '10.5281/zenodo.23313428' },
+  { id: 'catmus-print', noAuto: true, name: 'Old printed books, 15th–19th century', short: 'CATMuS-Print', mb: 22, langs: 'Latin, French, Spanish, Portuguese, Italian, English, German and more',
+    about: 'Books, pamphlets and newspapers in roman and italic type, from early printing to the 19th century. Often better than ordinary OCR on old prints.', doi: '10.5281/zenodo.10592716' },
+  { id: 'catmus-gothic', noAuto: true, name: 'Gothic (blackletter) print, 15th–16th century', short: 'Gothic print', mb: 22, langs: 'Latin, German, French, Spanish',
+    about: 'Incunabula and early books printed in gothic type.', doi: '10.5281/zenodo.10599911' },
+  { id: 'fraktur', noAuto: true, name: 'German Fraktur print', short: 'Fraktur', mb: 16, langs: 'German',
+    about: 'Books and newspapers printed in Fraktur, 17th to 20th century.', doi: '10.5281/zenodo.7089018', lic: 'CC0' },
+  { id: 'lectaurep', name: '19th–20th century French registers and deeds', short: 'LECTAUREP', mb: 16, langs: 'French',
+    about: 'Notarial and administrative hands of the 19th and 20th centuries.', doi: '10.5281/zenodo.6542744' },
+  { id: 'hooker', name: '19th-century English handwriting', short: 'English letters', mb: 16, langs: 'English',
+    about: 'Letters and notes in 19th-century English handwriting (Joseph Hooker papers).', doi: '10.5281/zenodo.8038689' },
+  { id: 'sephardi', noAuto: true, name: 'Medieval Hebrew, Sephardi bookhand', short: 'Sephardi Hebrew', mb: 16, langs: 'Hebrew',
+    about: 'Hebrew manuscripts in the Iberian (Sephardi) bookhand, 13th to 15th century. Right to left.', doi: '10.5281/zenodo.5468665', rtl: true, lic: 'CC BY-SA' },
+  { id: 'muharaf', noAuto: true, name: 'Arabic handwriting', short: 'Arabic', mb: 20, langs: 'Arabic',
+    about: 'Handwritten Arabic letters, legal and administrative papers, 19th and 20th century. Right to left.', doi: '10.5281/zenodo.14295489', rtl: true },
 ];
 const HTR = { have: null, own: [], sess: new Map(), meta: new Map() };
 const HTR_DB = {
@@ -9994,7 +10012,11 @@ function htrDecode(meta, probs, C, T) {
 }
 // Reads one page. Returns { i, vp, words: [{ text, confidence, q }], lines: [text] } like OCR, with q the word's baseline
 // quad in PDF points so the text layer follows sloping and curved lines.
-async function htrPage(d, i, readerId, msg) {
+// right-to-left readers give the letters in the order they stand on the page; text is stored in reading order, with
+// runs of digits (written left to right) kept as they are
+const htrRtl = t => [...t].reverse().join('').replace(/[0-9.,]+/g, m => [...m].reverse().join(''));
+// lim: read only that many lines, spread over the page (used to choose a reader); every line's confidence is in r.all
+async function htrPage(d, i, readerId, msg, lim) {
   const seg = await htrSession('blla'), rd = await htrSession(readerId), SM = seg.meta, RM = rd.meta;
   const pg = d.info[i].page, v1 = pg.getViewport({ scale: 1 });
   const scale = Math.min(4.2, 2600 / Math.max(v1.height, 1), 4000 / Math.max(v1.width, 1));
@@ -10015,7 +10037,8 @@ async function htrPage(d, i, readerId, msg) {
   const gaps = []; for (const l of lines) { let up = Infinity, dn = Infinity; for (const o of lines) { if (o === l || o.x1 < l.x0 || o.x0 > l.x1) continue; const x = (Math.max(l.x0, o.x0) + Math.min(l.x1, o.x1)) / 2, dy = l.yAt(x) - o.yAt(x); if (dy > 1 && dy < up) up = dy; if (dy < -1 && -dy < dn) dn = -dy; } l.up = up; l.dn = dn; if (up < Infinity) gaps.push(up); }
   gaps.sort((a, b) => a - b); const med = (gaps[gaps.length >> 1] || 12) * fy;
   lines = htrOrder(lines);
-  const words = [], text = [], lconf = [], mh = RM.height, pad = RM.pad ?? 16;
+  if (lim && lines.length > lim) { const st = lines.length / lim; lines = Array.from({ length: lim }, (_, k) => lines[Math.floor((k + .5) * st)]); }
+  const words = [], text = [], lconf = [], all = [], mh = RM.height, pad = RM.pad ?? 16, rtl = !!(htrReaders().find(r => r.id === readerId) || {}).rtl;
   for (let n = 0; n < lines.length; n++) {
     const l = lines[n]; if (msg) msg(n, lines.length);
     const up = Math.min(isFinite(l.up) ? l.up * fy : med, med * 1.4), dn = Math.min(isFinite(l.dn) ? l.dn * fy : med, med * 1.4);
@@ -10031,23 +10054,38 @@ async function htrPage(d, i, readerId, msg) {
     for (let y = 0; y < mh; y++) for (let x = 0; x < lw; x++) { const v = 1 - ld[(y * lw + x) * 4] / 255; for (let q = 0; q < rc; q++) li[q * mh * IW + y * IW + x + pad] = v; }
     // 3. read it
     const ro = await rd.s.run({ [rd.s.inputNames[0]]: new ort.Tensor('float32', li, [1, rc, mh, IW]) }); const pr = ro[rd.s.outputNames[0]]; const [, C, T] = pr.dims;
-    const chars = htrDecode(RM, pr.data, C, T); const s = chars.map(x => x.c).join('').replace(/\s+/g, ' ').trim().normalize('NFC'); const lc = chars.reduce((a, x) => a + x.p, 0) / Math.max(1, chars.length);
+    const chars = htrDecode(RM, pr.data, C, T); let s = chars.map(x => x.c).join('').replace(/\s+/g, ' ').trim(); s = (rtl ? htrRtl(s) : s).normalize('NFC'); const lc = chars.reduce((a, x) => a + x.p, 0) / Math.max(1, chars.length);
     // ink showing through from the other side and specks read as a line come out unsure and nearly letterless: drop them
+    all.push(s ? lc : 0);
     if (!s || lc < HTR_K.minConf || (s.match(/\p{L}/gu) || []).length < 2) continue; text.push(s); lconf.push(lc);
     const toX = t => xa + Math.max(0, Math.min(ws - 1, ((t + .5) * IW / T - pad) * hs / mh));
-    let w = null; const flush = () => { if (!w) return; const x0 = toX(w.t0) - 1, x1 = toX(w.t1 + 1) + 1, h = top * .75; const o = vp.convertToPdfPoint(x0, yb(x0)), e = vp.convertToPdfPoint(x1, yb(x1)), u = vp.convertToPdfPoint(x0, yb(x0) - h); words.push({ text: w.t.normalize('NFC'), confidence: Math.round(w.p / w.n * 100), q: [o, e, u] }); w = null; };
+    let w = null; const flush = () => { if (!w) return; const x0 = toX(w.t0) - 1, x1 = toX(w.t1 + 1) + 1, h = top * .75; const o = vp.convertToPdfPoint(x0, yb(x0)), e = vp.convertToPdfPoint(x1, yb(x1)), u = vp.convertToPdfPoint(x0, yb(x0) - h); words.push({ text: (rtl ? htrRtl(w.t) : w.t).normalize('NFC'), confidence: Math.round(w.p / w.n * 100), q: [o, e, u] }); w = null; };
     for (const x of chars) { if (/\s/.test(x.c)) { flush(); continue; } if (!w) w = { t: '', t0: x.t0, t1: x.t1, p: 0, n: 0 }; w.t += x.c; w.t1 = x.t1; w.p += x.p; w.n++; }
     flush();
   }
-  return { i, vp, words, lines: text, conf: lconf };
+  return { i, vp, words, lines: text, conf: lconf, all };
 }
 function htrPanelHTML(O) {
-  const rs = htrReaders(); if (!rs.some(r => r.id === O.reader)) O.reader = rs[0].id; const r = rs.find(x => x.id === O.reader);
-  const have = HTR.have && HTR.have.has(r.id) || !!VENDOR;
-  return `<div class="field"><label for="hR">Reader</label><select id="hR" class="inp">${rs.map(x => `<option value="${esc(x.id)}"${x.id === O.reader ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
-    <p class="hint" style="margin:0">${esc(r.about)}${r.langs ? ` <span class="muted">Languages: ${esc(r.langs)}.</span>` : ''}${r.doi ? ` <a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">${esc(r.short)}</a>, free (CC BY).` : ''}</p>
-    <p class="muted small" style="margin:.3em 0">${have ? 'Ready on this device.' : `Downloads about ${r.mb || 16} MB the first time, plus 5 MB for the line finder, then works offline.`} Tested on medieval Portuguese charters: 73–82% of characters right, more on clearer and later hands. Check names and numbers.</p>
+  const rs = htrReaders(); if (O.reader !== 'auto' && !rs.some(r => r.id === O.reader)) O.reader = 'auto';
+  const r = O.reader === 'auto' ? { id: 'auto', short: '', about: 'Tries the readers on a few lines of the first page and reads with the one most sure of itself. Readers you have used are tried, plus the Inquisition, early modern and medieval ones. Choose a reader yourself when you know the kind of document.', mb: 120 } : rs.find(x => x.id === O.reader);
+  const have = O.reader === 'auto' ? !!VENDOR : HTR.have && HTR.have.has(r.id) || !!VENDOR;
+  return `<div class="field"><label for="hR">Reader</label><select id="hR" class="inp"><option value="auto"${O.reader === 'auto' ? ' selected' : ''}>Automatic: pick the best handwriting reader for this page</option>${rs.map(x => `<option value="${esc(x.id)}"${x.id === O.reader ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+    <p class="hint" style="margin:0">${esc(r.about)}${r.langs ? ` <span class="muted">Languages: ${esc(r.langs)}.</span>` : ''}${r.doi ? ` <a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">${esc(r.short)}</a>, free (${esc(r.lic || 'CC BY')}).` : ''}</p>
+    <p class="muted small" style="margin:.3em 0">${have ? 'Ready on this device.' : `Downloads about ${r.mb || 16} MB the first time, plus 5 MB for the line finder, then works offline.`} Tested on medieval Portuguese charters (73–82% of characters right) and a 17th-century Inquisition trial (87% with TraPrInq). Check names and numbers.</p>
     <button type="button" class="btn sm" id="hImp">${svg('plus')}Add a reader file…</button><input type="file" id="hFile" accept=".onnx,.json" multiple hidden>`;
+}
+// Automatic: each candidate reader reads the same few lines and the one most sure of itself reads the pages. Candidates are
+// the readers on this device (all of them in the desktop apps) plus a few general ones.
+const HTR_AUTO_BASE = ['traprinq', 'mccatmus', 'catmus-medieval'];
+async function htrAuto(d, i, msg) {
+  await htrLoad(); const rs = htrReaders(); const ids = rs.filter(r => !r.noAuto && (VENDOR || HTR.have.has(r.id) || HTR_AUTO_BASE.includes(r.id))).map(r => r.id); // print and right-to-left readers are chosen by hand
+  const scores = [];
+  for (const id of ids) {
+    const r = rs.find(x => x.id === id); if (msg) msg(`Trying ${r.short}…`);
+    try { await htrSession(id, f => msg && msg(`Downloading ${r.short}… ${Math.round(f * 100)}%`)); const t = await htrPage(d, i, id, null, 6);
+      if (t.all.length) scores.push({ id, score: t.all.reduce((a, b) => a + b, 0) / t.all.length }); } catch (e) { console.warn('auto reader', id, e); }
+  }
+  scores.sort((a, b) => b.score - a.score); return { id: scores.length ? scores[0].id : rs[0].id, scores };
 }
 async function htrGo(P, d, O, ui) {
   const { msg, bar, stop } = ui; let idx = scopeIdx(P);
@@ -10055,10 +10093,12 @@ async function htrGo(P, d, O, ui) {
   const results = [];
   try {
     msg('Loading the line finder…'); await htrSession('blla', f => msg(`Downloading the line finder… ${Math.round(f * 100)}%`));
-    const r = htrReaders().find(x => x.id === O.reader); msg(`Loading ${r ? r.short : 'the reader'}…`); await htrSession(O.reader, f => msg(`Downloading ${r ? r.short : 'the reader'}… ${Math.round(f * 100)}%`));
+    let rid = O.reader;
+    if (rid === 'auto') { const a = await htrAuto(d, idx[0], msg); rid = a.id; const rr = htrReaders().find(x => x.id === rid); toast(`Chose ${rr ? rr.short : rid}, the reader most sure of this hand`, 5000); }
+    const r = htrReaders().find(x => x.id === rid); msg(`Loading ${r ? r.short : 'the reader'}…`); await htrSession(rid, f => msg(`Downloading ${r ? r.short : 'the reader'}… ${Math.round(f * 100)}%`));
     let done = 0;
     for (const i of idx) {
-      const res = await htrPage(d, i, O.reader, (n, of) => { msg(`Page ${i + 1}: line ${n + 1} of ${of}…`); bar.firstChild.style.width = ((done + n / of) / idx.length * 100) + '%'; });
+      const res = await htrPage(d, i, rid, (n, of) => { msg(`Page ${i + 1}: line ${n + 1} of ${of}…`); bar.firstChild.style.width = ((done + n / of) / idx.length * 100) + '%'; });
       results.push(res); done++; bar.firstChild.style.width = (done / idx.length * 100) + '%';
     }
   } catch (e) { console.error(e); stop('Handwriting recognition failed: ' + (e && e.message || e)); return; }
