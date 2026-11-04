@@ -23,7 +23,16 @@ jobs:
       - name: Use the current web app
         run: cp ../web/quire-pdf-studio.html src/quire.html
       - run: npm install --no-audit --no-fund
-      - run: npm run dist
+      # Spotlight indexing keeps the new disk image busy, and two images built at once share one volume name, so
+      # hdiutil cannot detach them: indexing is turned off and Apple silicon and Intel are built one after the other.
+      - name: Stop Spotlight indexing
+        run: sudo mdutil -a -i off || true
+      - name: Build for Apple silicon
+        run: node scripts/vendor.js && npx electron-builder --mac dmg --arm64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Build for Intel
+        run: npx electron-builder --mac dmg --x64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
