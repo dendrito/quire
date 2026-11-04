@@ -4723,7 +4723,7 @@ function ceGeom(m) {
     r.fsU = Math.abs(r.size) * dv; r.lu = lu; r.len = r.adv * lu;
     r.hs = Math.abs(r.th) * lu / dv; r.tcU = r.tc * dv;
     r.visible = r.tr !== 3 && r.tr !== 7;
-    r.text = r.glyphs.map(gl => gl.u == null ? '�' : gl.u).join('');
+    r.text = r.glyphs.map(gl => gl.u == null ? '\uFFFD' : gl.u).join('');
   }
 }
 // Runs on the same baseline and close together form a line. Faux bold (the same text drawn twice, slightly offset) is
@@ -4745,7 +4745,7 @@ function ceLines(m) {
     if (last && along < host.end - host.fs * .3 && last.text === r.text) { host.dups.push(r); continue; }
     host.runs.push(r); host.fs = Math.max(host.fs, r.fsU);
     const lift = ceDot([r.O[0] - r.B[0], r.O[1] - r.B[1]], host.nv);
-    for (const gl of r.glyphs) { const a0 = along + gl.x * r.lu; host.chars.push({ ch: gl.u == null ? '�' : gl.u, a0, a1: a0 + gl.w * r.lu, r, lift }); }
+    for (const gl of r.glyphs) { const a0 = along + gl.x * r.lu; host.chars.push({ ch: gl.u == null ? '\uFFFD' : gl.u, a0, a1: a0 + gl.w * r.lu, r, lift }); }
     host.start = Math.min(host.start, along); host.end = Math.max(host.end, along + Math.max(0, r.len));
   }
   for (const L of LN) {
@@ -5522,7 +5522,7 @@ async function edSaveImage(o) {
 
 /* ---------- Edit tab: proofread OCR text ---------- */
 const edSus = t => t.split(/\s+/).some(w => (/\d\p{L}|\p{L}\d/u.test(w) && !/^\d+(st|nd|rd|th|º|ª|o|a|h|m|s|kg|km|cm|mm|pt|px)$/i.test(w))
-  || /[|~^_{}\\<>¦]/.test(w) || /(.)\1\1/u.test(w) || w.includes('�') || /^[^\p{L}\p{N}]{2,}$/u.test(w) || (/\p{Ll}\p{Lu}/u.test(w) && !/^(Mc|Mac|iP|eB|iT)/.test(w)));
+  || /[|~^_{}\\<>¦]/.test(w) || /(.)\1\1/u.test(w) || w.includes('\uFFFD') || /^[^\p{L}\p{N}]{2,}$/u.test(w) || (/\p{Ll}\p{Lu}/u.test(w) && !/^(Mc|Mac|iP|eB|iT)/.test(w)));
 const edLineText = l => OCR_RTL_RE.test(l.text) ? ocrVisual(l.text) : l.text;
 function edProofOpen(page, k) {
   const d = cur(); if (!d) return; closeTextEditor(true);
