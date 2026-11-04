@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx redaction htr)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare redaction htr)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
@@ -149,6 +149,21 @@ TESTS.redaction = async () => {
   check('redacted word gone from the text', !/SECRETNAME/.test(t), t.trim().split('\n')[0]);
   check('redacted word gone from the file bytes', !/SECRETNAME/.test(raw));
   check('words around it kept', /Name:/.test(t) && /Silva/.test(t) && /Keep this line intact please/.test(t));
+};
+
+// --- Password on save (AES-256) checked with poppler; Compare finds a line added in a second version
+TESTS.protect = async () => {
+  const p = await H.open(); await H.load(p, fx('report.pdf')); const file = out('protected.pdf');
+  fs.writeFileSync(file, await b64(p, async () => encryptPdf(await buildOutput(cur()), 'abc123', '', { print: true, modify: false, copy: true, annot: true, fill: true, assemble: false, printHigh: true })));
+  const info = execFileSync('pdfinfo', ['-upw', 'abc123', file]).toString();
+  check('AES-256 encryption, as Acrobat writes it', /AES-256/.test(info), (info.match(/Encrypted:.*/) || [''])[0]);
+  check('opens with the password', /Library Society/.test(execFileSync('pdftotext', ['-upw', 'abc123', file, '-']).toString()));
+  let refused = false; try { execFileSync('pdftotext', [file, '-'], { stdio: 'ignore' }); } catch { refused = true; } check('refused without it', refused);
+};
+TESTS.compare = async () => {
+  const p = await H.open(); await H.load(p, fx('report.pdf'));
+  const r = await p.evaluate(async () => { const a = cur(); const b = await PDFDocument.load(a.bytes); b.getPage(0).drawText('Extra line added in v2', { x: 90, y: 60, size: 11 }); const d2 = await openBytes(await b.save(), 'v2.pdf'); CMP.src = a.bytes; CMP.name = 'report.pdf'; CMP.mode = 'text'; const R = await runCompare(d2); return { changes: R.H.length, added: R.added, removed: R.removed }; });
+  check('finds the one added line and nothing else', r.changes === 1 && r.added === 5 && r.removed === 0, JSON.stringify(r));
 };
 
 // --- PowerPoint: a born-digital report and an OCR'd scan; slides open in python-pptx and LibreOffice, text is editable
