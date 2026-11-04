@@ -761,7 +761,11 @@ function buildViewer() {
     ov.addEventListener('dblclick', e => onDbl(i, e));
     return { wrap, c, ov, rendered: 0, task: null, vp: null };
   });
-  io = new IntersectionObserver(ents => { for (const en of ents) if (en.isIntersecting) { const i = +en.target.dataset.i; const v = cur() && cur().views[i]; if (v && v.rendered !== cur().zoom) renderPage(i); } }, { root: $('#viewer'), rootMargin: '800px 0px' });
+  // Only pages near the screen hold pixels: their overlay is sized and drawn, and their rendering kept. Pages that scroll far
+  // away give their memory back, so a 1,500-page book opens in a second instead of allocating gigabytes of canvases.
+  io = new IntersectionObserver(ents => { const D = cur(); if (!D) return; for (const en of ents) { const i = +en.target.dataset.i; const v = D.views[i]; if (!v) continue; v.near = en.isIntersecting;
+    if (v.near) { if (v.rendered !== D.zoom) renderPage(i); drawOverlay(i); }
+    else { v.ov.width = v.ov.height = 1; if (v.task) { try { v.task.cancel(); } catch {} v.task = null; } if (v.rendered) { const c = el('canvas', 'pdfc'); c.width = c.height = 1; v.wrap.replaceChild(c, v.c); v.c = c; v.rendered = 0; } } } }, { root: $('#viewer'), rootMargin: '800px 0px' });
   layout();
   d.views.forEach(v => io.observe(v.wrap));
   setCursor();
@@ -771,8 +775,8 @@ function layout() {
   d.views.forEach((v, i) => {
     v.vp = d.info[i].page.getViewport({ scale: d.zoom, rotation: vrot(d, i) }); if (v.tl) { v.tl.remove(); v.tl = null; }
     v.wrap.style.width = v.vp.width + 'px'; v.wrap.style.height = v.vp.height + 'px';
-    v.rendered = 0; v.ov.width = Math.ceil(v.vp.width * dpr()); v.ov.height = Math.ceil(v.vp.height * dpr());
-    drawOverlay(i);
+    v.rendered = 0; v.ovW = Math.ceil(v.vp.width * dpr()); v.ovH = Math.ceil(v.vp.height * dpr());
+    if (v.near) drawOverlay(i); else v.ov.width = v.ov.height = 1;
   });
 }
 async function renderPage(i) {
@@ -897,7 +901,9 @@ function hitA(vp, a, z, x, y) {
 }
 function hitTest(i, x, y) { const d = cur(); const v = d.views[i]; const L = d.annots[i]; for (let k = L.length - 1; k >= 0; k--) if (hitA(v.vp, L[k], d.zoom, x, y)) return k; return -1; }
 function drawOverlay(i) {
-  const d = cur(); if (!d || !d.views || !d.views[i]) return; const v = d.views[i]; const ctx = v.ov.getContext('2d'); const r = dpr();
+  const d = cur(); if (!d || !d.views || !d.views[i]) return; const v = d.views[i]; if (!v.near) return;
+  if (v.ov.width !== v.ovW || v.ov.height !== v.ovH) { v.ov.width = v.ovW; v.ov.height = v.ovH; }
+  const ctx = v.ov.getContext('2d'); const r = dpr();
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, v.ov.width, v.ov.height); ctx.setTransform(r, 0, 0, r, 0, 0);
   const z = d.zoom;
   for (const h of S.search.hits) if (h.page === i) { const b = vrect(v.vp, { x1: h.r[0], y1: h.r[1], x2: h.r[2], y2: h.r[3] }); ctx.fillStyle = h === S.search.hits[S.search.i] ? 'rgba(255,140,0,.45)' : 'rgba(47,91,211,.22)'; ctx.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2); }
@@ -1832,16 +1838,23 @@ const TASKS = {
       try {
         msg('Loading OCR engine…'); await loadScript(TESS_URL);
         msg(`Loading ${langs.map(c => ocrName(c.replace(/_vert$/, ''))).filter((v, k, a) => a.indexOf(v) === k).join(' and ')}…`);
-        const worker = await Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: OCR_CACHE, cacheMethod: VENDOR ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))]);
-        // Tesseract.js reads each page as one block by default; automatic layout finds columns and vertical CJK text.
-        await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+        const mk = () => Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: OCR_CACHE, cacheMethod: VENDOR ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))])
+          // Tesseract.js reads each page as one block by default; automatic layout finds columns and vertical CJK text.
+          .then(async w => { await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' }); return w; });
+        const workers = [await mk()];
         if (!VENDOR) { OCR.have = null; ocrLoad(); }
-        for (let k = 0; k < idx.length; k++) {
-          const i = idx[k]; msg(`Reading page ${i + 1} (${k + 1} of ${idx.length})…`); bar.firstChild.style.width = (k / idx.length * 100) + '%';
+        // Long documents: several engines read pages side by side (one per spare processor core, at most 3; fewer on small machines).
+        const lanes = Math.min(idx.length, 3, Math.max(1, (navigator.hardwareConcurrency || 2) - 1), navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 3);
+        if (lanes > 1 && idx.length > 2) { msg('Starting more OCR engines…'); for (const w of await Promise.allSettled(Array.from({ length: lanes - 1 }, mk))) if (w.status === 'fulfilled') workers.push(w.value); }
+        let next = 0, done = 0; const t0 = Date.now();
+        const lane = async worker => { while (next < idx.length) { const i = idx[next++];
           const pre = await ocrPrepare(d, i, { fast: O.fast, vertical }); const { data } = await worker.recognize(pre.c);
-          const r = { i, vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words: ocrWords(data) }; if (r.angle) ocrPlace(r); results.push(r);
-        }
-        await worker.terminate(); bar.firstChild.style.width = '100%';
+          const r = { i, vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words: ocrWords(data) }; if (r.angle) ocrPlace(r); results.push(r); done++;
+          const left = done < idx.length && done >= 2 ? Math.round((Date.now() - t0) / done * (idx.length - done) / 60000) : 0;
+          msg(`Read ${done} of ${plural(idx.length, 'page')}${left > 1 ? `, about ${left} minutes left` : ''}…`); bar.firstChild.style.width = (done / idx.length * 100) + '%'; } };
+        msg(`Reading ${plural(idx.length, 'page')}…`);
+        try { await Promise.all(workers.map(lane)); } finally { await Promise.all(workers.map(w => w.terminate().catch(() => {}))); }
+        results.sort((a, b) => a.i - b.i); bar.firstChild.style.width = '100%';
       } catch (e) {
         console.error(e);
         stop(!VENDOR && /timeout|fetch|network|load/i.test(String(e && e.message || e)) ? 'The OCR engine could not load its language data in this view. Download the language from More languages, or use the desktop app.' : 'OCR failed: ' + (e && e.message || e)); return;
