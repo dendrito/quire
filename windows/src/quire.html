@@ -1707,6 +1707,18 @@ function ocrPlace(r) {
 // Words the engine was unsure of are kept with the page (in its PieceInfo, the place PDF sets aside for an app's own data),
 // so Proofread OCR text can point at them later, even after the file is saved and opened again.
 const OCR_DOUBT = 75;
+// mean confidence of a page's words, weighted by length (long words say more about the page than specks)
+const ocrConf = ws => { let n = 0, s = 0; for (const w of ws) { const k = [...w.text.trim()].length; n += k; s += k * (w.confidence || 0); } return n ? s / n : 0; };
+const OCR_FADED = 80;
+// One OCR engine is kept for two minutes after a run, so the next page or document starts at once; then it is let go.
+const OCR_WARM = { key: null, w: null, t: 0 };
+function ocrWarmTake(key) { const w = OCR_WARM.key === key ? OCR_WARM.w : null; if (w) { clearTimeout(OCR_WARM.t); OCR_WARM.w = OCR_WARM.key = null; } return w; }
+function ocrWarmKeep(key, w) {
+  if (OCR_WARM.w && OCR_WARM.w !== w) OCR_WARM.w.terminate().catch(() => {});
+  clearTimeout(OCR_WARM.t); OCR_WARM.key = key; OCR_WARM.w = w;
+  OCR_WARM.t = setTimeout(() => { if (OCR_WARM.w === w) { OCR_WARM.w = OCR_WARM.key = null; w.terminate().catch(() => {}); } }, 120000);
+}
+async function ocrBestHave(langs) { try { const ks = (await OCR_DB.keys()).map(String); return langs.every(c => ks.includes(`${OCR_BEST_CACHE}/${c}.traineddata`)); } catch { return false; } }
 const ocrUnsure = w => w.confidence != null && w.confidence < ([...w.text.trim()].length < 2 ? 50 : OCR_DOUBT); // one-letter words always score lower
 function ocrDoubtBoxes(r) {
   return r.words.filter(ocrUnsure).map(w => {
@@ -2057,7 +2069,9 @@ const TASKS = {
         const mk = () => Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: best ? OCR_BEST_CACHE : OCR_CACHE, cacheMethod: VENDOR || best ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))])
           // Tesseract.js reads each page as one block by default; automatic layout finds columns and vertical CJK text.
           .then(async w => { await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' }); return w; });
-        const workers = [await mk()];
+        // the engine from the last run is reused when the languages and models are the same (starting one takes about 1 s)
+        const wkey = langs.join('+') + (best ? ':best' : ''), warm = ocrWarmTake(wkey);
+        const workers = [warm || await mk()];
         if (!VENDOR) { OCR.have = null; ocrLoad(); }
         // Long documents: several engines read pages side by side (one per spare processor core, at most 3; fewer on small machines).
         const lanes = Math.min(idx.length, 3, Math.max(1, (navigator.hardwareConcurrency || 2) - 1), navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 3);
@@ -2066,12 +2080,27 @@ const TASKS = {
         const lane = async worker => { while (next < idx.length) { const i = idx[next++];
           const pre = await ocrPrepare(d, i, { fast: O.fast, vertical }); let { data } = await worker.recognize(pre.c);
           if (!O.fast && !vertical) { data = await ocrTables(worker, pre.c, data, pre.tables || []); data = await ocrRetry(worker, pre.c, data); }
-          const r = { i, vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words: ocrWords(data) }; if (r.angle) ocrPlace(r); results.push(r); done++;
+          const r = { i, vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words: ocrWords(data) }; r.conf = ocrConf(r.words); if (r.angle) ocrPlace(r); results.push(r); done++;
           const left = done < idx.length && done >= 2 ? Math.round((Date.now() - t0) / done * (idx.length - done) / 60000) : 0;
           msg(`Read ${done} of ${plural(idx.length, 'page')}${left > 1 ? `, about ${left} minutes left` : ''}…`); bar.firstChild.style.width = (done / idx.length * 100) + '%'; } };
         msg(`Reading ${plural(idx.length, 'page')}…`);
-        try { await Promise.all(workers.map(lane)); } finally { await Promise.all(workers.map(w => w.terminate().catch(() => {}))); }
-        results.sort((a, b) => a.i - b.i); bar.firstChild.style.width = '100%';
+        try { await Promise.all(workers.map(lane)); } finally { ocrWarmKeep(wkey, workers[0]); await Promise.all(workers.slice(1).map(w => w.terminate().catch(() => {}))); }
+        results.sort((a, b) => a.i - b.i);
+        // Faded pages: the everyday models are unsure on them (mean word confidence under OCR_FADED). When this device
+        // already has the most accurate models for these languages, those pages are read again with them, and that reading is
+        // kept unless it found far fewer words (faded test page: 62% -> 65% of words; its confidence barely moves, so it is no guide). Nothing is downloaded without being asked.
+        const faded = !best && !O.fast && !vertical ? results.filter(r => r.words.length && r.conf < OCR_FADED) : [];
+        if (faded.length && await ocrBestHave(langs)) {
+          msg(`Reading ${plural(faded.length, 'faded page')} again with the most accurate models…`);
+          const w = await Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: OCR_BEST_CACHE, cacheMethod: 'readOnly' });
+          try { await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+            for (const r of faded) { const pre = await ocrPrepare(d, r.i, { vertical }); let { data } = await w.recognize(pre.c); data = await ocrTables(w, pre.c, data, pre.tables || []); data = await ocrRetry(w, pre.c, data);
+              const words = ocrWords(data), conf = ocrConf(words); if (words.length >= r.words.length * .8) { Object.assign(r, { vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words, conf, best: true }); if (r.angle) ocrPlace(r); } }
+          } finally { await w.terminate().catch(() => {}); }
+        }
+        OCR.last = results.map(r => ({ page: r.i, conf: Math.round(r.conf), best: !!r.best })); // for the tests
+        var fadedHint = faded.length && !results.some(r => r.best) ? faded.length : 0;
+        bar.firstChild.style.width = '100%';
       } catch (e) {
         console.error(e);
         stop(!VENDOR && /timeout|fetch|network|load/i.test(String(e && e.message || e)) ? 'The OCR engine could not load its language data in this view. Download the language from More languages, or use the desktop app.' : 'OCR failed: ' + (e && e.message || e)); return;
@@ -2079,6 +2108,7 @@ const TASKS = {
       const n = results.reduce((s, r) => s + r.words.length, 0);
       if (!n) { stop('No text was recognised on those pages. Check that the language is right.'); return; }
       const ok = await editBytes(`OCR added text to ${plural(results.filter(r => r.words.length).length, 'page')}`, async pdf => { const font = ocrFont(pdf); for (const r of results) ocrLayer(pdf, font, r, vertical); }, 'Adding text layer…');
+      if (ok !== false && fadedHint) toast(`${plural(fadedHint, 'page')} look${fadedHint === 1 ? 's' : ''} faded. For a better reading, tick Most accurate models and run OCR again on ${fadedHint === 1 ? 'it' : 'them'}.`, 7000);
       if (ok !== false) { const doubt = results.flatMap(r => r.words.filter(ocrUnsure).map(() => r.i)); d.ocrNote = { bytes: d.bytes, n: doubt.length, page: doubt.length ? Math.min(...doubt) : null, words: n }; if (S.task === 'ocr') renderPanel(); }
     };
   },
@@ -9938,7 +9968,11 @@ const HTR_ORT_VER = '1.20.1';
 const HTR_ORT = VENDOR ? VENDOR + 'onnxruntime/' : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${HTR_ORT_VER}/dist/`;
 // the commit that holds models/htr (a commit, not a branch, so the links never move; jsDelivr serves files up to 20 MB, raw GitHub the rest)
 const HTR_REV = 'e789a1dffc9c189c358fe5ff44a70f6771867740';
-const HTR_SRC = () => window.QUIRE_HTR ? [window.QUIRE_HTR] : VENDOR ? [VENDOR + 'htr/'] : [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
+// The desktop apps bundle their readers (Quire Lite only a few, listed in QUIRE_HTR_BUNDLED); the rest are downloaded
+// once from the web build's sources and kept on this device.
+const HTR_WEB = () => [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
+const htrBundled = id => !!VENDOR && (!window.QUIRE_HTR_BUNDLED || window.QUIRE_HTR_BUNDLED.includes(id));
+const HTR_SRC = id => window.QUIRE_HTR ? [window.QUIRE_HTR] : htrBundled(id) ? [VENDOR + 'htr/'] : HTR_WEB();
 // first is the default: on a 17th-century Torre do Tombo Inquisition page TraPrInq made 13% character errors, the others 32-42%
 const HTR_READERS = [
   { id: 'traprinq', name: 'Portuguese Inquisition records, 16th–19th century', short: 'TraPrInq', mb: 90, langs: 'Portuguese',
@@ -9989,13 +10023,13 @@ const htrReaders = () => [...HTR_READERS, ...HTR.own];
 async function htrFile(id, ext, onp) {
   try { const v = await HTR_DB.get(id + ext); if (v) return v; } catch {}
   let err;
-  for (const base of HTR_SRC()) {
+  for (const base of HTR_SRC(id)) {
     try {
       const r = await fetch(base + id + ext); if (!r.ok) throw new Error('HTTP ' + r.status);
       let v;
       if (ext === '.json') v = await r.text();
       else { const n = +r.headers.get('content-length') || 0, rd = r.body && r.body.getReader(); if (!rd) v = new Uint8Array(await r.arrayBuffer()); else { const parts = []; let got = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; if (onp && n) onp(got / n); } v = new Uint8Array(got); let o = 0; for (const p of parts) { v.set(p, o); o += p.length; } } }
-      if (!VENDOR) { try { await HTR_DB.put(id + ext, v); } catch (e) { console.warn('could not keep the model on this device', e); } }
+      if (!htrBundled(id)) { try { await HTR_DB.put(id + ext, v); } catch (e) { console.warn('could not keep the model on this device', e); } }
       return v;
     } catch (e) { err = e; }
   }
@@ -10137,7 +10171,7 @@ async function htrPage(d, i, readerId, msg, lim) {
 function htrPanelHTML(O) {
   const rs = htrReaders(); if (O.reader !== 'auto' && !rs.some(r => r.id === O.reader)) O.reader = 'auto';
   const r = O.reader === 'auto' ? { id: 'auto', short: '', about: 'Tries the readers on a few lines of the first page and reads with the one most sure of itself. Readers you have used are tried, plus the Inquisition, early modern and medieval ones. Choose a reader yourself when you know the kind of document.', mb: 120 } : rs.find(x => x.id === O.reader);
-  const have = O.reader === 'auto' ? !!VENDOR : HTR.have && HTR.have.has(r.id) || !!VENDOR;
+  const have = O.reader === 'auto' ? !!VENDOR : HTR.have && HTR.have.has(r.id) || htrBundled(r.id);
   return `<div class="field"><label for="hR">Reader</label><select id="hR" class="inp"><option value="auto"${O.reader === 'auto' ? ' selected' : ''}>Automatic: pick the best handwriting reader for this page</option>${rs.map(x => `<option value="${esc(x.id)}"${x.id === O.reader ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
     <p class="hint" style="margin:0">${esc(r.about)}${r.langs ? ` <span class="muted">Languages: ${esc(r.langs)}.</span>` : ''}${r.doi ? ` <a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">${esc(r.short)}</a>, free (${esc(r.lic || 'CC BY')}).` : ''}</p>
     <p class="muted small" style="margin:.3em 0">${have ? 'Ready on this device.' : `Downloads about ${r.mb || 16} MB the first time, plus 5 MB for the line finder, then works offline.`} Tested on medieval Portuguese charters (73–82% of characters right) and a 17th-century Inquisition trial (87% with TraPrInq). Check names and numbers.</p>
@@ -10147,7 +10181,7 @@ function htrPanelHTML(O) {
 // the readers on this device (all of them in the desktop apps) plus a few general ones.
 const HTR_AUTO_BASE = ['traprinq', 'mccatmus', 'catmus-medieval'];
 async function htrAuto(d, i, msg) {
-  await htrLoad(); const rs = htrReaders(); const ids = rs.filter(r => !r.noAuto && (VENDOR || HTR.have.has(r.id) || HTR_AUTO_BASE.includes(r.id))).map(r => r.id); // print and right-to-left readers are chosen by hand
+  await htrLoad(); const rs = htrReaders(); const ids = rs.filter(r => !r.noAuto && (htrBundled(r.id) || HTR.have.has(r.id) || HTR_AUTO_BASE.includes(r.id))).map(r => r.id); // print and right-to-left readers are chosen by hand
   const scores = [];
   for (const id of ids) {
     const r = rs.find(x => x.id === id); if (msg) msg(`Trying ${r.short}…`);

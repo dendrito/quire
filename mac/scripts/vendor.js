@@ -16,6 +16,14 @@ const FONTS = [
   ['Caveat', 'caveat', [600]]
 ];
 
+// QUIRE_EDITION=lite or pro builds that edition (see tools/editions.json); unset keeps every feature, as before.
+const EDITION = process.env.QUIRE_EDITION;
+// Handwriting readers bundled with the app (about 90 MB each). Quire Lite bundles the line finder and the three it uses
+// most; it downloads any other reader the first time it is chosen and keeps it.
+const HTR_ALL = ['blla', 'traprinq', 'geneapt', 'mccatmus', 'catmus-medieval', 'tridis', 'frolat-expan', 'regfiii-damage', 'catmus-print', 'catmus-gothic', 'fraktur', 'lectaurep', 'hooker', 'sephardi', 'muharaf'];
+const HTR_LITE = ['blla', 'traprinq', 'geneapt', 'catmus-medieval'];
+const HTR_MODELS = EDITION === 'lite' ? HTR_LITE : HTR_ALL;
+
 const copies = [
   ['pdfjs-dist/build/pdf.min.js', 'pdfjs/pdf.min.js'],
   ['pdfjs-dist/build/pdf.worker.min.js', 'pdfjs/pdf.worker.min.js'],
@@ -33,7 +41,7 @@ const copies = [
   ...['Arimo', 'Tinos', 'Cousine'].flatMap(f => ['400Regular', '400Regular_Italic', '700Bold', '700Bold_Italic'].map(v => [`@expo-google-fonts/${f.toLowerCase()}/${v}/${f}_${v}.ttf`, `fonts-sub/${f}_${v}.ttf`])),
   // handwriting recognition: the ONNX runtime, and kraken's line finder plus the manuscript readers from models/htr
   ...['ort.wasm.min.js', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm'].map(f => [`onnxruntime-web/dist/${f}`, `onnxruntime/${f}`]),
-  ...['blla', 'traprinq', 'geneapt', 'mccatmus', 'catmus-medieval', 'tridis', 'frolat-expan', 'regfiii-damage', 'catmus-print', 'catmus-gothic', 'fraktur', 'lectaurep', 'hooker', 'sephardi', 'muharaf'].flatMap(m => ['.onnx', '.json'].map(x => [`../../models/htr/${m}${x}`, `htr/${m}${x}`]))
+  ...HTR_MODELS.flatMap(m => ['.onnx', '.json'].map(x => [`../../models/htr/${m}${x}`, `htr/${m}${x}`]))
 ];
 let fontCss = '';
 for (const [family, pkg, weights] of FONTS) {
@@ -44,6 +52,8 @@ for (const [family, pkg, weights] of FONTS) {
   }
 }
 
+// readers left over from a build of the other edition
+fs.rmSync(path.join(vendor, 'htr'), { recursive: true, force: true });
 let missing = 0;
 for (const [from, to] of copies) {
   const src = path.join(nm, from);
@@ -57,8 +67,6 @@ fs.writeFileSync(path.join(vendor, 'fonts', 'fonts.css'), fontCss);
 
 // Build app/index.html
 let html = fs.readFileSync(path.join(root, 'src', 'quire.html'), 'utf8');
-// QUIRE_EDITION=lite or pro builds that edition (see tools/editions.json); unset keeps every feature, as before.
-const EDITION = process.env.QUIRE_EDITION;
 if (EDITION) {
   const lib = path.join(root, '..', 'tools', 'editions-lib.js');
   if (!fs.existsSync(lib)) { console.error('QUIRE_EDITION needs tools/editions-lib.js from the full Quire folder.'); process.exit(1); }
@@ -77,7 +85,7 @@ if (/<script src="https?:|<link[^>]+href="https?:/.test(html)) { console.error('
 const head = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
   + '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
   + '<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>'
-  + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';</script>'
+  + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';' + (HTR_MODELS !== HTR_ALL ? ' window.QUIRE_HTR_BUNDLED = ' + JSON.stringify(HTR_MODELS) + ';' : '') + '</script>'
   + '</head><body>';
 fs.writeFileSync(path.join(appDir, 'index.html'), head + html + '</body></html>');
 console.log(`${EDITION ? 'Quire ' + EDITION[0].toUpperCase() + EDITION.slice(1) + ': ' : ''}Bundled ${copies.length} files into app/vendor and built app/index.html. The app runs fully offline.`);

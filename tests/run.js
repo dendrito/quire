@@ -111,6 +111,7 @@ TESTS.pdfua = async () => {
 // --- OCR accuracy on hard scans (share of words read, in order)
 const ocr = async (f, lang = 'por', more = {}) => {
   const p = await H.open(); await H.load(p, fx(f));
+  if (more.haveBest) { await p.evaluate(async l => { await ocrBestReady([l], () => {}); }, lang); delete more.haveBest; }
   await p.evaluate(([l, m]) => { pref.set('ocr', { lang: l, also: '', dir: 'h', skip: true, ...m }); S.ocr = null; openTask('ocr'); }, [lang, more]);
   await p.waitForSelector('#oGo'); const n0 = await p.evaluate(() => cur().bytes.length); const t0 = Date.now();
   await p.click('#oGo');
@@ -129,6 +130,13 @@ TESTS.ocr = async () => {
   // the most accurate (full-precision) models on the faded page: 63.5% here against 60.6% with the everyday ones
   const { file, secs } = await ocr('faded.pdf', 'por', { best: true }); const acc = lcs(fs.readFileSync(fx('faded.txt'), 'utf8'), pdftotext(file));
   check(`faded.pdf with the most accurate models: at least ${OCR_MIN['faded.pdf'] + 2}% of words read`, acc >= OCR_MIN['faded.pdf'] + 2, `${acc.toFixed(1)}% in ${secs.toFixed(0)} s`);
+  // with the most accurate models already on the device, an everyday run reads faded pages again with them by itself,
+  // and leaves clear pages alone
+  for (const [f, want] of [['faded.pdf', true], ['real/herculano-faded.pdf', false]]) {
+    const r = await ocr(f, 'por', { haveBest: true }); const last = await r.p.evaluate(() => OCR.last); const a = lcs(fs.readFileSync(fx(f.replace(/pdf$/, 'txt')), 'utf8'), pdftotext(r.file));
+    check(`${f}: ${want ? 'faded, so read again with the most accurate models' : 'clear, so the everyday models are kept'}`, last[0].best === want && a >= OCR_MIN[f] + (want ? 2 : 0), `confidence ${last[0].conf}, ${a.toFixed(1)}% in ${r.secs.toFixed(0)} s`);
+    await r.p.context().close();
+  }
 };
 
 // --- Excel from a scanned table
