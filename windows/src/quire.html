@@ -191,6 +191,30 @@ fieldset.ff-radio legend{padding:0;margin-bottom:4px;width:100%}
 .rec-n{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rec-wrap{text-align:left;max-width:680px}
 .swatch{width:26px;height:26px;border-radius:50%;border:1px solid rgba(0,0,0,.2);cursor:pointer;padding:0}
+.pii-cats{display:grid;grid-template-columns:1fr;gap:2px}
+.pii-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.pii-list summary{cursor:pointer;list-style:none}.pii-row{display:flex;gap:6px;align-items:center;font-size:12px;padding:1px 0 1px 18px}
+.myd-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+#reader{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;--rbg:#fff;--rfg:#1d1d1f;--rmu:#888}
+#reader[data-theme=sepia]{--rbg:#f6efe1;--rfg:#3b3127;--rmu:#9a8a73}#reader[data-theme=night]{--rbg:#15161a;--rfg:#d8d6d0;--rmu:#7d7c78}
+#reader .rd-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 14px;background:var(--rbg);color:var(--rfg);border-bottom:1px solid color-mix(in srgb,var(--rfg) 12%,transparent)}
+#reader .rd-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30vw}#reader .rd-tools{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+#reader .rd-tools .inp{width:auto;height:28px}
+#reader .rd-scroll{flex:1;position:relative;overflow:auto;background:var(--rbg);color:var(--rfg)}
+#reader .rd-text{margin:0 auto;padding:28px 22px 30vh}
+#reader[data-font=serif] .rd-text{font-family:Charter,'Iowan Old Style',Georgia,'Times New Roman',serif}#reader[data-font=sans] .rd-text{font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
+#reader[data-font=mono] .rd-text{font-family:'Courier Prime',Courier,monospace}#reader[data-font=easy] .rd-text{font-family:Verdana,'Atkinson Hyperlegible',system-ui,sans-serif;letter-spacing:.02em;word-spacing:.12em}
+#reader .rd-page{position:relative;padding-top:6px}#reader .rd-page+.rd-page{border-top:1px dashed color-mix(in srgb,var(--rfg) 15%,transparent);margin-top:18px}
+#reader .rd-pn{position:absolute;right:-8px;top:-10px;font-size:11px;color:var(--rmu);text-decoration:none}
+#reader p{margin:0 0 .8em;text-align:justify;hyphens:auto}#reader h2{font-size:1.25em;margin:1em 0 .5em;line-height:1.3}#reader .rd-empty{color:var(--rmu);font-style:italic}
+#reader .rd-say{background:color-mix(in srgb,#f0a020 22%,transparent);border-radius:4px}
+#reader .btn,#reader .inp{background:color-mix(in srgb,var(--rfg) 8%,var(--rbg));color:var(--rfg);border-color:transparent}
+.cmp-li{display:flex;align-items:flex-start;gap:4px}.cmp-li>button[data-ch]{flex:1}
+.cmp-acts{display:flex;gap:2px;padding-top:4px}.cmp-acts button{border:1px solid var(--line,#ddd);background:none;border-radius:4px;width:20px;height:20px;padding:0;cursor:pointer;font-size:11px;line-height:1;color:var(--muted,#667)}
+.cmp-st-acc [data-acc]{background:#1f8a4c;color:#fff;border-color:#1f8a4c}.cmp-st-rej [data-rej]{background:#c03a3a;color:#fff;border-color:#c03a3a}.cmp-st-rej>button[data-ch]{opacity:.5}
+.ver-list li{display:flex;flex-direction:column;gap:4px;padding:6px 0;border-bottom:1px solid var(--line,#eee)}
+.ba-files{max-height:180px;overflow:auto;font-size:12px}.ba-err{color:#c03a3a}.ba-ok{color:#1f8a4c}.ba-opt{padding:2px 0 6px 24px;display:flex;flex-direction:column;gap:4px}
+.qr-val{font-size:12px;word-break:break-all;padding:2px 0 4px}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -1127,7 +1151,7 @@ async function saveDialog() {
   let name = ($('#svName').value || baseName(d)).trim(); if (!/\.pdf$/i.test(name)) name += '.pdf';
   const editable = !!($('#svEdit') && $('#svEdit').checked); if ($('#svEdit') && !hasRed) pref.set('editable', editable);
   busy('Preparing ' + name + '…');
-  try { const out = await buildOutput(d, { editable }); unbusy(); await saveFile(name, out); d.dirty = false; d.name = name; renderTabs(); }
+  try { const out = await buildOutput(d, { editable }); unbusy(); await saveFile(name, out); verKey(d); versionAdd(d, out, 'Saved'); d.dirty = false; d.name = name; renderTabs(); }
   catch (e) { console.error(e); toast('Save failed: ' + (e.message || e)); } finally { unbusy(); }
 }
 
@@ -3416,6 +3440,7 @@ TASKS.form = async function (P, d) {
     const hit = write(vals);
     toast(hit ? `Filled ${plural(hit, 'field')} from ${file.name}${note}. Check them, then Save values.` : `No field names in ${file.name} match this form.`);
   };
+  P._ff = { F: fillable.length ? F : F, read, write };
   $('#ffMerge', P).onclick = () => formMerge();
   $('#ffDet', P).onclick = () => detectFields();
   $('#ffEd', P).onclick = () => {
@@ -3829,8 +3854,8 @@ TASKS.compare = function (P, d) {
   let res = '';
   if (R && R.mode === 'text') {
     res = `<p class="small" style="margin:0"><b>${R.H.length ? plural(R.H.length, 'change') : 'No differences in the text'}</b>${R.H.length ? ` · ${plural(R.added, 'word')} added, ${plural(R.removed, 'word')} removed` : ''}${R.pagesA !== R.pagesB ? ` · ${R.pagesA} pages before, ${R.pagesB} now` : ''}</p>
-      <ol class="results cm-list cmp-list">${R.H.slice(0, 400).map((h, n) => `<li><button data-ch="${n}" class="${n === CMP.sel ? 'on' : ''}"><span class="muted">p.${h.page + 1}</span> <b class="cmp-${h.kind}">${h.kind}</b> ${h.oldText ? `<del>${esc(h.oldText.slice(0, 90))}</del> ` : ''}${h.newText ? `<ins>${esc(h.newText.slice(0, 90))}</ins>` : ''}</button></li>`).join('')}${R.H.length > 400 ? `<li class="muted">and ${R.H.length - 400} more</li>` : ''}</ol>
-      ${R.H.length ? '<div class="row"><button class="btn sm primary" id="cpMark">Mark changes on this document</button><button class="btn sm" id="cpRep">Save report</button></div>' : ''}`;
+      <ol class="results cm-list cmp-list">${R.H.slice(0, 400).map((h, n) => `<li class="cmp-li ${h.state ? 'cmp-st-' + h.state : ''}"><span class="cmp-acts"><button data-acc="${n}" title="Accept this change" aria-label="Accept">✓</button><button data-rej="${n}" title="Reject this change" aria-label="Reject">✕</button></span><button data-ch="${n}" class="${n === CMP.sel ? 'on' : ''}"><span class="muted">p.${h.page + 1}</span> <b class="cmp-${h.kind}">${h.kind}</b> ${h.oldText ? `<del>${esc(h.oldText.slice(0, 90))}</del> ` : ''}${h.newText ? `<ins>${esc(h.newText.slice(0, 90))}</ins>` : ''}</button></li>`).join('')}${R.H.length > 400 ? `<li class="muted">and ${R.H.length - 400} more</li>` : ''}</ol>
+      ${R.H.length ? `<p class="muted small" style="margin:0">${R.H.filter(h => h.state === 'acc').length} accepted · ${R.H.filter(h => h.state === 'rej').length} rejected · ${R.H.filter(h => !h.state).length} to review</p><div class="row"><button class="btn sm primary" id="cpMark">Mark changes on this document</button><button class="btn sm" id="cpRep">Save report</button><button class="btn sm" id="cpCsv">Change list (CSV)</button></div>` : ''}`;
   } else if (R) {
     const diffP = R.P.map((p, k) => [p, k]).filter(([p]) => p.regions.length);
     res = `<p class="small" style="margin:0"><b>${diffP.length ? `${plural(diffP.length, 'page')} look different` : 'The pages look the same'}</b>${R.pagesA !== R.pagesB ? ` · ${R.pagesA} pages before, ${R.pagesB} now (only the first ${Math.min(R.pagesA, R.pagesB)} compared)` : ''}</p>
@@ -3853,7 +3878,9 @@ TASKS.compare = function (P, d) {
   $$('[data-ch]', P).forEach(b => b.onclick = () => { CMP.sel = +b.dataset.ch; gotoPage(R.H[CMP.sel].page); $$('[data-ch]', P).forEach(x => x.classList.toggle('on', x === b)); cmpFlash(d, R, R.H[CMP.sel]); });
   $$('[data-vp]', P).forEach(b => b.onclick = () => { CMP.sel = +b.dataset.vp; gotoPage(CMP.sel); $$('[data-vp]', P).forEach(x => x.classList.toggle('on', x === b)); cmpShow(P, R.P[CMP.sel]); });
   const mk = $('#cpMark', P); if (mk) mk.onclick = () => cmpMark(d, R);
-  const rp = $('#cpRep', P); if (rp) rp.onclick = () => { const t = `Compared "${d.name}" (newer) with "${CMP.name}"\n${R.H.length} changes, ${R.added} words added, ${R.removed} removed\n\n` + R.H.map(h => `Page ${h.page + 1} · ${h.kind}\n${h.oldText ? '  was: ' + h.oldText + '\n' : ''}${h.newText ? '  now: ' + h.newText + '\n' : ''}`).join('\n'); saveFile(`${baseName(d)}-compare.txt`, new Blob([t], { type: 'text/plain' })); };
+  $$('[data-acc],[data-rej]', P).forEach(b => b.onclick = () => { const h = R.H[+(b.dataset.acc ?? b.dataset.rej)]; const st = b.dataset.acc != null ? 'acc' : 'rej'; h.state = h.state === st ? '' : st; TASKS.compare(P, d); });
+  const cv = $('#cpCsv', P); if (cv) cv.onclick = () => { const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`; const t = ['Page,Change,Was,Now,Decision', ...R.H.map(h => [h.page + 1, h.kind, h.oldText, h.newText, h.state === 'acc' ? 'accepted' : h.state === 'rej' ? 'rejected' : ''].map(q).join(','))].join('\r\n'); saveFile(`${baseName(d)}-changes.csv`, new Blob(['\ufeff' + t], { type: 'text/csv' })); };
+  const rp = $('#cpRep', P); if (rp) rp.onclick = () => { const t = `Compared "${d.name}" (newer) with "${CMP.name}"\n${R.H.length} changes, ${R.added} words added, ${R.removed} removed\n\n` + R.H.map(h => `Page ${h.page + 1} · ${h.kind}${h.state ? (h.state === 'acc' ? ' · accepted' : ' · rejected') : ''}\n${h.oldText ? '  was: ' + h.oldText + '\n' : ''}${h.newText ? '  now: ' + h.newText + '\n' : ''}`).join('\n'); saveFile(`${baseName(d)}-compare.txt`, new Blob([t], { type: 'text/plain' })); };
 };
 function cmpBoxes(R, h) {
   const by = new Map();
@@ -3870,6 +3897,7 @@ function cmpMark(d, R) {
   snapshot(); let n = 0; const now = new Date().toISOString();
   if (R.mode === 'text') {
     for (const h of R.H) {
+      if (h.state === 'rej') continue;
       const boxes = cmpBoxes(R, h);
       for (const b of boxes) { d.annots[b.p].push({ type: 'highlight', x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2, color: h.kind === 'changed' ? '#f0a020' : '#3cb371', opacity: .4, author: 'Compare', date: now }); n++; }
       if (h.del.length) { const at = h.ins.length ? R.B[h.ins[0]] : R.B[h.after] || R.B[R.B.length - 1]; if (at && at.x1 != null) { d.annots[at.p].push({ type: 'note', x: at.x1, y: at.y2 + 2, text: (h.ins.length ? 'Was: ' : 'Removed: ') + h.oldText, color: '#d64545', author: 'Compare', date: now }); n++; } }
@@ -3972,7 +4000,7 @@ async function pdfFileKey(E, id0, password) {
   return key ? { key, V, R, cfm, encMeta } : null;
 }
 // Calls fn(bytes, objectRef) → bytes on every string and stream of the file, except the /Encrypt dictionary and xref streams.
-async function cryptAll(pdf, skipRef, fn, encMeta = true) {
+async function cryptAll(pdf, skipRef, fn, encMeta = true, skipNums = null) {
   const L = PDFLib; const ctx = pdf.context;
   const walk = async (o, ref) => {
     if (o instanceof L.PDFString || o instanceof L.PDFHexString) return L.PDFHexString.of([...await fn(o.asBytes(), ref)].map(b => b.toString(16).padStart(2, '0')).join(''));
@@ -3982,9 +4010,10 @@ async function cryptAll(pdf, skipRef, fn, encMeta = true) {
   };
   for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
     if (skipRef && ref === skipRef) continue;
+    if (skipNums && skipNums.has(ref.objectNumber)) continue;
     if (obj instanceof L.PDFRawStream) {
       const type = String(obj.dict.get(L.PDFName.of('Type')) || '');
-      if (type === '/XRef') continue;
+      if (type === '/XRef' || (skipNums && type === '/ObjStm')) continue;
       await walk(obj.dict, ref);
       if (type === '/Metadata' && !encMeta) continue;
       ctx.assign(ref, L.PDFRawStream.of(obj.dict, await fn(obj.contents, ref)));
@@ -3995,7 +4024,8 @@ async function cryptAll(pdf, skipRef, fn, encMeta = true) {
 function objKey(K, ref, aes) { const n = ref.objectNumber, g = ref.generationNumber; const h = md5(cat(K.key, new Uint8Array([n & 255, (n >> 8) & 255, (n >> 16) & 255, g & 255, (g >> 8) & 255]), aes ? new Uint8Array([0x73, 0x41, 0x6C, 0x54]) : new Uint8Array(0))); return h.slice(0, Math.min(K.key.length + 5, 16)); }
 
 async function decryptPdf(bytes, password) {
-  const L = PDFLib; const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false });
+  const L = PDFLib; const opts = { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false };
+  let pdf = await PDFDocument.load(bytes, opts);
   const t = pdf.context.trailerInfo; const encRef = t.Encrypt; if (!encRef) return { bytes, pdf: null };
   const E = pdf.context.lookup(encRef, L.PDFDict); const ID = t.ID ? pdf.context.lookup(t.ID) : null; const id0 = ID instanceof L.PDFArray ? bytesOf(ID.get(0)) : new Uint8Array(0);
   const filter = String(E.lookup(L.PDFName.of('Filter')) || ''); if (filter !== '/Standard') throw new Error('This file uses ' + (filter.slice(1) || 'an unknown') + ' security, which needs a certificate. Only password protection can be removed.');
@@ -4003,10 +4033,31 @@ async function decryptPdf(bytes, password) {
   const fn = K.cfm === 'AESV3' ? async b => b.length >= 32 ? aesDec(K.key, b.slice(0, 16), b.slice(16)) : new Uint8Array(0)
     : K.cfm === 'AESV2' ? async (b, ref) => b.length >= 32 ? aesDec(objKey(K, ref, true), b.slice(0, 16), b.slice(16)) : new Uint8Array(0)
     : K.cfm === 'None' ? async b => b : async (b, ref) => rc4(objKey(K, ref, false), b);
-  const safe = f => async (b, r) => { try { return await f(b, r); } catch { return b; } };
-  await cryptAll(pdf, encRef, safe(fn), K.encMeta);
-  delete t.Encrypt; pdf.context.delete(encRef);
+  const safe = async (b, r) => { try { return await fn(b, r); } catch { return b; } };
+  // Object streams are encrypted as a whole and pdf-lib reads them while parsing, so decrypt them in the raw file first.
+  const pre = await decryptObjStms(bytes, safe); let skip = null;
+  if (pre) { pdf = await PDFDocument.load(pre.bytes, opts); skip = pre.nums; }
+  const t2 = pdf.context.trailerInfo; const er = t2.Encrypt || encRef;
+  await cryptAll(pdf, er, safe, K.encMeta, skip);
+  delete t2.Encrypt; pdf.context.delete(er);
   return { bytes: await pdf.save({ useObjectStreams: false, updateFieldAppearances: false }), K };
+}
+async function inflateBytes(b) { const out = new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('deflate'))); return new Uint8Array(await out.arrayBuffer()); }
+async function decryptObjStms(bytes, fn) {
+  const txt = new TextDecoder('latin1').decode(bytes); const re = /(\d+)\s+(\d+)\s+obj\s*<</g; const parts = []; const nums = new Set(); let last = 0, found = 0, m;
+  while ((m = re.exec(txt))) {
+    const ds = m.index + m[0].length - 2; const se = txt.indexOf('stream', ds); if (se < 0) break; const dict = txt.slice(ds, se);
+    if (!/\/Type\s*\/ObjStm\b/.test(dict) || /endobj/.test(dict)) continue;
+    let st = se + 6; if (txt[st] === '\r') st++; if (txt[st] === '\n') st++;
+    const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict); let len = lm && !lm[2] ? +lm[1] : -1;
+    if (len < 0) { const e = txt.indexOf('endstream', st); len = e - st; while (len > 0 && (txt[st + len - 1] === '\n' || txt[st + len - 1] === '\r')) len--; }
+    const data = await fn(bytes.slice(st, st + len), { objectNumber: +m[1], generationNumber: +m[2] });
+    try { const raw = /FlateDecode/.test(dict) ? await inflateBytes(data) : data; const first = +(/\/First\s+(\d+)/.exec(dict) || [0, 0])[1]; const head = new TextDecoder('latin1').decode(raw.subarray(0, first)).trim().split(/\s+/); for (let k = 0; k < head.length; k += 2) nums.add(+head[k]); } catch {}
+    const nd = dict.replace(/\/Length\s+\d+(\s+\d+\s+R)?/, '/Length ' + data.length);
+    parts.push(bytes.subarray(last, ds), new TextEncoder().encode(nd + 'stream\n'), data, new TextEncoder().encode('\n')); last = st + len; re.lastIndex = st + len; found++;
+  }
+  if (!found) return null; parts.push(bytes.subarray(last));
+  return { bytes: cat(...parts), nums };
 }
 // Encrypts with revision 6 (AES-256). perms: { print, printHigh, modify, copy, annot, fill, assemble }.
 async function encryptPdf(bytes, user, owner, perms) {
@@ -4096,7 +4147,7 @@ RIB.pages.items = RIB.pages.items.flatMap(x => x === '@overlay' ? ['@overlay', '
 
 /* ---- recent files: kept in this browser's own storage, never uploaded ---- */
 const REC = { max: 10, maxBytes: 40e6, on: pref.get('recentOn', true) };
-function recDb() { return new Promise((res, rej) => { const q = indexedDB.open('quire-recent', 1); q.onupgradeneeded = () => q.result.createObjectStore('files', { keyPath: 'id' }); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+function recDb() { return new Promise((res, rej) => { const q = indexedDB.open('quire-recent', 2); q.onupgradeneeded = () => { const db = q.result; if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' }); if (!db.objectStoreNames.contains('versions')) db.createObjectStore('versions', { keyPath: 'id', autoIncrement: true }).createIndex('file', 'file'); }; q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
 async function recTx(mode, fn) { const db = await recDb(); try { return await new Promise((res, rej) => { const t = db.transaction('files', mode); const st = t.objectStore('files'); const out = fn(st); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); }); } finally { db.close(); } }
 async function recList() { try { const all = await recTx('readonly', st => st.getAll()); return (all || []).sort((a, b) => b.at - a.at); } catch { return []; } }
 async function recentAdd(d) {
@@ -4249,6 +4300,495 @@ async function bgDialog() {
 function hexRgb(h) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(h) || [0, 'ff', 'ff', 'ff']; return [1, 2, 3].map(k => parseInt(m[k], 16)); }
 document.addEventListener('click', e => { const b = e.target.closest('[data-bgc]'); if (b) { const i = $('#bgC'); if (i) i.value = b.dataset.bgc; } });
 document.addEventListener('input', e => { if (e.target.id === 'bgO') { const v = $('#bgOv'); if (v) v.textContent = e.target.value + '%'; } });
+
+/* ================= round 4 ideas: find personal data, my details, reading mode, spoken skim ================= */
+Object.assign(IC, {
+  pii: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><rect x="14" y="10" width="8" height="5" rx="1" fill="currentColor"/>',
+  reader: '<path d="M3 5c3-1 6-1 9 1 3-2 6-2 9-1v14c-3-1-6-1-9 1-3-2-6-2-9-1z"/><path d="M12 6v14"/>',
+  mydetails: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 16.5c.6-1.7 1.9-2.6 3.5-2.6s2.9.9 3.5 2.6M15 10h3.5M15 13h3.5"/>'
+});
+Object.assign(RLBL, { pii: 'Find personal data', reader: 'Reading mode', mydetails: 'My details' });
+Object.assign(ACTS, {
+  pii: ['Find personal data to redact', 'pii', () => openTask('pii')],
+  reader: ['Reading mode', 'reader', () => openReader()],
+  mydetails: ['My details for filling forms', 'mydetails', () => myDetailsDialog()]
+});
+Object.assign(CMD_KW, { pii: 'redact personal data pii gdpr lgpd email phone cpf cnpj iban card names find sensitive', reader: 'reading mode reflow book night sepia font size immersive', mydetails: 'autofill profile my details name address fill forms automatically' });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@redactApply' ? ['@pii', '@redactApply'] : [x]);
+RIB.view.items.splice(0, 0, '@reader', '|');
+RIB.forms.items = RIB.forms.items.flatMap(x => x === '@fill' ? ['@fill', '@mydetails'] : [x]);
+
+/* ---- page text with positions: one string per page, and boxes for any character range ---- */
+async function pageSpan(d, i) {
+  const tc = await pageText(d, i); let s = ''; const map = [];
+  for (const it of tc.items) {
+    if (!it.str) { if (it.hasEOL) s += '\n'; continue; }
+    const t = it.transform; const flat = Math.abs(t[1]) < .01 && Math.abs(t[2]) < .01 && t[0] > 0;
+    map.push({ a: s.length, b: s.length + it.str.length, x: t[4], y: t[5], w: it.width, h: it.height || t[0], flat });
+    s += it.str + (it.hasEOL ? '\n' : ' ');
+  }
+  return { s, map };
+}
+function spanBoxes(sp, a, b) {
+  const out = [];
+  for (const m of sp.map) { if (m.b <= a || m.a >= b || !m.flat) continue; const n = m.b - m.a, cw = m.w / Math.max(1, n); const s0 = Math.max(a, m.a) - m.a, s1 = Math.min(b, m.b) - m.a;
+    out.push({ x1: m.x + s0 * cw - .5, x2: m.x + s1 * cw + .5, y1: m.y - m.h * .25, y2: m.y + m.h * .95 }); }
+  return out;
+}
+
+/* ---- find personal data ---- */
+const luhn = s => { const d = s.replace(/\D/g, ''); if (d.length < 13 || d.length > 19) return false; let sum = 0; for (let i = 0; i < d.length; i++) { let x = +d[d.length - 1 - i]; if (i % 2) { x *= 2; if (x > 9) x -= 9; } sum += x; } return sum % 10 === 0; };
+const cpfOk = s => { const d = s.replace(/\D/g, ''); if (d.length !== 11 || /^(\d)\1+$/.test(d)) return false; const dv = n => { let t = 0; for (let i = 0; i < n; i++) t += +d[i] * (n + 1 - i); const r = t * 10 % 11; return r === 10 ? 0 : r; }; return dv(9) === +d[9] && dv(10) === +d[10]; };
+const cnpjOk = s => { const d = s.replace(/\D/g, ''); if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false; const dv = n => { const w = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; let t = 0; for (let i = 0; i < n; i++) t += +d[i] * w[i]; const r = t % 11; return r < 2 ? 0 : 11 - r; }; return dv(12) === +d[12] && dv(13) === +d[13]; };
+const ibanOk = s => { const x = s.replace(/\s/g, '').toUpperCase(); if (x.length < 15 || x.length > 34) return false; const r = (x.slice(4) + x.slice(0, 4)).replace(/[A-Z]/g, c => c.charCodeAt(0) - 55); let m = 0; for (const c of r) m = (m * 10 + +c) % 97; return m === 1; };
+const PII = [
+  { id: 'email', label: 'Email addresses', on: true, re: /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu },
+  { id: 'cpf', label: 'CPF numbers', on: true, re: /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, ok: cpfOk },
+  { id: 'cnpj', label: 'CNPJ numbers', on: true, re: /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, ok: cnpjOk },
+  { id: 'iban', label: 'IBAN bank accounts', on: true, re: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/g, ok: ibanOk },
+  { id: 'card', label: 'Card numbers', on: true, re: /\b\d(?:[ -]?\d){12,18}\b/g, ok: luhn },
+  { id: 'phone', label: 'Phone numbers', on: true, re: /(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d[\d\s.-]{6,16}\d/g, ok: s => { const n = s.replace(/\D/g, '').length; const t = s.trim(); return n >= 8 && n <= 15 && !/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(t) && !/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(t) && !/^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(t); } },
+  { id: 'post', label: 'Postcodes (CEP, UK)', on: false, re: /\b\d{5}-\d{3}\b|\b[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}\b/g },
+  { id: 'date', label: 'Dates', on: false, re: /\b\d{1,2}[./-]\d{1,2}[./-](?:\d{4}|\d{2})\b/g },
+  { id: 'name', label: 'Names after titles or labels (a guess)', on: false, re: /(?:\b(?:Mr|Mrs|Ms|Dr|Dra|Sr|Sra|Prof|Profa)\.?\s+|\b(?:Name|Nome|Full name|Nome completo|Tenant|Landlord|Locatário|Locador|Signed by|Assinado por)\s*:\s*)(\p{Lu}[\p{L}'’-]+(?:\s+(?:de|da|do|dos|das|van|von|e)?\s*\p{Lu}[\p{L}'’-]+){0,4})/gu, group: 1 },
+  { id: 'url', label: 'Web addresses', on: false, re: /\bhttps?:\/\/[^\s<>"]+|\bwww\.[^\s<>"]+/g }
+];
+const PIIS = { on: Object.fromEntries(PII.map(p => [p.id, p.on])), words: '', scope: 'all', hits: null, doc: null };
+async function piiFind(d) {
+  const pages = PIIS.scope === 'cur' ? [d.cur] : [...d.info.keys()]; const hits = [];
+  const words = PIIS.words.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+  const cats = PII.filter(p => PIIS.on[p.id]); if (words.length) cats.push({ id: 'words', label: 'Your words', re: new RegExp('(?<![\\p{L}\\p{N}])(?:' + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')).join('|') + ')(?![\\p{L}\\p{N}])', 'giu') });
+  for (const i of pages) {
+    $('#busyMsg').textContent = `Looking on page ${i + 1}…`; const sp = await pageSpan(d, i); const taken = [];
+    for (const c of cats) {
+      c.re.lastIndex = 0;
+      for (const m of sp.s.matchAll(c.re)) {
+        let t = m[0], a = m.index; if (c.group) { t = m[c.group]; a = m.index + m[0].lastIndexOf(t); }
+        t = t.replace(/[.,;:)\]]+$/, ''); const b = a + t.length;
+        if (c.ok && !c.ok(t)) continue; if (taken.some(([x, y]) => a < y && b > x)) continue; taken.push([a, b]);
+        const boxes = spanBoxes(sp, a, b); if (boxes.length) hits.push({ cat: c.id, label: c.label, text: t.replace(/\s+/g, ' '), page: i, boxes, on: true });
+      }
+    }
+  }
+  return hits;
+}
+TASKS.pii = function (P, d) {
+  const H = PIIS.doc === d ? PIIS.hits : null;
+  const groups = H ? [...new Set(H.map(h => h.cat))] : [];
+  P.innerHTML = `<section class="sec">${head('Find personal data')}
+    <p class="muted small" style="margin:0">Finds details to black out before sharing. Numbers with check digits (CPF, CNPJ, IBAN, cards) are verified, so random numbers aren't picked up.</p>
+    <div class="pii-cats">${PII.map(p => `<label class="chk"><input type="checkbox" data-pc="${p.id}" ${PIIS.on[p.id] ? 'checked' : ''}> ${p.label}</label>`).join('')}</div>
+    <div class="field"><label for="piW">Also these words or names (one per line)</label><textarea id="piW" rows="3" placeholder="Ana Souza&#10;Rua das Flores">${esc(PIIS.words)}</textarea></div>
+    <div class="row"><select id="piS" class="inp sm" style="width:auto"><option value="all">All pages</option><option value="cur"${PIIS.scope === 'cur' ? ' selected' : ''}>This page</option></select><button class="btn primary" id="piGo">Find</button></div>
+    ${H ? (H.length ? `<p class="small" style="margin:0"><b>${plural(H.length, 'item')} found</b> · ${H.filter(h => h.on).length} ticked</p>
+      <div class="pii-list">${groups.map(g => { const L = H.map((h, k) => [h, k]).filter(([h]) => h.cat === g); return `<details open><summary><label class="chk" onclick="event.stopPropagation()"><input type="checkbox" data-pg="${g}" ${L.every(([h]) => h.on) ? 'checked' : ''}> <b>${esc(L[0][0].label)}</b> <span class="muted">${L.length}</span></label></summary>${L.map(([h, k]) => `<div class="pii-row"><input type="checkbox" data-pk="${k}" ${h.on ? 'checked' : ''} aria-label="Redact this"><button class="linkish" data-pj="${k}"><span class="muted">p.${h.page + 1}</span> ${esc(h.text.slice(0, 60))}</button></div>`).join('')}</details>`; }).join('')}</div>
+      <div class="row"><button class="btn primary" id="piMark">Mark ${H.filter(h => h.on).length} for redaction</button></div>
+      <p class="hint" style="margin:0">Marked areas show in black. They're removed for good when you use Apply redactions or save.</p>` : '<p class="muted">Nothing found.</p>') : ''}</section>`;
+  bindClose(P);
+  $$('[data-pc]', P).forEach(c => c.onchange = () => { PIIS.on[c.dataset.pc] = c.checked; });
+  $('#piW', P).oninput = e => { PIIS.words = e.target.value; };
+  $('#piS', P).onchange = e => { PIIS.scope = e.target.value; };
+  $('#piGo', P).onclick = async () => { busy('Looking for personal data…'); try { PIIS.hits = await piiFind(d); PIIS.doc = d; } catch (e) { console.error(e); toast('Search failed: ' + e.message); } finally { unbusy(); } if (S.task === 'pii') TASKS.pii(P, d); };
+  if (!H) return;
+  $$('[data-pk]', P).forEach(c => c.onchange = () => { H[+c.dataset.pk].on = c.checked; TASKS.pii(P, d); });
+  $$('[data-pg]', P).forEach(c => c.onchange = () => { H.forEach(h => { if (h.cat === c.dataset.pg) h.on = c.checked; }); TASKS.pii(P, d); });
+  $$('[data-pj]', P).forEach(b => b.onclick = () => { const h = H[+b.dataset.pj]; gotoPage(h.page); const v = d.views[h.page]; if (!v) return; const bx = h.boxes[0]; const p = v.vp.convertToViewportPoint(bx.x1, bx.y2), q = v.vp.convertToViewportPoint(bx.x2, bx.y1); const fl = el('div', 'cmp-flash'); Object.assign(fl.style, { left: Math.min(p[0], q[0]) - 3 + 'px', top: Math.min(p[1], q[1]) - 3 + 'px', width: Math.abs(q[0] - p[0]) + 6 + 'px', height: Math.abs(q[1] - p[1]) + 6 + 'px' }); v.wrap.append(fl); setTimeout(() => fl.remove(), 1600); });
+  const mk = $('#piMark', P); if (mk) mk.onclick = () => { const on = H.filter(h => h.on); if (!on.length) return; snapshot(); let n = 0; for (const h of on) for (const b of h.boxes) { d.annots[h.page].push({ type: 'redact', x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }); n++; } redrawAll(); PIIS.hits = null; TASKS.pii(P, d); toast(`Marked ${plural(n, 'area')} for redaction. Tools → Apply redactions removes them for good.`); };
+};
+
+/* ---- my details: a profile for filling forms ---- */
+const MYD = [
+  ['name', 'Full name', /^(full)?name$|nomecompleto|^nome$|^yourname|applicantname|fullname|nomedo|^name\d*$/],
+  ['first', 'First name', /firstname|givenname|forename|primeironome|^first$|prenome/],
+  ['last', 'Last name', /lastname|surname|familyname|sobrenome|apelido|^last$/],
+  ['email', 'Email', /e?mail/],
+  ['phone', 'Phone', /phone|tel(efone)?|mobile|cell|celular|whatsapp/],
+  ['address', 'Street address', /address|endereco|morada|street|rua|logradouro/],
+  ['city', 'City', /city|cidade|town|municipio/],
+  ['state', 'State or region', /^state$|estado|^uf$|county|region|provincia/],
+  ['zip', 'Postcode', /zip|postcode|postal|cep/],
+  ['country', 'Country', /country|pais|nationality|nacionalidade/],
+  ['birth', 'Date of birth (yyyy-mm-dd)', /birth|nascimento|dob|datanasc/],
+  ['cpf', 'CPF', /cpf/], ['id', 'ID or passport number', /passport|passaporte|^rg$|identidade|idnumber|nif|nino|insurancenumber/],
+  ['company', 'Company', /company|empresa|organi[sz]ation|employer/],
+  ['job', 'Job title', /jobtitle|position|cargo|occupation|profissao/],
+  ['web', 'Website', /website|site|url/]
+];
+function myDetails() { return pref.get('myDetails', {}) || {}; }
+async function myDetailsDialog() {
+  const v = myDetails(); const b = el('div');
+  b.innerHTML = `<p class="muted small" style="margin:0">Saved only in this browser on this device. Quire offers them when a form has matching fields.</p><div class="myd-grid">${MYD.map(([k, l]) => `<div class="field"><label for="md_${k}">${l}</label><input id="md_${k}" class="inp" value="${esc(v[k] || '')}" autocomplete="off"></div>`).join('')}</div>`;
+  const r = await modal({ title: 'My details', body: b, actions: [{ label: 'Forget all', value: 'clear', danger: true }, { label: 'Cancel', value: false }, { label: 'Save', value: true, primary: true }] });
+  if (r === 'clear') { pref.set('myDetails', {}); toast('Your details were removed'); return; }
+  if (!r) return; const o = {}; for (const [k] of MYD) { const x = $('#md_' + k, b).value.trim(); if (x) o[k] = x; } pref.set('myDetails', o); toast('Details saved on this device');
+  if (S.task === 'form') renderPanel();
+}
+// Matches field names to the profile; returns { fieldName: value } for fields that are empty now.
+function myDetailsFor(F, current) {
+  const v = myDetails(); const out = {}; if (!Object.keys(v).length) return out;
+  if (!v.first && v.name) v.first = v.name.split(/\s+/)[0]; if (!v.last && v.name) v.last = v.name.split(/\s+/).slice(1).join(' ');
+  for (const x of F) {
+    if (!['text', 'date', 'drop'].includes(x.kind) || x.ro) continue; const cur_ = current[x.name]; if (cur_) continue;
+    const n = fnorm(x.name); let hit = null;
+    for (const [k, , re] of MYD) { if (k === 'name' && /first|last|given|sur|company|empresa|file|user|nomedaempresa/.test(n)) continue; if (re.test(n) && v[k]) { hit = k; break; } }
+    if (!hit && x.kind === 'date' && /^(date|data|today|hoje|signed|assinatura|signature)/.test(n)) { out[x.name] = new Date().toISOString().slice(0, 10); continue; }
+    if (hit) out[x.name] = v[hit];
+  }
+  return out;
+}
+
+/* ---- reading mode ---- */
+// Text reflowed into one column: paragraphs and headings rebuilt from line positions, hyphenation undone.
+async function reflowPage(d, i) {
+  const tc = await pageText(d, i); const lines = []; let L = null;
+  for (const it of tc.items) {
+    const t = it.transform; if (!it.str && !it.hasEOL) continue;
+    if (!L || (it.str && Math.abs(t[5] - L.y) > Math.max(2, (it.height || t[0]) * .5) && L.text)) { L = { text: '', y: t[5], h: 0, x: t[4] }; lines.push(L); }
+    if (it.str) { L.text += (L.text && !/\s$/.test(L.text) && !/^\s/.test(it.str) && t[4] - (L.end || t[4]) > (it.height || t[0]) * .15 ? ' ' : '') + it.str; L.h = Math.max(L.h, it.height || t[0]); L.end = t[4] + it.width; L.w = (L.end || 0) - L.x; }
+    if (it.hasEOL) L = null;
+  }
+  const ls = lines.filter(l => l.text.trim()); if (!ls.length) return [];
+  const med = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1] || 0; };
+  const mh = med(ls.map(l => l.h)), gaps = []; for (let k = 1; k < ls.length; k++) { const g = ls[k - 1].y - ls[k].y; if (g > 0) gaps.push(g); } const mg = med(gaps) || mh * 1.3; const mw = med(ls.map(l => l.w || 0));
+  const out = []; let P = null;
+  for (let k = 0; k < ls.length; k++) {
+    const l = ls[k], prev = ls[k - 1]; const text = l.text.replace(/\s+/g, ' ').trim();
+    if (/^\d{1,4}$/.test(text) && (k === 0 || k === ls.length - 1)) continue; // page number
+    const big = l.h > mh * 1.18 && text.length < 140;
+    const brk = !P || big || P.type === 'h' || (prev && (prev.y - l.y > mg * 1.45 || prev.y < l.y)) || (prev && /[.!?:”"]$/.test(prev.text.trim()) && (prev.w || 0) < mw * .8) || l.x - (prev ? prev.x : l.x) > mh * 1.2;
+    const label = brk && !big && k < ls.length - 1 && text.length < 70 && !/[.,;:!?]$/.test(text) && (l.w || 0) < mw * .6 && /^[\p{Lu}\d]/u.test(text);
+    if (brk) { P = { type: big || label ? 'h' : 'p', text }; out.push(P); }
+    else P.text = /[\p{L}]-$/u.test(P.text) && /^\p{Ll}/u.test(text) ? P.text.slice(0, -1) + text : P.text + ' ' + text;
+  }
+  return out;
+}
+const RD = Object.assign({ size: 19, font: 'serif', theme: 'sepia', width: 680, lh: 1.65 }, pref.get('reader', {}));
+async function openReader() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  let ov = $('#reader'); if (ov) ov.remove(); ov = el('div', ''); ov.id = 'reader'; document.body.append(ov);
+  const key = 'rpos:' + d.name + ':' + d.bytes.length; const saved = pref.get(key, null);
+  ov.innerHTML = `<div class="rd-bar"><button class="btn sm" id="rdClose">${svg('x')}Close</button><span class="rd-title">${esc(baseName(d))}</span><span class="rd-prog muted small" id="rdProg"></span>
+    <span class="rd-tools"><button class="btn sm" id="rdSm" aria-label="Smaller text">A−</button><button class="btn sm" id="rdLg" aria-label="Larger text">A+</button>
+    <select id="rdF" class="inp sm" aria-label="Font"><option value="serif">Serif</option><option value="sans">Sans</option><option value="mono">Typewriter</option><option value="easy">Easy reading</option></select>
+    <select id="rdT" class="inp sm" aria-label="Colours"><option value="light">Light</option><option value="sepia">Sepia</option><option value="night">Night</option></select>
+    <button class="btn sm" id="rdSay">${svg('read')}Read from here</button></span></div>
+    <div class="rd-scroll" id="rdScroll"><article class="rd-text" id="rdText"></article></div>`;
+  const art = $('#rdText', ov), sc = $('#rdScroll', ov);
+  const apply = () => { ov.dataset.theme = RD.theme; ov.dataset.font = RD.font; art.style.fontSize = RD.size + 'px'; art.style.maxWidth = RD.width + 'px'; art.style.lineHeight = RD.lh; pref.set('reader', RD); };
+  $('#rdF', ov).value = RD.font; $('#rdT', ov).value = RD.theme; apply();
+  $('#rdSm', ov).onclick = () => { RD.size = Math.max(12, RD.size - 1); apply(); }; $('#rdLg', ov).onclick = () => { RD.size = Math.min(34, RD.size + 1); apply(); };
+  $('#rdF', ov).onchange = e => { RD.font = e.target.value; apply(); }; $('#rdT', ov).onchange = e => { RD.theme = e.target.value; apply(); };
+  const close = () => { stopSpeaking(); savePos(); ov.remove(); document.removeEventListener('keydown', onKey, true); const p = topPage(); if (p >= 0) gotoPage(p); };
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true); $('#rdClose', ov).onclick = close;
+  let next = 0; let loading = false; const N = d.info.length;
+  const more = async (until = next + 4) => {
+    if (loading) return; loading = true;
+    try { while (next < Math.min(N, until)) { const i = next++; const ps = await reflowPage(d, i); const sec = el('section', 'rd-page'); sec.dataset.p = i;
+      sec.innerHTML = `<button class="rd-pn linkish" data-goto="${i}">${i + 1}</button>` + (ps.length ? ps.map(p => p.type === 'h' ? `<h2>${esc(p.text)}</h2>` : `<p>${esc(p.text)}</p>`).join('') : '<p class="rd-empty">This page has no text. If it\'s a scan, run OCR to read it here.</p>');
+      art.append(sec); } } finally { loading = false; }
+  };
+  const topPage = () => { const secs = $$('.rd-page', art); const y = sc.getBoundingClientRect().top + 40; let p = secs.length ? +secs[0].dataset.p : -1; for (const s of secs) { if (s.getBoundingClientRect().top <= y) p = +s.dataset.p; else break; } return p; };
+  const savePos = () => { const p = topPage(); if (p < 0) return; const s = art.querySelector(`[data-p="${p}"]`); const frac = s ? (sc.getBoundingClientRect().top - s.getBoundingClientRect().top) / Math.max(1, s.offsetHeight) : 0; pref.set(key, { p, frac: Math.max(0, frac), at: Date.now() }); };
+  const prog = () => { const p = topPage(); $('#rdProg', ov).textContent = p >= 0 ? `Page ${p + 1} of ${N} · ${Math.round((p + 1) / N * 100)}%` : ''; };
+  let t = 0; sc.onscroll = () => { if (sc.scrollTop + sc.clientHeight > sc.scrollHeight - 1500) more(); prog(); clearTimeout(t); t = setTimeout(savePos, 400); };
+  art.onclick = e => { const b = e.target.closest('[data-goto]'); if (b) { const i = +b.dataset.goto; ov.remove(); document.removeEventListener('keydown', onKey, true); gotoPage(i); } };
+  $('#rdSay', ov).onclick = () => { const p = topPage(); const paras = $$('p,h2', art).filter(x => x.getBoundingClientRect().bottom > sc.getBoundingClientRect().top + 20); let k = 0;
+    const go = () => { $$('.rd-say', art).forEach(x => x.classList.remove('rd-say')); if (k >= paras.length || !$('#reader')) return; const n = paras[k++]; n.classList.add('rd-say'); n.scrollIntoView({ block: 'center', behavior: 'smooth' }); if (n.closest('.rd-page') === art.lastElementChild) more(); speakText(n.textContent, () => { paras.push(...$$('p,h2', art).slice(paras.length)); go(); }); };
+    void p; RA.lang = ''; go(); };
+  const start = saved && saved.p < N ? saved.p : d.cur;
+  await more(start + 3);
+  const s = art.querySelector(`[data-p="${start}"]`); if (s) sc.scrollTop = s.offsetTop - art.offsetTop + (saved && saved.p === start ? saved.frac * s.offsetHeight : 0) - 10;
+  prog(); if (saved && saved.p > 0) toast(`Back where you left off: page ${saved.p + 1}`);
+}
+
+/* ---- spoken skim: headings and the first sentence of each paragraph ---- */
+async function raSkim(from) {
+  const d = cur(); if (!d) return; stopSpeaking(); RA.lang = '';
+  const one = async i => {
+    if (cur() !== d || i >= d.info.length) { raStatus(''); return; }
+    const ps = await reflowPage(d, i); if (!RA.lang) RA.lang = guessLang(ps.map(p => p.text).join(' '));
+    const t = ps.map(p => p.type === 'h' ? p.text + '.' : (p.text.match(/^.{20,}?[.!?](?=\s|$)/) || [p.text.slice(0, 160)])[0]).join(' ');
+    if (d.cur !== i) gotoPage(i);
+    if (!t.trim()) return one(i + 1);
+    speakText(t, () => one(i + 1), part => raStatus(`Skimming page ${i + 1} of ${d.info.length}`, part));
+  };
+  await one(from);
+}
+{ const _tr = TASKS.read; TASKS.read = function (P, d) { _tr(P, d); const row = $('#raEnd', P); if (!row) return; const b = el('button', 'btn', 'Skim'); b.title = 'Read headings and the first sentence of each paragraph, to the end'; b.onclick = () => raSkim(d.cur); row.after(b); }; }
+{ const _tf = TASKS.form; TASKS.form = async function (P, d) {
+  await _tf(P, d); if (!P._ff || S.task !== 'form') return; const { F, read, write } = P._ff; const row = $('#ffGo', P)?.parentElement; if (!row) return;
+  const has = Object.keys(myDetails()).length; const b = el('button', 'btn sm', has ? `${svg('mydetails')}Fill with my details` : `${svg('mydetails')}Set up my details`);
+  b.onclick = () => { if (!has) { myDetailsDialog(); return; } const vals = myDetailsFor(F, read()); const n = write(vals); toast(n ? `Filled ${plural(n, 'field')} from your details. Check them, then Save values.` : 'No empty fields match your details.'); };
+  row.after(el('div', 'row', '')); row.nextElementSibling.append(b);
+}; }
+
+/* ---- version history: a copy of the file each time it's opened or saved, kept in this browser ---- */
+Object.assign(IC, { versions: '<path d="M12 7v5l3 2"/><path d="M3.5 12a8.5 8.5 0 102.6-6.1"/><path d="M3 4v4h4"/>' });
+Object.assign(RLBL, { versions: 'Versions' });
+Object.assign(ACTS, { versions: ['Version history', 'versions', () => openTask('versions')] });
+Object.assign(CMD_KW, { versions: 'version history snapshots restore previous saved earlier copy timeline' });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@compare' ? ['@compare', '@versions'] : [x]);
+async function verTx(mode, fn) { const db = await recDb(); try { return await new Promise((res, rej) => { const t = db.transaction('versions', mode); const out = fn(t.objectStore('versions')); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); }); } finally { db.close(); } }
+const verKey = d => (d.vkey = d.vkey || d.name);
+async function verList(d) { try { return ((await verTx('readonly', st => st.index('file').getAll(verKey(d)))) || []).sort((a, b) => b.at - a.at); } catch { return []; } }
+async function versionAdd(d, bytes, label) {
+  if (!REC.on || !bytes || bytes.length > REC.maxBytes) return;
+  try {
+    const list = await verList(d); if (list[0] && list[0].size === bytes.length && eqB(list[0].bytes.subarray(0, 4096), bytes.subarray(0, 4096)) && eqB(list[0].bytes.subarray(-4096), bytes.subarray(-4096))) return;
+    const drop = list.slice(11); await verTx('readwrite', st => { st.add({ file: verKey(d), at: Date.now(), size: bytes.length, label, pages: d.info.length, bytes: bytes.slice(0) }); for (const v of drop) st.delete(v.id); });
+  } catch (e) { console.warn('versions', e); }
+}
+{ const _ra = recentAdd; recentAdd = async function (d) { await _ra(d); if (d) versionAdd(d, d.bytes, 'Opened'); }; }
+TASKS.versions = async function (P, d) {
+  P.innerHTML = `<section class="sec">${head('Version history')}<p class="muted">Loading…</p></section>`; bindClose(P);
+  const L = await verList(d); if (S.task !== 'versions' || cur() !== d) return;
+  const kb = n => n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+  P.innerHTML = `<section class="sec">${head('Version history')}
+    <p class="muted small" style="margin:0">A copy is kept each time you open or save this file, the last 12, in this browser only.${REC.on ? '' : ' <b>Remembering files is switched off in Recent files.</b>'}</p>
+    <div class="row"><button class="btn sm" id="vsNow">Keep a version now</button></div>
+    ${L.length ? `<ol class="results ver-list">${L.map((v, k) => `<li><div><b>${esc(v.label || 'Version')}</b> <span class="muted small">${new Date(v.at).toLocaleString()} · ${kb(v.size)}${v.pages ? ' · ' + plural(v.pages, 'page') : ''}</span></div><div class="row"><button class="btn sm" data-vc="${k}">Compare</button><button class="btn sm" data-vo="${k}">Open</button><button class="btn sm" data-vr="${k}">Restore</button><button class="btn sm danger-o" data-vd="${k}" aria-label="Delete this version">${svg('x')}</button></div></li>`).join('')}</ol>` : '<p class="muted">No versions yet. One is kept the next time you save.</p>'}</section>`;
+  bindClose(P);
+  $('#vsNow', P).onclick = async () => { busy('Keeping a version…'); try { await versionAdd(d, await buildOutput(d, { editable: true }), 'Kept by you'); } finally { unbusy(); } TASKS.versions(P, d); };
+  $$('[data-vc]', P).forEach(b => b.onclick = () => { const v = L[+b.dataset.vc]; CMP.src = v.bytes; CMP.name = `${v.label || 'Version'} ${new Date(v.at).toLocaleString()}`; CMP.res = null; openTask('compare'); });
+  $$('[data-vo]', P).forEach(b => b.onclick = () => { const v = L[+b.dataset.vo]; openBytes(new Uint8Array(v.bytes), `${baseName(d)} (${new Date(v.at).toLocaleString().replace(/[/:]/g, '-')}).pdf`, { noRecent: true }); });
+  $$('[data-vr]', P).forEach(b => b.onclick = async () => { const v = L[+b.dataset.vr]; const ok = await modal({ title: 'Restore this version?', body: `<p style="margin:0">The open file goes back to the version from ${esc(new Date(v.at).toLocaleString())}. Undo brings back what you have now.</p>`, actions: [{ label: 'Cancel', value: false }, { label: 'Restore', value: true, primary: true }] }); if (!ok) return;
+    snapshot(); d.bytes = new Uint8Array(v.bytes); d.annots = d.annots.map(() => []); d.dirty = true; busy('Restoring…'); try { await reloadDoc(d); } finally { unbusy(); } toast('Version restored'); });
+  $$('[data-vd]', P).forEach(b => b.onclick = async () => { await verTx('readwrite', st => st.delete(L[+b.dataset.vd].id)); TASKS.versions(P, d); });
+};
+
+/* ---- batch actions: run a chain of steps on many files ---- */
+// Like PDF-XChange's Actions: pick files or a folder, tick steps, save the chain as a preset, run.
+Object.assign(IC, { batch: '<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><path d="M14 7h7M14 17h7M18 4l3 3-3 3M18 14l3 3-3 3"/>' });
+Object.assign(RLBL, { batch: 'Batch' });
+Object.assign(ACTS, { batch: ['Batch actions on many files', 'batch', () => openTask('batch')] });
+Object.assign(CMD_KW, { batch: 'batch actions automate many files folder chain compress sanitize protect rename estante bulk' });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@compress' ? ['@compress', '@batch'] : [x]);
+const BA = Object.assign({ steps: { flatten: false, markup: true, sanitize: true, compress: true, meta: false, protect: false, rename: false }, dpi: 150, q: .7, author: '', pw: '', pattern: '{title} - {author}', out: 'zip', presets: {} }, pref.get('batch', {}), { files: [] });
+const baSave = () => { const { files, pw, ...keep } = BA; pref.set('batch', keep); };
+function pickMany(accept) { return new Promise(res => { const inp = el('input'); inp.type = 'file'; inp.accept = accept; inp.multiple = true; inp.hidden = true; document.body.append(inp); inp.onchange = () => { res([...inp.files]); inp.remove(); }; inp.addEventListener('cancel', () => { res([]); inp.remove(); }); inp.click(); }); }
+async function* walkDir(h, path = '') { for await (const [n, e] of h.entries()) { if (e.kind === 'directory') yield* walkDir(e, path + n + '/'); else if (/\.pdf$/i.test(n)) yield { name: n, path: path + n, get: () => e.getFile() }; } }
+TASKS.batch = function (P, d) {
+  const St = BA.steps; const ck = (k, l, extra = '') => `<label class="chk"><input type="checkbox" data-bs="${k}" ${St[k] ? 'checked' : ''}> ${l}</label>${St[k] && extra ? `<div class="ba-opt">${extra}</div>` : ''}`;
+  const others = S.docs;
+  P.innerHTML = `<section class="sec">${head('Batch actions')}
+    <div class="row"><button class="btn sm" id="baAdd">Add files…</button>${window.showDirectoryPicker ? '<button class="btn sm" id="baDir">Add a folder…</button>' : ''}${others.length ? `<button class="btn sm" id="baOpen">Add open files (${others.length})</button>` : ''}</div>
+    ${BA.files.length ? `<ol class="results ba-files">${BA.files.map((f, k) => `<li><span class="${f.status === 'error' ? 'ba-err' : f.status === 'done' ? 'ba-ok' : ''}">${esc(f.path || f.name)}</span>${f.msg ? ` <span class="muted small">${esc(f.msg)}</span>` : ''} <button class="linkish muted small" data-bx="${k}">remove</button></li>`).join('')}</ol>` : '<p class="muted small" style="margin:0">No files yet.</p>'}
+    <div class="field"><span class="lbl">Steps, in this order</span>
+      ${ck('markup', 'Draw in Quire markup (open files only)')}
+      ${ck('flatten', 'Flatten form fields')}
+      ${ck('sanitize', 'Sanitize: metadata, scripts, attachments, private data')}
+      ${ck('compress', 'Smart compress images', `<select id="baDpi" class="inp sm"><option value="300">300 dpi</option><option value="200">200 dpi</option><option value="150">150 dpi</option><option value="100">100 dpi</option></select>`)}
+      ${ck('meta', 'Set author', `<input id="baAuth" class="inp sm" placeholder="Author" value="${esc(BA.author)}">`)}
+      ${ck('protect', 'Protect with a password', `<input id="baPw" class="inp sm" type="password" placeholder="Password to open" value="${esc(BA.pw)}" autocomplete="new-password">`)}
+      ${ck('rename', 'Rename', `<input id="baPat" class="inp sm" value="${esc(BA.pattern)}"><span class="muted small">{name} {title} {author} {date} {n}</span>`)}</div>
+    <div class="field"><label for="baOut">Then</label><select id="baOut" class="inp"><option value="zip">Download as a .zip</option>${window.showDirectoryPicker ? '<option value="dir">Save into a folder…</option>' : ''}<option value="estante">Send to Estante</option><option value="tabs">Open as tabs</option></select></div>
+    <div class="row"><select id="baPre" class="inp sm" style="width:auto" aria-label="Presets"><option value="">Presets…</option>${Object.keys(BA.presets).map(n => `<option>${esc(n)}</option>`).join('')}</select><button class="btn sm" id="baKeep">Save as preset</button></div>
+    <div class="row"><button class="btn primary" id="baGo" ${BA.files.length ? '' : 'disabled'}>Run on ${plural(BA.files.length, 'file')}</button></div></section>`;
+  bindClose(P); const re = () => TASKS.batch(P, d);
+  $$('[data-bs]', P).forEach(c => c.onchange = () => { St[c.dataset.bs] = c.checked; baSave(); re(); });
+  $$('[data-bx]', P).forEach(b => b.onclick = () => { BA.files.splice(+b.dataset.bx, 1); re(); });
+  const dpi = $('#baDpi', P); if (dpi) { dpi.value = BA.dpi; dpi.onchange = () => { BA.dpi = +dpi.value; baSave(); }; }
+  const au = $('#baAuth', P); if (au) au.oninput = () => { BA.author = au.value; baSave(); };
+  const pw = $('#baPw', P); if (pw) pw.oninput = () => { BA.pw = pw.value; };
+  const pt = $('#baPat', P); if (pt) pt.oninput = () => { BA.pattern = pt.value; baSave(); };
+  $('#baOut', P).value = BA.out; $('#baOut', P).onchange = e => { BA.out = e.target.value; baSave(); };
+  $('#baAdd', P).onclick = async () => { for (const f of await pickMany('application/pdf,.pdf')) BA.files.push({ name: f.name, get: async () => f }); re(); };
+  const dir = $('#baDir', P); if (dir) dir.onclick = async () => { try { const h = await showDirectoryPicker({ id: 'quire-batch' }); for await (const f of walkDir(h)) BA.files.push(f); re(); } catch {} };
+  const op = $('#baOpen', P); if (op) op.onclick = () => { for (const x of S.docs) if (!BA.files.some(f => f.doc === x)) BA.files.push({ name: x.name, doc: x }); re(); };
+  $('#baPre', P).onchange = e => { const p = BA.presets[e.target.value]; if (!p) return; Object.assign(BA, JSON.parse(JSON.stringify(p))); baSave(); re(); };
+  $('#baKeep', P).onclick = async () => { const b = el('div', '', `<div class="field"><label for="baPn">Preset name</label><input id="baPn" class="inp" value="My clean-up"></div>`); if (!await modal({ title: 'Save preset', body: b, actions: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, primary: true }] })) return; const n = $('#baPn', b).value.trim() || 'Preset'; BA.presets[n] = { steps: { ...St }, dpi: BA.dpi, q: BA.q, author: BA.author, pattern: BA.pattern, out: BA.out }; baSave(); re(); };
+  $('#baGo', P).onclick = () => runBatch(P, d);
+};
+async function baOne(f, n) {
+  const St = BA.steps; let bytes;
+  if (f.doc) bytes = St.markup ? await buildOutput(f.doc) : f.doc.bytes; else bytes = new Uint8Array(await (await f.get()).arrayBuffer());
+  let pdf = await PDFDocument.load(bytes, LOAD); const L = PDFLib, N = k => L.PDFName.of(k);
+  if (St.flatten) { try { pdf.getForm().flatten(); } catch {} }
+  if (St.sanitize) {
+    const cat_ = pdf.catalog, ctx = pdf.context; if (ctx.trailerInfo.Info) { ctx.delete(ctx.trailerInfo.Info); delete ctx.trailerInfo.Info; } cat_.delete(N('Metadata'));
+    const names = cat_.lookup(N('Names')); if (names instanceof L.PDFDict) { names.delete(N('JavaScript')); names.delete(N('EmbeddedFiles')); }
+    const oa = cat_.lookup(N('OpenAction')); if (oa instanceof L.PDFDict) cat_.delete(N('OpenAction')); cat_.delete(N('AA'));
+    for (const [, x] of ctx.enumerateIndirectObjects()) { if (!(x instanceof L.PDFDict)) continue; x.delete(N('AA')); const A = x.lookup(N('A')); if (A instanceof L.PDFDict && ['/JavaScript', '/Launch', '/SubmitForm', '/ImportData'].includes(String(A.get(N('S'))))) x.delete(N('A')); }
+    stripHidden(pdf);
+  }
+  if (St.compress) { await recompressImages(pdf, { dpi: BA.dpi, q: BA.q }); dedupeObjects(pdf); }
+  let title = '', author = '';
+  try { title = pdf.getTitle() || ''; author = pdf.getAuthor() || ''; } catch {}
+  if (St.meta && BA.author) { pdf.setAuthor(BA.author); author = BA.author; }
+  let out = await pdf.save({ useObjectStreams: true });
+  if (St.protect && BA.pw) out = await encryptPdf(out, BA.pw, '', { print: true, printHigh: true, copy: true, modify: true, assemble: true, annot: true, fill: true });
+  const base = f.name.replace(/\.pdf$/i, '');
+  let name = St.rename ? BA.pattern.replace(/\{(\w+)\}/g, (m, k) => ({ name: base, title: title || base, author: author || '', date: new Date().toISOString().slice(0, 10), n: String(n + 1) })[k] ?? m).replace(/\s*-\s*$/, '').replace(/^\s*-\s*/, '') : base;
+  name = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').trim() || base;
+  return { name: name + '.pdf', bytes: out, title, author };
+}
+async function runBatch(P, d) {
+  const files = BA.files; if (!files.length) return; const outs = []; let dirH = null;
+  if (BA.out === 'dir') { try { dirH = await showDirectoryPicker({ id: 'quire-batch-out', mode: 'readwrite' }); } catch { return; } }
+  if (BA.steps.protect && !BA.pw) { toast('Type the password for Protect, or untick it.'); return; }
+  busy('Running…');
+  try {
+    for (const [n, f] of files.entries()) {
+      $('#busyMsg').textContent = `${n + 1} of ${files.length}: ${f.name}`; f.status = ''; f.msg = '';
+      try { const r = await baOne(f, n); outs.push(r); f.status = 'done'; f.msg = r.name !== f.name ? '→ ' + r.name : 'done'; }
+      catch (e) { console.error(e); f.status = 'error'; f.msg = /encrypt/i.test(e.message) ? 'has a password, unlock it first' : e.message; }
+    }
+    const seen = new Set(); for (const o of outs) { let nm = o.name, k = 2; while (seen.has(nm.toLowerCase())) nm = o.name.replace(/\.pdf$/i, ` (${k++}).pdf`); seen.add(nm.toLowerCase()); o.name = nm; }
+    if (BA.out === 'zip' && outs.length) { await loadScript(JSZIP_URL); const z = new JSZip(); for (const o of outs) z.file(o.name, o.bytes); const blob = await z.generateAsync({ type: 'blob' }); unbusy(); await saveFile(`Quire batch ${new Date().toISOString().slice(0, 10)}.zip`, blob); }
+    else if (BA.out === 'dir') { for (const o of outs) { const fh = await dirH.getFileHandle(o.name, { create: true }); const w = await fh.createWritable(); await w.write(o.bytes); await w.close(); } toast(`Saved ${plural(outs.length, 'file')} into ${dirH.name}`); }
+    else if (BA.out === 'tabs') { for (const o of outs) await openBytes(o.bytes, o.name, { noRecent: true }); }
+    else if (BA.out === 'estante') {
+      const p = await estProbe(); if (p.state !== 'ok' && p.state !== 'open') { toast('Estante is not answering at ' + EST.base + '. Open Index → Send to Estante once to set it up.', 6000); }
+      else for (const [k, o] of outs.entries()) { $('#busyMsg').textContent = `Sending ${k + 1} of ${outs.length} to Estante…`; const H = { 'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(o.name) }; if (o.title) H['X-Title'] = encodeURIComponent(o.title); if (o.author) H['X-Authors'] = encodeURIComponent(o.author); const res = await estFetch('/api/upload', { method: 'POST', headers: H, body: o.bytes }, 120000); const f = files.find(x => x.status === 'done' && (x.msg === '→ ' + o.name || x.name === o.name)); if (f && !res.ok) { f.status = 'error'; f.msg = 'Estante said ' + res.status; } }
+    }
+    const bad = files.filter(f => f.status === 'error').length; toast(`Batch finished: ${plural(outs.length, 'file')} done${bad ? `, ${bad} failed` : ''}`);
+  } catch (e) { console.error(e); toast('Batch failed: ' + (e.message || e)); } finally { unbusy(); if (S.task === 'batch') TASKS.batch(P, d); }
+}
+
+/* ---- scan clean-up: straighten, even out lighting, white paper, remove dark edges and specks ---- */
+Object.assign(IC, {
+  cleanscan: '<rect x="5" y="3" width="14" height="18" rx="1.5" transform="rotate(-6 12 12)"/><path d="M9 9h6M9 13h6M9 17h3"/><path d="M19.5 3.5l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 20h2M20 14v2"/>'
+});
+Object.assign(RLBL, { cleanscan: 'Clean scans', qr: 'QR codes' });
+Object.assign(ACTS, { cleanscan: ['Clean up scanned pages', 'cleanscan', () => cleanScanDialog()], qr: ['QR codes and barcodes: read or add', 'qr', () => openTask('qr')] });
+Object.assign(CMD_KW, { cleanscan: 'deskew straighten scan shadow background whiten borders despeckle clean up photo of page', qr: 'qr code barcode read scan add stamp generate' });
+RIB.pages.items = RIB.pages.items.flatMap(x => x === '@smartfit' ? ['@smartfit', '@cleanscan'] : [x]);
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@pii' ? ['@pii', '@qr'] : [x]);
+
+// Background (paper) brightness estimated on a coarse grid with the brightest pixels of each cell, then smoothed;
+// dividing by it removes shadows, yellowing and uneven light.
+function flattenLight(c) {
+  const W = c.width, H = c.height, g = c.getContext('2d', { willReadFrequently: true }); const im = g.getImageData(0, 0, W, H), D = im.data;
+  const B = Math.max(16, Math.round(Math.min(W, H) / 40)), gw = Math.ceil(W / B), gh = Math.ceil(H / B); const bg = new Float32Array(gw * gh * 3);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    const hist = new Uint32Array(256); let n = 0; const sums = [0, 0, 0], cnt = [0];
+    for (let y = gy * B; y < Math.min(H, gy * B + B); y += 2) for (let x = gx * B; x < Math.min(W, gx * B + B); x += 2) { const j = (y * W + x) * 4; hist[(D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000 | 0]++; n++; }
+    let k = 255, acc = 0; while (k > 0 && acc + hist[k] < n * .12) acc += hist[k--]; const thr = k;
+    for (let y = gy * B; y < Math.min(H, gy * B + B); y += 2) for (let x = gx * B; x < Math.min(W, gx * B + B); x += 2) { const j = (y * W + x) * 4; if ((D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000 >= thr) { sums[0] += D[j]; sums[1] += D[j + 1]; sums[2] += D[j + 2]; cnt[0]++; } }
+    for (let ch = 0; ch < 3; ch++) bg[(gy * gw + gx) * 3 + ch] = cnt[0] ? sums[ch] / cnt[0] : 255;
+  }
+  // smooth the grid (3 passes of a 3x3 box) so text-heavy cells borrow from their neighbours
+  for (let pass = 0; pass < 3; pass++) { const nb = bg.slice(); for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) for (let ch = 0; ch < 3; ch++) { let s = 0, m = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = gx + dx, y = gy + dy; if (x < 0 || y < 0 || x >= gw || y >= gh) continue; const v = bg[(y * gw + x) * 3 + ch]; s += v; m++; } nb[(gy * gw + gx) * 3 + ch] = Math.max(bg[(gy * gw + gx) * 3 + ch], s / m); } bg.set(nb); }
+  for (let y = 0; y < H; y++) { const fy = Math.min(gh - 1.001, Math.max(0, y / B - .5)), y0 = fy | 0, ty = fy - y0;
+    for (let x = 0; x < W; x++) { const fx = Math.min(gw - 1.001, Math.max(0, x / B - .5)), x0 = fx | 0, tx = fx - x0; const j = (y * W + x) * 4;
+      for (let ch = 0; ch < 3; ch++) { const a = bg[(y0 * gw + x0) * 3 + ch], b = bg[(y0 * gw + x0 + 1) * 3 + ch], cc = bg[((y0 + 1) * gw + x0) * 3 + ch], dd = bg[((y0 + 1) * gw + x0 + 1) * 3 + ch]; const v = (a * (1 - tx) + b * tx) * (1 - ty) + (cc * (1 - tx) + dd * tx) * ty; D[j + ch] = Math.min(255, D[j + ch] / Math.max(40, v) * 255); } } }
+  g.putImageData(im, 0, 0);
+}
+// Skew angle from the projection profile of a small binarised copy: text lines give the sharpest profile when level.
+function skewAngle(c) {
+  const k = Math.min(1, 900 / c.width); const w = Math.round(c.width * k), h = Math.round(c.height * k); const s = el('canvas'); s.width = w; s.height = h; const g = s.getContext('2d', { willReadFrequently: true }); g.drawImage(c, 0, 0, w, h);
+  const D = g.getImageData(0, 0, w, h).data; const pts = []; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const j = (y * w + x) * 4; if ((D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000 < 128) pts.push(x, y); }
+  if (pts.length < 200) return 0;
+  const score = a => { const t = Math.tan(a * Math.PI / 180); const bins = new Float32Array(h * 2 + 2); for (let i = 0; i < pts.length; i += 2) { const yy = Math.round(pts[i + 1] - pts[i] * t + h * .5); if (yy >= 0 && yy < bins.length) bins[yy]++; } let s2 = 0; for (const v of bins) s2 += v * v; return s2; };
+  let best = 0, bs = -1; for (let a = -6; a <= 6; a += .3) { const v = score(a); if (v > bs) { bs = v; best = a; } }
+  const c0 = best; for (let a = c0 - .3; a <= c0 + .3; a += .05) { const v = score(a); if (v > bs) { bs = v; best = a; } }
+  return Math.abs(best) < .08 ? 0 : best;
+}
+function rotateCanvas(c, deg) { if (!deg) return c; const r = el('canvas'); r.width = c.width; r.height = c.height; const g = r.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, r.width, r.height); g.translate(r.width / 2, r.height / 2); g.rotate(deg * Math.PI / 180); g.drawImage(c, -c.width / 2, -c.height / 2); return r; }
+function cleanEdgesSpecks(c, { edges, specks }) {
+  const W = c.width, H = c.height, g = c.getContext('2d', { willReadFrequently: true }); const im = g.getImageData(0, 0, W, H), D = im.data;
+  const dark = j => (D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000 < 110; const white = j => { D[j] = D[j + 1] = D[j + 2] = 255; };
+  if (edges) {
+    // flood dark areas that touch the page edge, staying within the outer band, then paint them white
+    const bw = Math.round(W * .1), bh = Math.round(H * .1); const seen = new Uint8Array(W * H); const st = [];
+    const inBand = (x, y) => x < bw || x >= W - bw || y < bh || y >= H - bh;
+    const push = (x, y) => { const i = y * W + x; if (seen[i] || !dark(i * 4)) return; seen[i] = 1; st.push(i); };
+    for (let x = 0; x < W; x++) { push(x, 0); push(x, H - 1); } for (let y = 0; y < H; y++) { push(0, y); push(W - 1, y); }
+    while (st.length) { const i = st.pop(), x = i % W, y = (i / W) | 0; white(i * 4); for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H || !inBand(nx, ny)) continue; push(nx, ny); } }
+  }
+  if (specks) { const m = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) m[i] = dark(i * 4) ? 1 : 0;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; if (!m[i]) continue; let n = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && m[i + dy * W + dx]) n++; if (n <= 1) white(i * 4); } }
+  g.putImageData(im, 0, 0);
+}
+const CS = Object.assign({ deskew: true, light: true, edges: true, specks: true, mode: 'colour', dpi: 200, scope: 'all' }, pref.get('cleanscan', {}));
+async function cleanScanDialog() {
+  const d = cur(); if (!d) return; const sel = selPages();
+  const ck = (k, l) => `<label class="chk"><input type="checkbox" id="cs_${k}" ${CS[k] ? 'checked' : ''}> ${l}</label>`;
+  const r = await modal({ title: 'Clean up scanned pages', body: `${ck('deskew', 'Straighten tilted pages')}${ck('light', 'Even out lighting and shadows, white paper')}${ck('edges', 'Remove dark edges from the scanner lid or book gutter')}${ck('specks', 'Remove specks and dust')}
+    <div class="grid2"><div class="field"><label for="csM">Result</label><select id="csM" class="inp"><option value="colour">Colour</option><option value="grey">Greyscale</option><option value="bw">Black and white (smallest)</option></select></div>
+    <div class="field"><label for="csD">Resolution</label><select id="csD" class="inp"><option value="150">150 dpi</option><option value="200">200 dpi</option><option value="300">300 dpi</option></select></div></div>
+    <div class="field"><label for="csS">Pages</label><select id="csS" class="inp"><option value="all">All pages</option><option value="cur">This page</option>${sel.length > 1 ? `<option value="sel">Selected pages (${sel.length})</option>` : ''}</select></div>
+    <p class="hint" style="margin:0">Each page becomes a new image, so any hidden OCR text on it is dropped. Run OCR again afterwards. Undo works.</p>`, actions: [{ label: 'Cancel', value: false }, { label: 'Clean up', value: true, primary: true }] });
+  if (!r) return;
+  for (const k of ['deskew', 'light', 'edges', 'specks']) CS[k] = $('#cs_' + k).checked; CS.mode = $('#csM').value; CS.dpi = +$('#csD').value; CS.scope = $('#csS').value; pref.set('cleanscan', CS);
+  const pages = CS.scope === 'cur' ? [d.cur] : CS.scope === 'sel' ? sel : [...d.info.keys()];
+  busy('Cleaning…'); const imgs = []; const angles = [];
+  try {
+    for (const [k, i] of pages.entries()) {
+      $('#busyMsg').textContent = `Cleaning page ${i + 1} (${k + 1} of ${pages.length})…`; await new Promise(r => setTimeout(r));
+      let { c, vp } = await renderToCanvas(d, i, CS.dpi / 72);
+      if (CS.light) flattenLight(c);
+      let a = 0; if (CS.deskew) { a = skewAngle(c); c = rotateCanvas(c, -a); } angles.push(a);
+      if (CS.edges || CS.specks) cleanEdgesSpecks(c, CS);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      if (CS.mode !== 'colour') { const im = g.getImageData(0, 0, c.width, c.height), D = im.data; let thr = 0; if (CS.mode === 'bw') { const Y = new Uint8Array(D.length / 4); for (let j = 0, q = 0; j < D.length; j += 4, q++) Y[q] = (D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000; thr = otsu(Y); }
+        for (let j = 0; j < D.length; j += 4) { let v = (D[j] * 299 + D[j + 1] * 587 + D[j + 2] * 114) / 1000; if (CS.mode === 'bw') v = v > thr ? 255 : 0; D[j] = D[j + 1] = D[j + 2] = v; } g.putImageData(im, 0, 0); }
+      const blob = await new Promise(res => c.toBlob(res, CS.mode === 'bw' ? 'image/png' : 'image/jpeg', .82));
+      imgs.push({ i, bytes: new Uint8Array(await blob.arrayBuffer()), png: CS.mode === 'bw', w: vp.width / (CS.dpi / 72), h: vp.height / (CS.dpi / 72) }); c.width = c.height = 0;
+    }
+  } catch (e) { unbusy(); console.error(e); toast('Clean-up failed: ' + e.message); return; }
+  unbusy();
+  const ok = await editBytes(`Cleaned ${plural(pages.length, 'page')}`, async pdf => {
+    for (const m of imgs) { const img = m.png ? await pdf.embedPng(m.bytes) : await pdf.embedJpg(m.bytes); const np = pdf.insertPage(m.i, [m.w, m.h]); np.drawImage(img, { x: 0, y: 0, width: m.w, height: m.h }); pdf.removePage(m.i + 1); }
+  }, 'Replacing pages…');
+  if (ok) { const t = angles.filter(a => a).length; toast(`Cleaned ${plural(pages.length, 'page')}${t ? `, ${t} straightened (up to ${Math.max(...angles.map(Math.abs)).toFixed(1)}°)` : ''}. Run OCR to make them searchable again.`, 6000); }
+}
+
+/* ---- QR codes and barcodes ---- */
+const JSQR_URL = VENDOR ? VENDOR + 'jsqr/jsQR.js' : 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+const QRGEN_URL = VENDOR ? VENDOR + 'qrcode/qrcode.js' : 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
+const QRS = { text: '', size: 25, where: 'br', all: false, res: null, doc: null };
+async function readCodes(d, pages) {
+  const out = []; const native = 'BarcodeDetector' in window ? new BarcodeDetector() : null; if (!native) await loadScript(JSQR_URL);
+  for (const i of pages) {
+    $('#busyMsg').textContent = `Looking for codes on page ${i + 1}…`;
+    const { c, vp } = await renderToCanvas(d, i, 3, { annots: true }); const g = c.getContext('2d', { willReadFrequently: true });
+    const toPdf_ = (x, y) => vp.convertToPdfPoint(x, y);
+    if (native) { for (const b of await native.detect(c)) { const r = b.boundingBox; out.push({ page: i, format: b.format.replace(/_/g, ' '), value: b.rawValue, box: norm(toPdf_(r.x, r.y), toPdf_(r.x + r.width, r.y + r.height)) }); } }
+    else {
+      // jsQR finds one code per image, so look in tiles too
+      const seen = new Set(); const T = [[0, 0, c.width, c.height]]; const tw = Math.ceil(c.width / 2), th = Math.ceil(c.height / 3); for (let y = 0; y < c.height; y += Math.round(th / 2)) for (let x = 0; x < c.width; x += Math.round(tw / 2)) T.push([x, y, Math.min(tw, c.width - x), Math.min(th, c.height - y)]);
+      for (const [x, y, w, h] of T) { if (w < 40 || h < 40) continue; const im = g.getImageData(x, y, w, h); const q = jsQR(im.data, w, h, { inversionAttempts: 'attemptBoth' }); if (!q || seen.has(q.data)) continue; seen.add(q.data); const L = q.location; const xs = [L.topLeftCorner.x, L.topRightCorner.x, L.bottomLeftCorner.x, L.bottomRightCorner.x].map(v => v + x), ys = [L.topLeftCorner.y, L.topRightCorner.y, L.bottomLeftCorner.y, L.bottomRightCorner.y].map(v => v + y); out.push({ page: i, format: 'QR code', value: q.data, box: norm(toPdf_(Math.min(...xs), Math.min(...ys)), toPdf_(Math.max(...xs), Math.max(...ys))) }); }
+    }
+    c.width = c.height = 0;
+  }
+  return out;
+}
+async function qrPng(text) {
+  await loadScript(QRGEN_URL); const q = qrcode(0, 'M'); q.addData(unescape(encodeURIComponent(text)), 'Byte'); q.make();
+  const n = q.getModuleCount(), m = 8, quiet = 2; const c = el('canvas'); c.width = c.height = (n + quiet * 2) * m; const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) g.fillRect((k + quiet) * m, (r + quiet) * m, m, m);
+  return c.toDataURL('image/png');
+}
+TASKS.qr = function (P, d) {
+  const R = QRS.doc === d ? QRS.res : null;
+  P.innerHTML = `<section class="sec">${head('QR codes and barcodes')}
+    <div class="field"><span class="lbl">Read codes</span><div class="row"><button class="btn sm" id="qrCur">This page</button><button class="btn sm" id="qrAll">All pages</button></div>
+    <span class="muted small">${'BarcodeDetector' in window ? 'Finds QR codes and common barcodes (EAN, Code 128, Data Matrix and more).' : 'This browser can read QR codes. Chrome on a Mac also reads other barcodes.'}</span></div>
+    ${R ? (R.length ? `<ol class="results">${R.map((c, k) => `<li><button class="linkish" data-qj="${k}"><span class="muted">p.${c.page + 1} · ${esc(c.format)}</span></button><div class="qr-val">${/^https?:\/\//i.test(c.value) ? `<a href="${esc(c.value)}" target="_blank" rel="noopener noreferrer">${esc(c.value)}</a>` : esc(c.value)}</div><button class="btn sm" data-qc="${k}">Copy</button></li>`).join('')}</ol>` : '<p class="muted small">No codes found.</p>') : ''}
+    <div class="field"><label for="qrT">Add a QR code with</label><textarea id="qrT" rows="2" placeholder="A web address, a book's Estante link, contact details…">${esc(QRS.text)}</textarea></div>
+    <div class="grid2"><div class="field"><label for="qrS">Size (mm)</label><input id="qrS" class="inp" type="number" min="10" max="120" value="${QRS.size}"></div><div class="field"><label for="qrW">Where</label><select id="qrW" class="inp"><option value="br">Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option><option value="click">Click to place</option></select></div></div>
+    <label class="chk"><input type="checkbox" id="qrA" ${QRS.all ? 'checked' : ''}> On every page</label>
+    <div class="row"><button class="btn primary" id="qrAdd">Add QR code</button></div></section>`;
+  bindClose(P); $('#qrW', P).value = QRS.where;
+  const run = async pages => { busy('Reading codes…'); try { QRS.res = await readCodes(d, pages); QRS.doc = d; } catch (e) { console.error(e); toast('Could not read codes: ' + e.message); } finally { unbusy(); } if (S.task === 'qr') TASKS.qr(P, d); };
+  $('#qrCur', P).onclick = () => run([d.cur]); $('#qrAll', P).onclick = () => run([...d.info.keys()]);
+  if (R) { $$('[data-qc]', P).forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(R[+b.dataset.qc].value); toast('Copied'); } catch { toast('Copy failed'); } });
+    $$('[data-qj]', P).forEach(b => b.onclick = () => { const c = R[+b.dataset.qj]; gotoPage(c.page); const v = d.views[c.page]; if (!v) return; const p = v.vp.convertToViewportPoint(c.box.x1, c.box.y2), q = v.vp.convertToViewportPoint(c.box.x2, c.box.y1); const fl = el('div', 'cmp-flash'); Object.assign(fl.style, { left: Math.min(p[0], q[0]) - 3 + 'px', top: Math.min(p[1], q[1]) - 3 + 'px', width: Math.abs(q[0] - p[0]) + 6 + 'px', height: Math.abs(q[1] - p[1]) + 6 + 'px' }); v.wrap.append(fl); setTimeout(() => fl.remove(), 1600); }); }
+  $('#qrAdd', P).onclick = async () => {
+    QRS.text = $('#qrT', P).value.trim(); QRS.size = Math.max(10, Math.min(120, +$('#qrS', P).value || 25)); QRS.where = $('#qrW', P).value; QRS.all = $('#qrA', P).checked;
+    if (!QRS.text) { toast('Type what the QR code should hold'); return; }
+    let src; try { src = await qrPng(QRS.text); } catch (e) { toast('Could not make the code: ' + e.message); return; }
+    if (QRS.where === 'click') { S.placeImage = { src, aspect: 1 }; S.tool = 'image'; setCursor(); renderRibbon(); toast('Click on the page to place the QR code'); return; }
+    const s = QRS.size * 72 / 25.4, m = 10 * 72 / 25.4; snapshot();
+    for (const i of QRS.all ? [...d.info.keys()] : [d.cur]) { const v1 = d.info[i].vp1; const [x0, y0, x1, y1] = d.info[i].page.view; const W = x1 - x0, H = y1 - y0; void v1;
+      const x = QRS.where[1] === 'r' ? x0 + W - m - s : x0 + m, y = QRS.where[0] === 'b' ? y0 + m : y0 + H - m - s;
+      d.annots[i].push({ type: 'image', x1: x, y1: y, x2: x + s, y2: y + s, src, opacity: 1 }); }
+    redrawAll(); toast(QRS.all ? `QR code added to ${plural(d.info.length, 'page')}` : 'QR code added. Drag it to move it.');
+  };
+};
 
 /* ================= compression and combine ================= */
 // Compression ideas from current optimisers: each image gets the codec that suits it (JPEG tuned by SSIM for photos,
