@@ -1,7 +1,9 @@
 # Quire Lite for iPad and Android
 
 The same Quire Lite as the desktop apps, wrapped with [Capacitor](https://capacitorjs.com). Everything runs on the
-tablet: no internet needed after install. Saving a PDF opens the share sheet (Save to Files, AirDrop, Mail, Drive...).
+tablet. To keep the app small (about 50 MB), it bundles four OCR languages (English, Portuguese, Spanish, Italian)
+and two handwriting readers (the line finder and CATMuS Medieval); any other language or reader downloads once, the
+first time it is chosen, and then works offline. Saving a PDF opens the share sheet (Save to Files, AirDrop, Mail, Drive...).
 
 ## Android
 

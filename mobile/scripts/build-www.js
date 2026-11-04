@@ -9,7 +9,8 @@ const appDir = path.join(root, 'www');
 const vendor = path.join(appDir, 'vendor');
 
 // OCR languages bundled with the app (about 36 MB). Every other language is downloaded from the app's language manager.
-const OCR_LANGS = ['eng', 'por', 'ita', 'heb', 'ara', 'spa', 'jpn', 'jpn_vert', 'chi_sim', 'chi_sim_vert', 'chi_tra', 'chi_tra_vert', 'fra', 'deu', 'nld', 'cat', 'syr', 'fas', 'rus', 'kor', 'kor_vert', 'pol'];
+// Tablets bundle four languages (about 7 MB); the language manager downloads any other once and keeps it.
+const OCR_LANGS = ['eng', 'por', 'spa', 'ita'];
 // The interface uses the Mac's own system font; only the handwriting font for typed signatures is bundled.
 const FONTS = [
   ['Caveat', 'caveat', [600]]
@@ -21,7 +22,10 @@ const EDITION = process.env.QUIRE_EDITION || 'lite';
 // most; it downloads any other reader the first time it is chosen and keeps it.
 const HTR_ALL = ['blla', 'traprinq', 'geneapt', 'mccatmus', 'catmus-medieval', 'tridis', 'frolat-expan', 'regfiii-damage', 'catmus-print', 'catmus-gothic', 'fraktur', 'lectaurep', 'hooker', 'sephardi', 'muharaf'];
 const HTR_LITE = ['blla', 'traprinq', 'geneapt', 'catmus-medieval'];
-const HTR_MODELS = EDITION === 'lite' ? HTR_LITE : HTR_ALL;
+// Tablets bundle only the line finder and CATMuS Medieval (21 MB); TraPrInq, the genealogy reader and the rest download
+// the first time they are chosen (about 87 MB each) and are kept.
+const HTR_MOBILE = ['blla', 'catmus-medieval'];
+const HTR_MODELS = HTR_MOBILE;
 
 const copies = [
   ['pdfjs-dist/build/pdf.min.js', 'pdfjs/pdf.min.js'],
@@ -34,7 +38,8 @@ const copies = [
   ['node-forge/dist/forge.min.js', 'forge/forge.min.js'],
   ['tesseract.js/dist/tesseract.min.js', 'tesseract/tesseract.min.js'],
   ['tesseract.js/dist/worker.min.js', 'tesseract/worker.min.js'],
-  ...['', '-lstm', '-simd', '-simd-lstm'].map(v => [`tesseract.js-core/tesseract-core${v}.wasm.js`, `tesseract-core/tesseract-core${v}.wasm.js`]),
+  // Quire runs Tesseract in LSTM mode only, so the two legacy-engine builds are left out.
+  ...['-lstm', '-simd-lstm'].map(v => [`tesseract.js-core/tesseract-core${v}.wasm.js`, `tesseract-core/tesseract-core${v}.wasm.js`]),
   ...OCR_LANGS.map(l => [`@tesseract.js-data/${l}/4.0.0_best_int/${l}.traineddata.gz`, `tessdata/${l}.traineddata.gz`]),
   // fonts drawn to the widths of Helvetica/Arial, Times and Courier, put into PDFs that only name those fonts (PDF/A, PDF/UA)
   ...['Arimo', 'Tinos', 'Cousine'].flatMap(f => ['400Regular', '400Regular_Italic', '700Bold', '700Bold_Italic'].map(v => [`@expo-google-fonts/${f.toLowerCase()}/${v}/${f}_${v}.ttf`, `fonts-sub/${f}_${v}.ttf`])),
@@ -86,8 +91,8 @@ const head = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
   + '<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>'
   + '<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#2e1050">'
   + '<script src="native.js"></script>'
-  + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';' + (HTR_MODELS !== HTR_ALL ? ' window.QUIRE_HTR_BUNDLED = ' + JSON.stringify(HTR_MODELS) + ';' : '') + '</script>'
+  + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';' + (true ? ' window.QUIRE_HTR_BUNDLED = ' + JSON.stringify(HTR_MODELS) + ';' : '') + '</script>'
   + '</head><body>';
 fs.copyFileSync(path.join(__dirname, 'native.js'), path.join(appDir, 'native.js'));
 fs.writeFileSync(path.join(appDir, 'index.html'), head + html + '</body></html>');
-console.log(`${EDITION ? 'Quire ' + EDITION[0].toUpperCase() + EDITION.slice(1) + ': ' : ''}Bundled ${copies.length} files into www/vendor and built www/index.html. The app runs fully offline.`);
+console.log(`${EDITION ? 'Quire ' + EDITION[0].toUpperCase() + EDITION.slice(1) + ': ' : ''}Bundled ${copies.length} files into www/vendor and built www/index.html. Other readers and languages download when first chosen.`);
