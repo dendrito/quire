@@ -157,6 +157,19 @@ dialog:has(.imgdlg){width:min(780px,calc(100vw - 32px));max-height:calc(100vh - 
 .sf-cell{cursor:default}.sf-pg{background:transparent;box-shadow:none}.sf-pg canvas{cursor:grab;touch-action:none;width:auto!important;height:auto!important;max-width:100%;max-height:240px}
 .sf-tag.warn{color:#c2410c}
 @media (max-width:760px){#sfGrid{--ow:140px!important}.sf-ctl{gap:6px 8px}.sf-sum{font-size:12px}}
+.textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;text-align:initial;transform-origin:0 0;z-index:1;pointer-events:none;-webkit-text-size-adjust:none;text-size-adjust:none;forced-color-adjust:none}
+.textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%}
+.textLayer ::selection{background:rgba(43,92,255,.32)}
+.textLayer .endOfContent{display:block;position:absolute;inset:100% 0 0;z-index:-1;cursor:default;user-select:none}
+.textLayer.selecting .endOfContent{top:0}
+body.textsel .ov{pointer-events:none}body.textsel .textLayer{pointer-events:auto;z-index:3}
+.selbar{position:fixed;z-index:40;display:flex;gap:2px;padding:4px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
+.selbar button{border:0;background:none;padding:6px 10px;border-radius:8px;font:500 12.5px var(--f-ui);color:var(--ink);cursor:pointer;white-space:nowrap}.selbar button:hover{background:var(--hover)}
+#pages.two{display:grid;grid-template-columns:repeat(2,max-content);justify-content:center;align-items:start;column-gap:16px}
+#pages.cover .page:first-child{grid-column:2}
+#printArea{display:none}
+@media print{body.printing>*:not(#printArea){display:none!important}body.printing{background:#fff!important}body.printing #printArea{display:block}#printArea img{display:block;width:100%;height:auto;break-after:page;page-break-after:always}#printArea img:last-child{break-after:auto;page-break-after:auto}}
+.cm-list{max-height:48vh}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -680,6 +693,7 @@ function buildViewer() {
     $('#viewer').append(e); $('#emptyOpen').onclick = () => $('#fileIn').click(); $('#emptyScan').onclick = () => scOpen(); return;
   }
   if (!d.zoom) { d.zoom = fitZoom(d, 'width'); d.autoFit = true; }
+  host.className = d.vmode && d.vmode !== 'single' ? 'two ' + d.vmode : '';
   d.views = d.info.map((inf, i) => {
     const wrap = el('div', 'page'); wrap.dataset.i = i;
     const c = el('canvas', 'pdfc'); const ov = el('canvas', 'ov');
@@ -699,7 +713,7 @@ function buildViewer() {
 function layout() {
   const d = cur(); if (!d) return;
   d.views.forEach((v, i) => {
-    v.vp = d.info[i].page.getViewport({ scale: d.zoom });
+    v.vp = d.info[i].page.getViewport({ scale: d.zoom, rotation: vrot(d, i) }); if (v.tl) { v.tl.remove(); v.tl = null; }
     v.wrap.style.width = v.vp.width + 'px'; v.wrap.style.height = v.vp.height + 'px';
     v.rendered = 0; v.ov.width = Math.ceil(v.vp.width * dpr()); v.ov.height = Math.ceil(v.vp.height * dpr());
     drawOverlay(i);
@@ -707,7 +721,7 @@ function layout() {
 }
 async function renderPage(i) {
   const d = cur(); const v = d.views[i]; if (!v) return; const z = d.zoom; v.rendered = z;
-  const vp = d.info[i].page.getViewport({ scale: z * dpr() });
+  const vp = d.info[i].page.getViewport({ scale: z * dpr(), rotation: vrot(d, i) });
   const c = el('canvas', 'pdfc'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
   if (v.task) try { v.task.cancel(); } catch {}
   const task = d.info[i].page.render({ canvasContext: c.getContext('2d'), viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE });
@@ -715,13 +729,15 @@ async function renderPage(i) {
   try { await task.promise; } catch { return; }
   if (d !== cur() || v.rendered !== z || !v.c.parentNode) return;
   v.wrap.replaceChild(c, v.c); v.c = c;
+  pageExtras(i);
 }
 function redrawAll() { const d = cur(); if (d) d.views.forEach((_, i) => drawOverlay(i)); }
 function fitZoom(d, mode) {
   const pad = innerWidth <= 760 ? 36 : 72; const vw = $('#viewer').clientWidth - pad, vh = $('#viewer').clientHeight - 200;
   if (vw < 80 || vh < 80) return 1;
-  const mw = Math.max(...d.info.map(x => x.w)); const pg = d.info[d.cur] || d.info[0];
-  const zw = vw / mw; return Math.max(.1, Math.min(6, mode === 'width' ? zw : Math.min(zw, vh / pg.h)));
+  const sw = ((d.vrot || 0) % 180) !== 0; const W = x => sw ? x.h : x.w, H = x => sw ? x.w : x.h; const two = d.vmode && d.vmode !== 'single';
+  const mw = Math.max(...d.info.map(W)) * (two ? 2 : 1) + (two ? 16 : 0); const pg = d.info[d.cur] || d.info[0];
+  const zw = vw / mw; return Math.max(.1, Math.min(6, mode === 'width' ? zw : Math.min(zw, vh / H(pg))));
 }
 function setZoom(z, auto) {
   const d = cur(); if (!d) return; z = Math.max(.1, Math.min(6, z)); d.autoFit = !!auto;
@@ -735,6 +751,7 @@ function setZoom(z, auto) {
 const zoomBy = f => { const d = cur(); if (d) setZoom(d.zoom * f); };
 function gotoPage(i, select) {
   const d = cur(); if (!d) return; i = Math.max(0, Math.min(d.info.length - 1, i));
+  navRecord(d, i);
   $('#viewer').scrollTop = d.views[i].wrap.offsetTop - 16; d.cur = i;
   if (select) { d.sel = new Set([i]); markThumbs(); }
   updateStatus();
@@ -770,6 +787,8 @@ function drawAnnot(ctx, vp, a, z, opt = {}) {
       if (a.fill) { ctx.fillStyle = a.fill; ctx.fill(); } ctx.stroke(); break;
     }
     case 'highlight': { const r = vrect(vp, a); ctx.globalCompositeOperation = 'multiply'; ctx.fillRect(r.x, r.y, r.w, r.h); break; }
+    case 'underline': case 'strike': { const L = textLine(vp, a); ctx.lineWidth = L.w; ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(L.p[0], L.p[1]); ctx.lineTo(L.q[0], L.q[1]); ctx.stroke(); break; }
+    case 'link': { if (opt.final) break; const r = vrect(vp, a); ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(43,92,255,.07)'; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.strokeStyle = '#2b5cff'; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.strokeRect(r.x, r.y, r.w, r.h); break; }
     case 'whiteout': { const r = vrect(vp, a); ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.fillRect(r.x, r.y, r.w, r.h); if (!opt.final) { ctx.strokeStyle = 'rgba(90,100,120,.35)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.strokeRect(r.x, r.y, r.w, r.h); } break; }
     case 'redact': { const r = vrect(vp, a); ctx.globalAlpha = 1; ctx.fillStyle = '#000'; if (!opt.final) ctx.globalAlpha = .82; ctx.fillRect(r.x, r.y, r.w, r.h); if (!opt.final) { ctx.globalAlpha = 1; ctx.strokeStyle = '#e5483b'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]); ctx.strokeRect(r.x, r.y, r.w, r.h); } break; }
     case 'line': case 'arrow': case 'measure': {
@@ -848,6 +867,7 @@ function onDown(i, e) {
   const d = cur(); const p = local(i, e); const t = S.tool; d.cur = i;
   if (te) { closeTextEditor(true); if (t === 'text') return; }
   if (S.task === 'crop') { const s = cropHit(i, p); if (s) { e.target.setPointerCapture(e.pointerId); drag = { mode: 'crop', page: i, sides: s }; } return; }
+  if ((t === 'select' || t === 'hand') && !e.shiftKey) { const L = pdfLinkAt(i, p); if (L && (t === 'hand' || hitTest(i, p[0], p[1]) < 0)) { followLink(L); return; } }
   if (t === 'hand') { e.target.setPointerCapture(e.pointerId); const V = $('#viewer'); drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, sl: V.scrollLeft, st: V.scrollTop }; return; }
   if (t === 'select') {
     const k = hitTest(i, p[0], p[1]);
@@ -872,7 +892,7 @@ function onDown(i, e) {
 function onMove(i, e) {
   const d = cur(); if (!d) return;
   if (!drag && S.task === 'crop') { e.target.style.cursor = CROP_CUR[cropHit(i, local(i, e))] || 'default'; return; }
-  if (!drag) { if (S.tool === 'select') { const p = local(i, e); e.target.style.cursor = hitTest(i, p[0], p[1]) >= 0 ? 'move' : 'default'; } return; }
+  if (!drag) { if (S.tool === 'select' || S.tool === 'hand') { const p = local(i, e); e.target.style.cursor = S.tool === 'select' && hitTest(i, p[0], p[1]) >= 0 ? 'move' : pdfLinkAt(i, p) ? 'pointer' : S.tool === 'hand' ? 'grab' : 'default'; } return; }
   if (drag.mode === 'pan') { const V = $('#viewer'); V.scrollLeft = drag.sl - (e.clientX - drag.sx); V.scrollTop = drag.st - (e.clientY - drag.sy); return; }
   if (drag.page !== i) return;
   const p = local(i, e);
@@ -908,6 +928,7 @@ function onUp(i, e) {
     const a = makeShape(i, g.start, end);
     if (!a) { drawOverlay(i); return; }
     if (t === 'ftext' || t === 'fcheck') { drawOverlay(i); addFormField(i, a); return; }
+    if (t === 'link') { drawOverlay(i); linkDialog(i, a); return; }
     snapshot(); d.annots[i].push(a); drawOverlay(i);
     if (t === 'stamp' || t === 'image' || t === 'sign' || t === 'redact') { renderPanel(); } else setSel({ page: i, idx: d.annots[i].length - 1 });
   }
@@ -921,7 +942,8 @@ function makeShape(i, s, c) {
   const base = Object.assign({ type: t }, box);
   switch (t) {
     case 'rect': case 'ellipse': return Object.assign(base, { color: st.color, width: st.width, opacity: st.opacity, fill: st.fill || '' });
-    case 'highlight': return Object.assign(base, { color: st.color, opacity: st.opacity });
+    case 'highlight': case 'underline': case 'strike': return Object.assign(base, { color: st.color, opacity: st.opacity });
+    case 'link': return base;
     case 'whiteout': case 'redact': case 'ftext': case 'fcheck': return base;
     case 'area': return Object.assign(base, { color: st.color, width: st.width, opacity: 1, factor: calibFactor(S.calib), unit: S.calib.realUnit });
     case 'stamp': return Object.assign(base, { color: st.color, opacity: st.opacity, label: S.stamp.label || 'APPROVED', sub: S.stamp.dynamic ? `${S.author} · ${today()}` : '' });
@@ -932,6 +954,7 @@ function makeShape(i, s, c) {
 function onDbl(i, e) {
   if (S.tool !== 'select') return; const d = cur(); const p = local(i, e); const k = hitTest(i, p[0], p[1]); if (k < 0) return;
   const a = d.annots[i][k];
+  if (a.type === 'link') { followLink(a); return; }
   if (a.type === 'text') openTextEditor(i, null, k);
   else { setSel({ page: i, idx: k }); const n = $('#selText'); if (n) n.focus(); }
 }
@@ -1002,6 +1025,8 @@ async function exportAnnot(pdf, page, d, i, a, F, imgs) {
     case 'rect': { const r = R(); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, borderColor: col, borderWidth: a.width, borderOpacity: op, color: a.fill ? pc(a.fill) : undefined, opacity: op }); break; }
     case 'ellipse': { const r = R(); page.drawEllipse({ x: r.x + r.w / 2, y: r.y + r.h / 2, xScale: r.w / 2, yScale: r.h / 2, borderColor: col, borderWidth: a.width, borderOpacity: op, color: a.fill ? pc(a.fill) : undefined, opacity: op }); break; }
     case 'highlight': { const r = R(); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: col, opacity: op, blendMode: BlendMode.Multiply }); break; }
+    case 'underline': case 'strike': { const L = textLine(vp1, a); const p = vp1.convertToPdfPoint(L.p[0], L.p[1]), q = vp1.convertToPdfPoint(L.q[0], L.q[1]); page.drawLine({ start: { x: p[0], y: p[1] }, end: { x: q[0], y: q[1] }, thickness: L.w, color: col, opacity: op }); break; }
+    case 'link': { exportLink(pdf, page, a); break; }
     case 'whiteout': { const r = R(); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgb(1, 1, 1) }); break; }
     case 'redact': { const r = R(); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgb(0, 0, 0) }); break; }
     case 'line': case 'arrow': case 'measure': {
@@ -1269,6 +1294,7 @@ function renderPanel() {
     if (a.type === 'text' || a.type === 'note') h += `<div class="field"><label for="selText">${a.type === 'note' ? 'Comment' : 'Text'}</label><textarea id="selText" placeholder="${a.type === 'note' ? 'Write a comment' : ''}">${esc(a.text)}</textarea></div>`;
     if (a.type === 'note') h += `<p class="muted small" style="margin:0">${esc(a.author || '')}${a.date ? ' · ' + new Date(a.date).toLocaleString() : ''}</p>`;
     if (a.type === 'stamp') h += `<div class="field"><label for="selLabel">Stamp text</label><input id="selLabel" class="inp" value="${esc(a.label)}"></div><div class="field"><label for="selSub">Second line</label><input id="selSub" class="inp" value="${esc(a.sub || '')}"></div>`;
+    if (a.type === 'link') h += linkFieldsHTML(a);
     if (a.type === 'measure') h += `<p class="hint">Length: <b>${esc(lenLabel(a))}</b></p>`;
     if (a.type === 'area') h += `<p class="hint">${esc(areaLabel(a))}</p>`;
     h += controlsHTML(a.type, a);
@@ -1284,6 +1310,7 @@ function renderPanel() {
   if (s) {
     const tx = $('#selText', P); if (tx) tx.oninput = () => { if (!S.selSnap) { snapshot(); S.selSnap = true; } s.a.text = tx.value; drawOverlay(s.page); };
     for (const [id, k] of [['selLabel', 'label'], ['selSub', 'sub']]) { const n = $('#' + id, P); if (n) n.oninput = () => { if (!S.selSnap) { snapshot(); S.selSnap = true; } s.a[k] = n.value; drawOverlay(s.page); }; }
+    if (s.a.type === 'link') bindLinkFields(P, s);
     $('#selDel', P).onclick = deleteSel;
   } else bindToolExtras(P);
   $$('[data-jump]', P).forEach(b => b.onclick = () => { const [pg, k] = b.dataset.jump.split(':').map(Number); setTool('select', true); gotoPage(pg); setSel({ page: pg, idx: k }); });
@@ -2662,6 +2689,270 @@ async function overlayPages() {
     }
   }, 'Overlaying…');
 }
+
+/* ================= reading & review: text selection, underline/strikeout, links, print, page views, comments list ================= */
+// From PDF-XChange's Home, View and Review tabs. Text selection uses pdf.js's text layer; links are real PDF Link annotations on save.
+Object.assign(IC, {
+  textsel: '<path d="M9 4h6M9 20h6M12 4v16"/><path d="M5 9l-2 3 2 3M19 9l2 3-2 3"/>',
+  underline: '<path d="M7 4v7a5 5 0 0010 0V4"/><path d="M5 20h14"/>',
+  strike: '<path d="M16 6.5C15 5 13.6 4.5 12 4.5c-2.5 0-4 1.3-4 3.1 0 1.6 1.2 2.5 4 3.1M8.5 16.5c1 1.8 2.4 3 4.5 3 2.6 0 4-1.4 4-3.3 0-.8-.3-1.5-.8-2"/><path d="M4 12h16"/>',
+  link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
+  print: '<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
+  back: '<path d="M15 6l-6 6 6 6"/>', fwd: '<path d="M9 6l6 6-6 6"/>',
+  single: '<rect x="7" y="3" width="10" height="18" rx="1"/>',
+  two: '<rect x="2.5" y="4" width="9" height="16" rx="1"/><rect x="12.5" y="4" width="9" height="16" rx="1"/>',
+  cover: '<rect x="12.5" y="4" width="9" height="16" rx="1"/><rect x="2.5" y="4" width="9" height="16" rx="1" stroke-dasharray="2 2"/>',
+  vrotl: '<path d="M4 12a8 8 0 108-8H8"/><path d="M10 1L7 4l3 3"/><rect x="9" y="9" width="6" height="8" rx=".8"/>',
+  vrotr: '<path d="M20 12a8 8 0 11-8-8h4"/><path d="M14 1l3 3-3 3"/><rect x="9" y="9" width="6" height="8" rx=".8"/>',
+  comments: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>'
+});
+TOOLS.push(
+  { id: 'textsel', label: 'Select text', key: 'c', hint: 'Drag across text to select it. Copy it, or highlight, underline or strike it out from the bar that appears.' },
+  { id: 'underline', label: 'Underline', key: '', hint: 'Drag across text to underline it. Or use Select text and pick Underline.' },
+  { id: 'strike', label: 'Strikeout', key: '', hint: 'Drag across text to strike it out. Or use Select text and pick Strikeout.' },
+  { id: 'link', label: 'Link', key: 'k', hint: 'Drag a box over the words or picture, then choose a web address or a page. Double-click a link to follow it. Links in the PDF also work with a single click.' });
+for (const t of TOOLS) TOOL[t.id] = t;
+['underline', 'strike', 'link'].forEach(t => BOX.add(t)); ['underline', 'strike', 'link'].forEach(t => PANEL_TOOLS.add(t));
+Object.assign(DEF, { underline: { color: '#2e9b5f', opacity: 1 }, strike: { color: '#d1342f', opacity: 1 } });
+Object.assign(CTRL, { underline: ['color', 'opacity'], strike: ['color', 'opacity'] });
+Object.assign(NAMES, { underline: 'Underline', strike: 'Strikeout', link: 'Link' });
+for (const k of ['underline', 'strike']) S.styles[k] = Object.assign({}, DEF[k], S.styles[k]);
+Object.assign(RLBL, { textsel: 'Text', underline: 'Underline', strike: 'Strike', link: 'Link', print: 'Print', back: 'Back', fwd: 'Forward', single: 'Single', two: 'Two pages', cover: 'Book', vrotl: 'Turn left', vrotr: 'Turn right', comments: 'Comments', links: 'Links' });
+RIB.comment.items = RIB.comment.items.flatMap(x => x === 'hand' ? ['textsel', 'hand'] : x === 'highlight' ? ['highlight', 'underline', 'strike'] : x === 'arrow' ? ['arrow', 'link'] : [x]);
+Object.assign(ACTS, {
+  print: ['Print', 'print', () => printDialog()],
+  back: ['Previous view', 'back', () => navGo(-1)], fwd: ['Next view', 'fwd', () => navGo(1)],
+  single: ['Single pages', 'single', () => setVMode('single')], two: ['Two pages side by side', 'two', () => setVMode('two')], cover: ['Two pages with a cover (book)', 'cover', () => setVMode('cover')],
+  vrotl: ['Turn the view left', 'vrotl', () => rotView(-90)], vrotr: ['Turn the view right', 'vrotr', () => rotView(90)],
+  comments: ['Comments list', 'comments', () => openTask('comments')], links: ['Links', 'link', () => openTask('links')]
+});
+Object.assign(CMD_KW, { print: 'printer paper', back: 'history previous view go back alt left', fwd: 'history next view forward', two: 'facing spread side by side double', cover: 'book spread facing cover', vrotl: 'rotate view display', vrotr: 'rotate view display', comments: 'annotations markup list review next previous', links: 'hyperlink url web address remove detect', textsel: 'copy select text' });
+{ const nr = {}; for (const [k, v] of Object.entries(RIB)) { nr[k] = v; if (k === 'comment') nr.view = { label: 'View', items: ['@back', '@fwd', '|', '@single', '@two', '@cover', '|', '@vrotl', '@vrotr', '|', '@comments', '@print'] }; } for (const k of Object.keys(RIB)) delete RIB[k]; Object.assign(RIB, nr); }
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@search' ? ['@search', '@links'] : x === '@txt' ? ['@txt', '@print'] : [x]);
+{ const _rr = renderRibbon; renderRibbon = function () { _rr(); const d = cur(); if (!d) return; const m = d.vmode || 'single'; for (const k of ['single', 'two', 'cover']) { const b = document.querySelector(`#rbtns [data-act="${k}"]`); if (b) b.classList.toggle('on', m === k); } }; }
+const vrot = (d, i) => ((d.info[i].rot + (d.vrot || 0)) % 360 + 360) % 360;
+// underline/strike line along the bottom or middle of the box, in viewport coordinates
+function textLine(vp, a) { const r = vrect(vp, a); const w = Math.max(.8, Math.min(r.w, r.h) * .075); const y = a.type === 'underline' ? r.y + r.h - w / 2 : r.y + r.h * .55; return { p: [r.x, y], q: [r.x + r.w, y], w }; }
+
+/* ---- page views ---- */
+function setVMode(m) { const d = cur(); if (!d) return; d.vmode = m; const keep = d.cur; buildViewer(); if (d.autoFit) d.zoom = fitZoom(d, 'width'); setZoom(d.zoom, d.autoFit); gotoPage(keep); renderRibbon(); }
+function rotView(deg) { const d = cur(); if (!d) return; d.vrot = (((d.vrot || 0) + deg) % 360 + 360) % 360; const keep = d.cur; if (d.autoFit) d.zoom = fitZoom(d, 'width'); setZoom(d.zoom, d.autoFit); gotoPage(keep); toast(d.vrot ? `View turned ${d.vrot}°. The pages themselves are unchanged.` : 'View back to normal.'); }
+function navRecord(d, i) { if (d._nav || i === d.cur) return; if (Math.abs(i - d.cur) <= 1) return; const H = d.hist = d.hist || { b: [], f: [] }; H.b.push(d.cur); if (H.b.length > 100) H.b.shift(); H.f = []; }
+function navGo(dir) {
+  const d = cur(); if (!d) return; const H = d.hist = d.hist || { b: [], f: [] }; const from = dir < 0 ? H.b : H.f, to = dir < 0 ? H.f : H.b;
+  if (!from.length) { toast(dir < 0 ? 'No previous view' : 'No next view'); return; }
+  const i = from.pop(); to.push(d.cur); d._nav = true; try { gotoPage(i); } finally { d._nav = false; }
+}
+
+/* ---- text layer and selection ---- */
+async function pageExtras(i) {
+  const d = cur(); const v = d && d.views[i]; if (!v) return;
+  if (!d.info[i].links) d.info[i].links = d.info[i].page.getAnnotations().then(a => a.filter(x => x.subtype === 'Link' && (x.url || x.dest || x.unsafeUrl))).catch(() => []);
+  d.info[i].linksReady = await d.info[i].links;
+  if (S.tool === 'textsel') buildTextLayer(i);
+}
+async function buildTextLayer(i) {
+  const d = cur(); const v = d && d.views[i]; if (!v || (v.tl && v.tlz === d.zoom)) return; const z = d.zoom;
+  const div = el('div', 'textLayer'); div.style.setProperty('--scale-factor', v.vp.scale);
+  if (v.tl) v.tl.remove(); v.tl = div; v.tlz = z; v.wrap.insertBefore(div, v.ov);
+  try { const tc = await (d.info[i].tc = d.info[i].tc || d.info[i].page.getTextContent()); if (v.tl !== div) return; await pdfjsLib.renderTextLayer({ textContentSource: tc, container: div, viewport: v.vp }).promise; } catch (e) { console.warn('text layer', e); }
+}
+function textSelMode(on) {
+  document.body.classList.toggle('textsel', on); const d = cur();
+  if (on && d && d.views) d.views.forEach((v, i) => { if (v.rendered) buildTextLayer(i); });
+  if (!on) { hideSelBar(); const s = getSelection(); if (s && !s.isCollapsed && s.anchorNode && s.anchorNode.parentElement && s.anchorNode.parentElement.closest('.textLayer')) s.removeAllRanges(); }
+}
+{ const _st = setTool; setTool = async function (id, quiet) { await _st(id, quiet); textSelMode(S.tool === 'textsel'); }; }
+function selRects() {
+  const d = cur(); const s = getSelection(); if (!d || !s || s.isCollapsed || !s.rangeCount) return [];
+  const out = new Map();
+  for (let r = 0; r < s.rangeCount; r++) for (const cr of s.getRangeAt(r).getClientRects()) {
+    if (cr.width < 1 || cr.height < 1) continue; const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+    const i = d.views.findIndex(v => { const b = v.wrap.getBoundingClientRect(); return cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom; }); if (i < 0) continue;
+    const b = d.views[i].wrap.getBoundingClientRect(); const L = out.get(i) || []; const box = [cr.left - b.left, cr.top - b.top, cr.right - b.left, cr.bottom - b.top];
+    const same = L.find(o => Math.abs((o[1] + o[3]) / 2 - (box[1] + box[3]) / 2) < Math.min(o[3] - o[1], box[3] - box[1]) * .5 && box[0] <= o[2] + (box[3] - box[1]) && box[2] >= o[0] - (box[3] - box[1]));
+    if (same) { same[0] = Math.min(same[0], box[0]); same[1] = Math.min(same[1], box[1]); same[2] = Math.max(same[2], box[2]); same[3] = Math.max(same[3], box[3]); } else L.push(box);
+    out.set(i, L);
+  }
+  return [...out.entries()];
+}
+function markSelection(type) {
+  const d = cur(); const rs = selRects(); if (!rs.length) return; const st = S.styles[type] || {}; snapshot(); let n = 0;
+  for (const [i, L] of rs) { const vp = d.views[i].vp; for (const b of L) { const p = vp.convertToPdfPoint(b[0], b[1]), q = vp.convertToPdfPoint(b[2], b[3]); d.annots[i].push(Object.assign({ type }, norm(p, q), { color: st.color, opacity: st.opacity ?? 1 })); n++; } drawOverlay(i); }
+  getSelection().removeAllRanges(); hideSelBar(); toast(`${NAMES[type]} added`);
+}
+async function copySelection() { const t = getSelection().toString(); try { await navigator.clipboard.writeText(t); } catch { document.execCommand('copy'); } toast(`Copied ${t.length} characters`); }
+function linkSelection() {
+  const d = cur(); const rs = selRects(); if (!rs.length) return; const [i, L] = rs[0]; const vp = d.views[i].vp;
+  const x0 = Math.min(...L.map(b => b[0])), y0 = Math.min(...L.map(b => b[1])), x1 = Math.max(...L.map(b => b[2])), y1 = Math.max(...L.map(b => b[3]));
+  const txt = getSelection().toString().trim(); getSelection().removeAllRanges(); hideSelBar();
+  linkDialog(i, Object.assign({ type: 'link' }, norm(vp.convertToPdfPoint(x0, y0), vp.convertToPdfPoint(x1, y1))), guessUrl(txt));
+}
+const guessUrl = t => /^(https?:\/\/|www\.)\S+$/i.test(t) ? (/^www\./i.test(t) ? 'https://' + t : t) : /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(t) ? 'mailto:' + t : '';
+function hideSelBar() { const b = $('#selbar'); if (b) b.hidden = true; }
+function showSelBar() {
+  const s = getSelection(); if (S.tool !== 'textsel' || !s || s.isCollapsed || !s.rangeCount || !String(s).trim()) { hideSelBar(); return; }
+  const n = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement); if (!n || !n.closest('.textLayer')) { hideSelBar(); return; }
+  let b = $('#selbar'); if (!b) { b = el('div', 'selbar glass', ''); b.id = 'selbar'; document.body.append(b);
+    b.innerHTML = [['copy', 'Copy'], ['highlight', 'Highlight'], ['underline', 'Underline'], ['strike', 'Strikeout'], ['link', 'Link'], ['say', 'Read aloud']].map(([k, l]) => `<button type="button" data-sb="${k}">${l}</button>`).join('');
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.onclick = e => { const k = e.target.closest('button')?.dataset.sb; if (!k) return; if (k === 'copy') copySelection(); else if (k === 'link') linkSelection(); else if (k === 'say') { speakText(String(getSelection())); hideSelBar(); } else markSelection(k); };
+  }
+  const r = s.getRangeAt(s.rangeCount - 1).getBoundingClientRect(); b.hidden = false;
+  const bw = b.offsetWidth || 360; b.style.left = Math.max(8, Math.min(innerWidth - bw - 8, r.left + r.width / 2 - bw / 2)) + 'px'; b.style.top = (r.top > 70 ? r.top - 46 : r.bottom + 8) + 'px';
+}
+document.addEventListener('mouseup', () => setTimeout(showSelBar, 0));
+document.addEventListener('keyup', e => { if (e.shiftKey || e.key === 'Shift') showSelBar(); });
+document.addEventListener('selectionchange', () => { const s = getSelection(); if (!s || s.isCollapsed) hideSelBar(); });
+$('#viewer').addEventListener('scroll', hideSelBar, { passive: true });
+$('#viewer').addEventListener('pointerdown', e => { if (S.tool !== 'textsel') return; const tl = e.target.closest('.textLayer'); if (tl) tl.classList.add('selecting'); }, true);
+document.addEventListener('pointerup', () => $$('.textLayer.selecting').forEach(t => t.classList.remove('selecting')));
+
+/* ---- links ---- */
+function pdfLinkAt(i, p) {
+  const d = cur(); const L = d && d.info[i] && d.info[i].linksReady; if (!L || !L.length) return null; const q = d.views[i].vp.convertToPdfPoint(p[0], p[1]);
+  return L.find(a => q[0] >= Math.min(a.rect[0], a.rect[2]) && q[0] <= Math.max(a.rect[0], a.rect[2]) && q[1] >= Math.min(a.rect[1], a.rect[3]) && q[1] <= Math.max(a.rect[1], a.rect[3])) || null;
+}
+async function destPage(d, dest) {
+  try { if (typeof dest === 'string') dest = await d.pdf.getDestination(dest); if (!Array.isArray(dest)) return -1; const r = dest[0]; return typeof r === 'number' ? r : await d.pdf.getPageIndex(r); } catch { return -1; }
+}
+async function followLink(L) {
+  const d = cur(); const url = L.url || L.unsafeUrl;
+  if (url) { if (/^javascript:/i.test(url)) return; const ok = await modal({ title: 'Open link?', body: `<p class="muted" style="margin:0;word-break:break-all">${esc(url)}</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Open', primary: true, value: 1 }] }); if (ok) window.open(url, '_blank', 'noopener'); return; }
+  const pg = L.page != null ? L.page : await destPage(d, L.dest); if (pg >= 0) gotoPage(pg); else toast('That link points nowhere in this file.');
+}
+function linkDialog(i, a, url = '') {
+  const d = cur(); const body = el('div', '', `<div class="segs" id="lkK"><button type="button" data-k="url" class="on">Web address or email</button><button type="button" data-k="page">Page in this PDF</button></div>
+    <div class="field" id="lkU"><label for="lkUrl">Address</label><input id="lkUrl" class="inp" placeholder="https://… or name@example.com" value="${esc(url)}"></div>
+    <div class="field" id="lkP" hidden><label for="lkPg">Page (1 to ${d.info.length})</label><input id="lkPg" class="inp" type="number" min="1" max="${d.info.length}" value="${d.cur + 1}"></div>`);
+  body.style.cssText = 'display:flex;flex-direction:column;gap:12px'; let kind = 'url';
+  $$('#lkK button', body).forEach(b => b.onclick = () => { kind = b.dataset.k; $$('#lkK button', body).forEach(x => x.classList.toggle('on', x === b)); $('#lkU', body).hidden = kind !== 'url'; $('#lkP', body).hidden = kind !== 'page'; });
+  modal({ title: 'Add link', body, actions: [{ label: 'Cancel', value: null }, { label: 'Add link', primary: true, value: 1, validate: () => kind === 'page' ? +$('#lkPg', body).value >= 1 && +$('#lkPg', body).value <= d.info.length : !!$('#lkUrl', body).value.trim() }] }).then(r => {
+    if (!r) return; snapshot(); if (kind === 'page') a.page = +$('#lkPg', body).value - 1; else { let u = $('#lkUrl', body).value.trim(); a.url = guessUrl(u) || (/^[a-z]+:/i.test(u) ? u : 'https://' + u); }
+    d.annots[i].push(a); drawOverlay(i); setSel({ page: i, idx: d.annots[i].length - 1 });
+  });
+  setTimeout(() => { const n = $('#lkUrl'); if (n) n.focus(); }, 30);
+}
+const linkFieldsHTML = a => `<div class="field"><label for="lkE">${a.page != null ? 'Page' : 'Address'}</label><input id="lkE" class="inp" ${a.page != null ? `type="number" min="1" value="${a.page + 1}"` : `value="${esc(a.url || '')}"`}></div><div class="row"><button class="btn sm" id="lkGo">Follow link</button></div>`;
+function bindLinkFields(P, s) {
+  const n = $('#lkE', P); n.oninput = () => { if (!S.selSnap) { snapshot(); S.selSnap = true; } if (s.a.page != null) s.a.page = Math.max(0, Math.min(cur().info.length - 1, (+n.value || 1) - 1)); else s.a.url = n.value.trim(); };
+  $('#lkGo', P).onclick = () => followLink(s.a);
+}
+function exportLink(pdf, page, a) {
+  const L = PDFLib; const ctx = pdf.context; const pages = pdf.getPages();
+  const o = { Type: 'Annot', Subtype: 'Link', Rect: [Math.min(a.x1, a.x2), Math.min(a.y1, a.y2), Math.max(a.x1, a.x2), Math.max(a.y1, a.y2)], Border: [0, 0, 0], F: 4 };
+  if (a.page != null) { if (!pages[a.page]) return; o.Dest = [pages[a.page].ref, 'XYZ', null, null, null]; } else if (a.url) o.A = { Type: 'Action', S: 'URI', URI: L.PDFString.of(a.url) }; else return;
+  page.node.addAnnot(ctx.register(ctx.obj(o)));
+}
+const URL_RE = /\b((?:https?:\/\/|www\.)[^\s<>()"]+[^\s<>()".,;:!?'])|\b([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})\b/gi;
+TASKS.links = async function (P, d) {
+  P.innerHTML = `<section class="sec">${head('Links')}<p class="muted">Counting links…</p></section>`; bindClose(P);
+  const all = await Promise.all(d.info.map(inf => inf.links || (inf.links = inf.page.getAnnotations().then(a => a.filter(x => x.subtype === 'Link' && (x.url || x.dest || x.unsafeUrl))).catch(() => []))));
+  d.info.forEach((inf, i) => inf.linksReady = all[i]); if (S.task !== 'links' || cur() !== d) return;
+  const nPdf = all.reduce((s, l) => s + l.length, 0), nWeb = all.reduce((s, l) => s + l.filter(x => x.url || x.unsafeUrl).length, 0), nQ = d.annots.reduce((s, l) => s + l.filter(a => a.type === 'link').length, 0);
+  P.innerHTML = `<section class="sec">${head('Links')}<dl class="kv"><dt>Links in the file</dt><dd>${nPdf} (${nWeb} to the web)</dd><dt>New links (not saved yet)</dt><dd>${nQ}</dd></dl>
+    <p class="hint">Use the <b>Link</b> tool on the Markup ribbon to draw a link, or select text and pick Link. Links in the file open with a click.</p>
+    <span class="lbl">Turn typed addresses into links</span><p class="hint">Finds web addresses and emails written in the text and makes them clickable.</p>
+    ${scopeHTML(d)}<button class="btn primary" id="lkDetect">Find addresses</button>
+    <span class="lbl">Edit existing links</span><p class="hint">Turns the file's links into Quire links so you can move, change or delete them.</p><button class="btn" id="lkImport" ${nPdf ? '' : 'disabled'}>Make links editable</button>
+    <span class="lbl">Remove</span><div class="row"><button class="btn danger-o" id="lkWeb" ${nWeb ? '' : 'disabled'}>Remove web links</button><button class="btn danger-o" id="lkAll" ${nPdf + nQ ? '' : 'disabled'}>Remove all links</button></div></section>`;
+  bindClose(P);
+  $('#lkDetect', P).onclick = async () => {
+    const idx = scopeIdx(P); let n = 0; snapshot();
+    for (const i of idx) {
+      const tc = await (d.info[i].tc = d.info[i].tc || d.info[i].page.getTextContent()); const have = [...d.annots[i].filter(a => a.type === 'link').map(a => [a.x1, a.y1, a.x2, a.y2]), ...(d.info[i].linksReady || []).map(a => a.rect)];
+      for (const it of tc.items) {
+        if (!it.str || Math.abs(it.transform[1]) > .01 || Math.abs(it.transform[2]) > .01) continue; URL_RE.lastIndex = 0; let m;
+        while ((m = URL_RE.exec(it.str))) {
+          const len = it.str.length, x = it.transform[4] + it.width * m.index / len, w = it.width * m[0].length / len, y = it.transform[5], h = it.height || Math.abs(it.transform[3]);
+          const box = [x, y - h * .25, x + w, y + h * .95]; const cx = x + w / 2, cy = y + h / 3;
+          if (have.some(r => cx >= Math.min(r[0], r[2]) && cx <= Math.max(r[0], r[2]) && cy >= Math.min(r[1], r[3]) && cy <= Math.max(r[1], r[3]))) continue;
+          d.annots[i].push({ type: 'link', x1: box[0], y1: box[1], x2: box[2], y2: box[3], url: m[2] ? 'mailto:' + m[2] : (/^www\./i.test(m[1]) ? 'https://' + m[1] : m[1]) }); have.push(box); n++;
+        }
+      }
+      drawOverlay(i);
+    }
+    if (!n) { d.undo.pop(); toast('No new web addresses or emails found. Scanned pages need OCR first.'); } else toast(`Made ${plural(n, 'link')}. They are written into the file when you save.`);
+    TASKS.links(P, d);
+  };
+  const strip = async (label, keep) => editBytes(label, (pdf, dd) => {
+    const N = PDFLib.PDFName.of; let n = 0;
+    pdf.getPages().forEach(p => { const an = p.node.Annots(); if (!an) return; for (let k = an.size() - 1; k >= 0; k--) { const a = an.lookup(k); if (a instanceof PDFLib.PDFDict && a.lookup(N('Subtype'))?.decodeText?.() === 'Link' && !keep(a)) { an.remove(k); n++; } } });
+    return n ? undefined : false;
+  });
+  const isWeb = a => { const A = a.lookup(PDFLib.PDFName.of('A')); return A instanceof PDFLib.PDFDict && A.lookup(PDFLib.PDFName.of('S'))?.decodeText?.() === 'URI'; };
+  $('#lkImport', P).onclick = async () => {
+    const add = []; for (let i = 0; i < all.length; i++) for (const a of all[i]) { const q = { type: 'link', x1: a.rect[0], y1: a.rect[1], x2: a.rect[2], y2: a.rect[3] }; if (a.url || a.unsafeUrl) q.url = a.url || a.unsafeUrl; else { const pg = await destPage(d, a.dest); if (pg < 0) continue; q.page = pg; } add.push([i, q]); }
+    if (await strip(`Made ${plural(add.length, 'link')} editable`, () => false)) { for (const [i, q] of add) d.annots[i].push(q); d.info.forEach(inf => { inf.links = null; inf.linksReady = []; }); redrawAll(); TASKS.links(P, d); }
+  };
+  $('#lkWeb', P).onclick = async () => { if (await strip('Web links removed', a => !isWeb(a))) { d.annots.forEach(l => { for (let k = l.length - 1; k >= 0; k--) if (l[k].type === 'link' && l[k].url) l.splice(k, 1); }); redrawAll(); } };
+  $('#lkAll', P).onclick = async () => { const had = d.annots.some(l => l.some(a => a.type === 'link')); d.annots.forEach(l => { for (let k = l.length - 1; k >= 0; k--) if (l[k].type === 'link') l.splice(k, 1); }); if (!(await strip('All links removed', () => false)) && had) { redrawAll(); toast('New links removed'); } };
+};
+
+/* ---- print ---- */
+async function printDialog() {
+  const d = cur(); if (!d) return; closeTextEditor(true);
+  const body = el('div', '', `<div class="field"><span class="lbl">Pages</span><div class="row">${[['all', `All ${d.info.length}`], ['cur', 'Current page'], ['sel', `Selected (${selPages().length})`], ['range', 'Range']].map(([v, l], k) => `<label class="chk"><input type="radio" name="prS" value="${v}" ${k ? '' : 'checked'}> ${l}</label>`).join('')}</div></div>
+    <div class="field"><input id="prR" class="inp" placeholder="e.g. 1-3, 6"></div>
+    <label class="chk"><input type="checkbox" id="prM" checked> Include markup and stamps</label>
+    <div class="field"><label for="prQ">Quality</label><select id="prQ" class="inp"><option value="1.5">Draft (108 dpi)</option><option value="2.5" selected>Normal (180 dpi)</option><option value="4">High (288 dpi)</option></select></div>
+    <p class="hint" style="margin:0">Pages go to your computer's print dialog, where you pick the printer, copies and two-sided printing. Choose "Save as PDF" there for a flattened copy.</p>`);
+  body.style.cssText = 'display:flex;flex-direction:column;gap:10px'; $('#prR', body).onfocus = () => { $('input[value=range]', body).checked = true; };
+  const r = await modal({ title: 'Print', body, actions: [{ label: 'Cancel', value: null }, { label: 'Print', primary: true, value: 1 }] }); if (!r) return;
+  const mode = $('input[name=prS]:checked', body).value; const idx = mode === 'cur' ? [d.cur] : mode === 'sel' ? selPages() : mode === 'range' ? parseRange($('#prR', body).value, d.info.length) : [...d.info.keys()];
+  if (!idx.length) { toast('No pages in that range'); return; }
+  const marks = $('#prM', body).checked, sc = +$('#prQ', body).value;
+  let area = $('#printArea'); if (area) area.remove(); area = el('div', '', ''); area.id = 'printArea'; document.body.append(area);
+  busy('Preparing pages…'); const urls = [];
+  try {
+    for (let k = 0; k < idx.length; k++) {
+      $('#busyMsg').textContent = `Preparing page ${k + 1} of ${idx.length}…`;
+      const { c } = await renderToCanvas(d, idx[k], sc, { annots: marks }); const b = await new Promise(res => c.toBlob(res, 'image/jpeg', .92)); const u = URL.createObjectURL(b); urls.push(u);
+      const im = new Image(); im.src = u; im.className = c.width > c.height ? 'land' : ''; area.append(im);
+    }
+    await Promise.all([...area.querySelectorAll('img')].map(im => im.decode().catch(() => {})));
+  } finally { unbusy(); }
+  const land = idx.every(i => { const v = d.info[i].vp1; return v.width > v.height; }); let st = $('#printPage'); if (!st) { st = el('style'); st.id = 'printPage'; document.head.append(st); } st.textContent = `@page{margin:0;size:${land ? 'landscape' : 'auto'}}`;
+  document.body.classList.add('printing');
+  const done = () => { document.body.classList.remove('printing'); area.remove(); urls.forEach(u => URL.revokeObjectURL(u)); removeEventListener('afterprint', done); };
+  addEventListener('afterprint', done);
+  try { window.print(); } catch (e) { done(); toast('Printing is blocked here. Save the PDF and print it from your computer.'); }
+  setTimeout(() => { if (document.body.classList.contains('printing')) done(); }, 60000);
+}
+
+/* ---- read out loud (system voices, works offline) ---- */
+const RA = { on: false, rate: pref.get('raRate', 1), voice: pref.get('raVoice', '') };
+function speakText(t, onend) {
+  if (!('speechSynthesis' in window)) { toast('Read aloud is not available in this browser.'); return; }
+  speechSynthesis.cancel(); t = String(t || '').replace(/\s+/g, ' ').trim(); if (!t) { toast('There is no text to read here. Scanned pages need OCR first.'); return; }
+  const parts = t.match(/[^.!?]{1,220}[.!?]*|\S+/g) || [t]; RA.on = true; let k = 0;
+  const next = () => { if (!RA.on || k >= parts.length) { RA.on = false; if (onend && k >= parts.length) onend(); return; } const u = new SpeechSynthesisUtterance(parts[k++]); u.rate = RA.rate; const v = speechSynthesis.getVoices().find(v => v.name === RA.voice); if (v) u.voice = v; u.onend = next; u.onerror = () => { RA.on = false; }; speechSynthesis.speak(u); };
+  next();
+}
+function stopSpeaking() { RA.on = false; if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+
+/* ---- comments list ---- */
+const CM = { type: 'all', page: false };
+const cmText = a => a.text || a.label || a.url || (a.page != null && a.type === 'link' ? `Page ${a.page + 1}` : '') || (a.type === 'measure' ? lenLabel(a) : a.type === 'area' ? areaLabel(a) : '');
+function cmItems(d) { const out = []; d.annots.forEach((L, i) => L.forEach((a, k) => { if ((CM.type === 'all' || a.type === CM.type) && (!CM.page || i === d.cur)) out.push([i, k, a]); })); return out; }
+TASKS.comments = function (P, d) {
+  const types = [...new Set(d.annots.flat().map(a => a.type))]; if (CM.type !== 'all' && !types.includes(CM.type)) CM.type = 'all';
+  const items = cmItems(d); const s = S.sel; const curK = items.findIndex(([i, k]) => s && s.page === i && s.idx === k);
+  P.innerHTML = `<section class="sec">${head('Comments and markup')}
+    <div class="grid2"><select id="cmT" class="inp" aria-label="Type"><option value="all">All types (${d.annots.flat().length})</option>${types.map(t => `<option value="${t}"${CM.type === t ? ' selected' : ''}>${NAMES[t] || t} (${d.annots.flat().filter(a => a.type === t).length})</option>`).join('')}</select>
+    <label class="chk"><input type="checkbox" id="cmP" ${CM.page ? 'checked' : ''}> This page only</label></div>
+    <div class="row"><button class="btn sm" id="cmPrev" ${items.length ? '' : 'disabled'}>${svg('up')}Previous</button><button class="btn sm" id="cmNext" ${items.length ? '' : 'disabled'}>${svg('down')}Next</button><span class="muted small">${curK >= 0 ? `${curK + 1} of ${items.length}` : plural(items.length, 'item')}</span></div>
+    <ol class="results cm-list">${items.length ? items.map(([i, k, a], n) => `<li><button data-cm="${n}" class="${n === curK ? 'on' : ''}"><span class="muted">p.${i + 1}</span> <b>${esc(NAMES[a.type] || a.type)}</b>${cmText(a) ? ' · ' + esc(cmText(a).slice(0, 90)) : ''}${a.author ? `<span class="muted small"> · ${esc(a.author)}${a.date ? ', ' + new Date(a.date).toLocaleDateString() : ''}</span>` : ''}</button></li>`).join('') : '<li class="muted small" style="padding:8px">No markup yet. Notes, highlights, shapes, stamps and links all show up here.</li>'}</ol>
+    <div class="row"><button class="btn sm" id="cmCsv" ${items.length ? '' : 'disabled'}>Export list (CSV)</button><button class="btn sm danger-o" id="cmDel" ${items.length ? '' : 'disabled'}>Delete these ${items.length}</button></div></section>`;
+  bindClose(P);
+  const go = n => { const it = items[(n + items.length) % items.length]; if (!it) return; if (S.tool !== 'select') { S.tool = 'select'; setCursor(); textSelMode(false); } gotoPage(it[0]); S.sel = { page: it[0], idx: it[1] }; S.selSnap = false; redrawAll(); TASKS.comments(P, d); renderRibbon(); };
+  $('#cmT', P).onchange = e => { CM.type = e.target.value; TASKS.comments(P, d); };
+  $('#cmP', P).onchange = e => { CM.page = e.target.checked; TASKS.comments(P, d); };
+  $('#cmPrev', P).onclick = () => go(curK < 0 ? items.length - 1 : curK - 1); $('#cmNext', P).onclick = () => go(curK + 1);
+  $$('[data-cm]', P).forEach(b => b.onclick = () => go(+b.dataset.cm));
+  $('#cmDel', P).onclick = () => { snapshot(); const del = new Set(items.map(([i, k]) => i + ':' + k)); d.annots = d.annots.map((L, i) => L.filter((_, k) => !del.has(i + ':' + k))); S.sel = null; redrawAll(); toast(`Deleted ${plural(items.length, 'item')}. Undo brings them back.`); TASKS.comments(P, d); };
+  $('#cmCsv', P).onclick = () => { const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`; const csv = ['Page,Type,Text,Author,Date', ...items.map(([i, , a]) => [i + 1, NAMES[a.type] || a.type, cmText(a), a.author || '', a.date || ''].map(q).join(','))].join('\n'); saveFile(baseName(d) + ' comments.csv', new Blob([csv], { type: 'text/csv' })); };
+};
 
 /* ---- smart fit: one page size for every page, by moving a crop window rather than scaling ---- */
 // Works on the whole page (MediaBox), not just what is visible, so earlier crops can be undone or moved.
@@ -4966,6 +5257,8 @@ function wire() {
     if (mod && k === 's') { e.preventDefault(); saveDialog(); return; }
     if (mod && k === 'o') { e.preventDefault(); $('#bOpen').click(); return; }
     if (mod && k === 'f') { e.preventDefault(); if (cur()) openTask('search'); return; }
+    if (mod && k === 'p') { e.preventDefault(); if (cur()) printDialog(); return; }
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && cur()) { e.preventDefault(); navGo(e.key === 'ArrowLeft' ? -1 : 1); return; }
     if (typing) return;
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && k === 'y') { e.preventDefault(); redo(); return; }
