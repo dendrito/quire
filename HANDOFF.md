@@ -56,6 +56,15 @@ Write-up: https://claude.ai/artifact/WvGqbDxrxE6QRiPpnYaCH5. The code lives in t
 - **Command search:** the lightning button, or Ctrl/⌘+K (or Ctrl+.), finds any command by name or keyword.
 - Up and Down moved off the Pages toolbar and into Arrange.
 
+## Compression, Combine and Smart fit (done, 4 Nov 2026)
+
+Code: the "smart fit" and "compression and combine" blocks above `findAll`.
+
+- **Smart compress** (Tools, Compress) keeps text. Each image gets the codec that suits it: JPEG with the quality found by binary search against an SSIM target (`jpegTuned`), a lossless Indexed palette for images with 256 colours or fewer, or 1-bit Flate (Otsu threshold) for black-and-white scans. The smallest wins, with lossless favoured unless JPEG is 30% smaller. It handles DCT and Flate images (with PNG predictors) and keeps SMask. Options: resolution, quality (Smallest/Balanced/Best = SSIM .955/.975/.988), grey, `dedupeObjects` (identical streams and Font/FontDescriptor/ExtGState stored once, then unreachable objects dropped) and `stripHidden` (page Thumb and PieceInfo).
+- **Scans: Text over background (MRC)** (`mrcPage`): Sauvola threshold makes a 1-bit mask at 150 to 400 dpi. The paper is averaged with text pixels left out into a 75 to 100 dpi JPEG, and the ink colour is a 25 dpi JPEG drawn through the mask (explicit /Mask). Pages that are more than 30% ink fall back to one JPEG. Text needs OCR afterwards.
+- **Combine** (`combineFiles`): a window to order files (drag, arrows, A–Z, reverse), page ranges per file, a bookmark per file, each file's own bookmarks kept and nested (`readOutline` resolves named destinations; `addOutlineTree`), form fields registered with clashing names renamed (`mergeFields`), duplicate fonts removed, and the result as a new PDF or appended to the open one.
+- **Smart fit** (Pages toolbar, `sfOpen`): one size for every page. It loads an uncropped copy, measures the ink on each page, and picks the size with the least shrinking, then the least added paper, then the least content cut, preferring real paper sizes or sizes already in the file. Other choices: most common, smallest, A4, Letter, A5, Legal or custom. A crop window is placed around the content (centre, top or page centre, with padding) and can be dragged per page. Applying sets the CropBox only; when the window is bigger than the paper the MediaBox grows, and only when content can't fit is it scaled (`placeContent`). Re-opening starts from the current crops.
+
 ## Mac camera permission (done)
 
 `package.json` has `NSCameraUsageDescription`; `main.js` allows only video media and answers `ask-camera` with `systemPreferences.askForMediaAccess('camera')`; `preload.js` exposes `askCamera`, which the scanner calls before `getUserMedia`.
