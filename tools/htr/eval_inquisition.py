@@ -6,8 +6,8 @@ Runs on GitHub (see .github/workflows/htr-inquisition.yml); needs kraken.
 import io, json, os, re, shutil, subprocess, sys, urllib.request, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(os.path.dirname(HERE))
 TMP = os.path.join(HERE, '.dl'); os.makedirs(TMP, exist_ok=True); WORK = os.path.join(TMP, 'inq'); shutil.rmtree(WORK, ignore_errors=True); os.makedirs(WORK)
-MODELS = {'mccatmus': '13788177', 'catmus-medieval': '15030337', 'tridis': '10800223', 'traprinq': '14538271',
-          'traprinq-v2': '14543904', 'geneapt': '23733764'}
+MODELS = {'traprinq': '14538271', 'traprinq-v2': '14543904', 'geneapt': '23733764', 'mccatmus': '13788177', 'tridis': '10800223',
+          'catmus-medieval': '15030337', 'frolat-expan': '7516057', 'regfiii-damage': '23313428'}
 N = int(os.environ.get('PAGES', '30'))
 
 
@@ -27,7 +27,9 @@ def model(rec):
 z = zipfile.ZipFile(get('https://zenodo.org/api/records/13986218/files/Validation_Set_FINAL.zip/content', os.path.join(TMP, 'inq-val.zip')))
 names = z.namelist(); xmls = sorted(n for n in names if n.lower().endswith('.xml') and not n.lower().endswith(('metadata.xml', 'mets.xml', 'doc.xml')) and b'TextLine' in z.read(n))
 imgs = {os.path.basename(n).rsplit('.', 1)[0]: n for n in names if n.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff'))}
-print(len(xmls), 'pages in the validation set', file=sys.stderr)
+def nlines(n): return len(re.findall(rb'<TextLine\b.*?<Unicode>[^<]{3,}</Unicode>', z.read(n), re.S))
+xmls = [n for n in xmls if nlines(n) >= 12]  # transcribed pages only (the set also has covers and blank pages)
+print(len(xmls), 'transcribed pages in the validation set', file=sys.stderr)
 pick = xmls[::max(1, len(xmls) // N)][:N]; files = []
 for k, x in enumerate(pick):
     stem = os.path.basename(x).rsplit('.', 1)[0]; im = imgs.get(stem)
@@ -43,8 +45,8 @@ for mid, rec in MODELS.items():
     try:
         path = model(rec)
         out = subprocess.run(['ketos', 'test', '-f', 'xml', '-m', path, *files], capture_output=True, text=True, timeout=5400)
-        txt = out.stdout + out.stderr; print('====', mid, '\n', txt[-3000:], file=sys.stderr)
-        acc = re.findall(r'([\d.]+)%\s+Accuracy', txt); chars = re.findall(r'(\d+)\s+Characters', txt)
+        txt = out.stdout + out.stderr; rep = txt[txt.find('=== report'):][:600] if '=== report' in txt else txt[:2500]; print('====', mid, '\n', rep, file=sys.stderr)
+        acc = re.findall(r'([\d.]+)%\s+Accuracy', txt) or re.findall(r'[Aa]ccuracy[^\d\n]*([\d.]+)\s*%', txt); chars = re.findall(r'(\d+)\s+Characters', txt)
         res[mid] = {'cer': round(100 - float(acc[0]), 2) if acc else None, 'chars': int(chars[0]) if chars else None}
     except Exception as e:
         res[mid] = {'error': str(e)}
