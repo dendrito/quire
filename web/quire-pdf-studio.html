@@ -1130,7 +1130,8 @@ async function buildOutput(d, { editable = false } = {}) {
   const anyAnn = d.annots.some(p => p.length);
   if (!anyAnn) return d.bytes;
   const F = { reg: await pdf.embedFont(StandardFonts.Helvetica), bold: await pdf.embedFont(StandardFonts.HelveticaBold) };
-  for (let i = 0; i < d.info.length; i++) { const red = d.annots[i].filter(a => a.type === 'redact'); if (red.length) await rasterReplace(pdf, d, i, 2.5, .92, red); }
+  for (let i = 0; i < d.info.length; i++) { const red = d.annots[i].filter(a => a.type === 'redact'); if (red.length) { if (pref.get('redactRaster', false)) await rasterReplace(pdf, d, i, 2.5, .92, red); else await rxPage(pdf, d, i, red, (d.rxRep = d.rxRep || {})); } }
+  if (d.annots.some(p => p.some(a => a.type === 'redact'))) rxGC(pdf);
   const pages = pdf.getPages(); const imgs = new Map();
   for (let i = 0; i < pages.length; i++) for (const a of d.annots[i]) if (a.type !== 'redact') await exportAnnot(pdf, pages[i], d, i, a, F, imgs);
   if (editable && !d.annots.some(p => p.some(a => a.type === 'redact'))) {
@@ -1144,7 +1145,7 @@ async function saveDialog() {
   const hasRed = d.annots.some(p => p.some(a => a.type === 'redact')); const hasAnn = d.annots.some(p => p.length);
   const body = el('div', '', `<div class="field"><label for="svName">File name</label><input id="svName" class="inp" value="${esc(baseName(d))}.pdf"></div>
     ${hasAnn ? `<label class="chk"><input type="checkbox" id="svEdit" ${hasRed ? 'disabled' : (pref.get('editable', true) ? 'checked' : '')}> Keep markup editable when reopened in Quire</label>
-    <p class="hint">${hasRed ? 'Redactions are applied when you save. Marked pages become images and the covered content is removed. Editable markup is off so the original cannot be recovered from the file.' : 'Markup is drawn into the pages, so every PDF reader shows it. Editable mode also stores the original pages inside the file, which roughly doubles its size and keeps anything under whiteout recoverable.'}</p>` : ''}`);
+    <p class="hint">${hasRed ? 'Redactions are applied when you save: whatever is under the marks is deleted from the file. Editable markup is off so the original cannot be recovered from the file.' : 'Markup is drawn into the pages, so every PDF reader shows it. Editable mode also stores the original pages inside the file, which roughly doubles its size and keeps anything under whiteout recoverable.'}</p>` : ''}`);
   body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
   const r = await modal({ title: 'Save PDF', body, actions: [{ label: 'Cancel', value: null }, { label: 'Save', primary: true, value: 'ok' }] });
   if (!r) return;
@@ -1215,10 +1216,15 @@ async function splitDoc() {
 }
 async function applyRedactions() {
   const d = cur(); const pages = d.annots.map((p, i) => p.some(a => a.type === 'redact') ? i : -1).filter(i => i >= 0);
-  if (!pages.length) { toast('Nothing marked for redaction. Use the Redact tool first.'); return; }
-  const r = await modal({ title: 'Apply redactions?', body: `<p style="margin:0">${pages.length} page${pages.length > 1 ? 's' : ''} will become images with the marked areas blacked out. Text on ${pages.length > 1 ? 'those pages' : 'that page'} will no longer be selectable. You can undo this until you close the document.</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Apply redactions', danger: true, value: 'ok' }] });
-  if (!r) return;
-  await editBytes('Redactions applied', async (pdf, d) => { for (const i of pages) { await rasterReplace(pdf, d, i, 2.5, .92, d.annots[i].filter(a => a.type === 'redact')); d.annots[i] = d.annots[i].filter(a => a.type !== 'redact'); } }, 'Applying redactions…');
+  if (!pages.length) { toast('Nothing marked for redaction. Use the Redact tool first, or Protect → Find personal data.'); return; }
+  const n = d.annots.flat().filter(a => a.type === 'redact').length; const raster0 = pref.get('redactRaster', false);
+  const r = await modal({ title: 'Apply redactions?', body: `<p style="margin:0">${plural(n, 'marked area')} on ${plural(pages.length, 'page')}: the text, picture pixels, drawings and comments under them are deleted from the file, and black boxes are drawn. Everything else stays real, selectable text.</p>
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="rxRaster" ${raster0 ? 'checked' : ''}> Turn the marked pages into images instead (the old way)</label>
+    <p class="hint">Quire reads each page back afterwards. If anything under a mark could still be found, that page is turned into an image automatically. You can undo until you close the document.</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Apply redactions', danger: true, value: 'ok' }] });
+  if (!r) return; const raster = $('#rxRaster').checked; pref.set('redactRaster', raster);
+  const rep = {};
+  const ok = await editBytes('Redactions applied', async (pdf, d) => { for (const i of pages) { const red = d.annots[i].filter(a => a.type === 'redact'); if (raster) await rasterReplace(pdf, d, i, 2.5, .92, red); else await rxPage(pdf, d, i, red, rep); d.annots[i] = d.annots[i].filter(a => a.type !== 'redact'); } rxGC(pdf); }, 'Applying redactions…');
+  if (ok !== false && !raster) toast(`Removed ${plural(rep.glyphs || 0, 'character')}${rep.pics ? `, blacked out ${plural(rep.pics, 'picture')}` : ''}${rep.art ? `, ${plural(rep.art, 'drawing')}` : ''}${rep.ann ? `, ${plural(rep.ann, 'comment or link', )}` : ''}.${rep.raster ? ` ${plural(rep.raster, 'page')} became an image to be safe (${rep.why.join('; ')}).` : ''}`, 8000);
 }
 async function exportPng() {
   const d = cur(); const i = d.cur; busy('Rendering page ' + (i + 1) + '…');
@@ -8019,6 +8025,7 @@ async function sigIdsDialog() {
 }
 // One ribbon tab for everything about trust: signatures, passwords, hidden data, redaction.
 RIB.protect = { label: 'Protect', items: ['@certsign', '@sigs', '|', '@protect', '@unlock', '@sanitize', '|', '@redactApply'] };
+RLBL.redactApply = 'Redact';
 RIB.tools.items = RIB.tools.items.filter(x => !['@protect', '@unlock', '@sanitize', '@redactApply'].includes(x)).filter((x, i, a) => !(x === '|' && (i === 0 || a[i - 1] === '|' || i === a.length - 1)));
 
 /* ================= PDF/A-2b: archive copy with a preflight report ================= */
@@ -8565,6 +8572,109 @@ async function cvDialog(kind) {
   } catch (e) { console.error(e); toast('Conversion failed: ' + (e.message || e), 7000); } finally { unbusy(); }
 }
 function cvRange(s, n) { s = String(s || '').trim(); if (!s) return [...Array(n).keys()]; const out = new Set(); for (const part of s.split(/[,;\s]+/)) { const m = /^(\d+)?\s*-\s*(\d+)?$/.exec(part); if (m) { const a = +(m[1] || 1), b = +(m[2] || n); for (let k = Math.max(1, a); k <= Math.min(n, b); k++) out.add(k - 1); } else if (/^\d+$/.test(part) && +part >= 1 && +part <= n) out.add(+part - 1); } return [...out].sort((a, b) => a - b); }
+
+/* ================= true redaction: remove what is under the marks, keep the rest of the page as it is ================= */
+// Like Acrobat's and PDF-XChange's redaction: glyphs under a mark are taken out of the content stream (the text after
+// them keeps its place), image pixels under it are blacked out in the image itself, line art inside it and comments
+// over it are removed, then a black box is drawn. The rest of the page stays real text. Afterwards the page's text is
+// read back; if anything under a mark can still be found (text inside a form object, an unusual font), that page
+// is turned into an image instead, as before.
+const RX_PAD = .5;
+const rxHit = (b, B, frac = .3) => { const w = Math.min(b[2], B[2]) - Math.max(b[0], B[0]), h = Math.min(b[3], B[3]) - Math.max(b[1], B[1]); if (w <= 0 || h <= 0) return false; const a = Math.max(1e-6, (b[2] - b[0]) * (b[3] - b[1])); return w * h / a >= frac; };
+const rxBoxes = marks => marks.map(a => [Math.min(a.x1, a.x2) - RX_PAD, Math.min(a.y1, a.y2) - RX_PAD, Math.max(a.x1, a.x2) + RX_PAD, Math.max(a.y1, a.y2) + RX_PAD]);
+async function rxPage(pdf, d, i, marks, rep = {}) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context; const boxes = rxBoxes(marks); const page = pdf.getPage(i);
+  const fallback = async why => { rep.raster = (rep.raster || 0) + 1; (rep.why = rep.why || []).push(`page ${i + 1}: ${why}`); await rasterReplace(pdf, d, i, 2.5, .92, marks); };
+  let m; try { m = ceModel(pdf, i); } catch (e) { console.warn(e); return fallback('its content could not be read'); }
+  const reps = []; let glyphs = 0;
+  // text
+  for (const r of m.runs) {
+    if (!r.glyphs.length) continue; const hit = [];
+    const hgt = r.fsU || 1;
+    r.glyphs.forEach((gl, k) => {
+      const a = gl.x * r.lu, b = (gl.x + Math.max(gl.w, 1e-3)) * r.lu;
+      const pts = [[a, -.25 * hgt], [b, -.25 * hgt], [b, .85 * hgt], [a, .85 * hgt]].map(([s, t]) => [r.O[0] + r.u[0] * s + r.nv[0] * t, r.O[1] + r.u[1] * s + r.nv[1] * t]);
+      const gb = [Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1]))];
+      if (boxes.some(B => rxHit(gb, B))) hit.push(k);
+    });
+    if (!hit.length) continue; glyphs += hit.length;
+    const drop = new Set(hit); const o = m.ops[r.op]; const k = r.size * r.th; const bpc = r.f ? r.f.bpc : 1;
+    const num = v => k ? cn(-v * 1000 / k) : '0'; let pos = 0, arr = '', hex = '';
+    const flushHex = () => { if (hex) { arr += `<${hex}>`; hex = ''; } };
+    r.glyphs.forEach((gl, j) => {
+      const shift = gl.x - pos; if (Math.abs(shift) > 1e-6) { flushHex(); arr += ' ' + num(shift) + ' '; pos = gl.x; }
+      if (drop.has(j)) return;
+      hex += (bpc === 2 ? gl.code.toString(16).padStart(4, '0') : gl.code.toString(16).padStart(2, '0')); pos = gl.x + gl.w;
+    });
+    flushHex(); if (Math.abs(r.adv - pos) > 1e-6) arr += ' ' + num(r.adv - pos);
+    const tj = `[${arr.trim()}] TJ`;
+    reps.push({ s: o.s, e: o.e, t: o.op === "'" ? `T* ${tj}` : o.op === '"' ? `${cn(o.a[0])} Tw ${cn(o.a[1])} Tc T* ${tj}` : tj });
+  }
+  // objects: images get their pixels blacked out, line art fully inside a mark goes, text-bearing forms fall back
+  let pics = 0, art = 0;
+  for (const ob of m.objs) {
+    if (!boxes.some(B => rxHit(ob.box, B, 0))) continue;
+    if (ob.kind === 'path') { if (boxes.some(B => ob.box[0] >= B[0] && ob.box[1] >= B[1] && ob.box[2] <= B[2] && ob.box[3] <= B[3])) { reps.push(ceDelObj(m, ob)); art++; } continue; }
+    if (ob.kind === 'inl') return fallback('a small embedded picture is under a mark');
+    if (ob.kind === 'form') { let txt = false; try { const xo = page.node.Resources().lookup(N('XObject')).lookup(N(ob.name)); const s = b2s(pdfaDecoded(xo) || new Uint8Array(0)); txt = /\b(Tj|TJ|Do)\b|'|"/.test(s); } catch { txt = true; } if (txt) return fallback('text or pictures inside a grouped object are under a mark'); continue; }
+    if (ob.kind === 'img') { try { await rxImage(pdf, page, ob, boxes); pics++; } catch (e) { console.warn(e); return fallback('a picture under a mark could not be edited'); } }
+  }
+  if (reps.length) ceWrite(pdf, m, reps, '');
+  // comments and links over the marks
+  const A = page.node.lookup(N('Annots')); let ann = 0;
+  if (A instanceof L.PDFArray) { const keep = A.asArray().filter(r => { const a = ctx.lookup(r); const R = a instanceof L.PDFDict && a.lookup(N('Rect')); if (!(R instanceof L.PDFArray)) return true; const v = R.asArray().map(n => n.asNumber()); const bb = [Math.min(v[0], v[2]), Math.min(v[1], v[3]), Math.max(v[0], v[2]), Math.max(v[1], v[3])]; const hit = boxes.some(B => rxHit(bb, B, .05)); if (hit) ann++; return !hit; }); if (ann) page.node.set(N('Annots'), ctx.obj(keep)); }
+  for (const B of boxes) page.drawRectangle({ x: B[0] + RX_PAD, y: B[1] + RX_PAD, width: B[2] - B[0] - 2 * RX_PAD, height: B[3] - B[1] - 2 * RX_PAD, color: rgb(0, 0, 0) });
+  // read it back: nothing under a mark may still be findable
+  try {
+    const tmp = await pdfjsLib.getDocument({ data: await pdfaPageBytes(pdf, i), isEvalSupported: false }).promise;
+    try {
+      const pg = await tmp.getPage(1); const tc = await pg.getTextContent();
+      const leak = tc.items.some(it => { if (!it.str || !it.str.trim()) return false; const [a, b, c, dd, e, f] = it.transform; const hh = Math.hypot(c, dd) || Math.abs(dd); const w = it.width || 0; const xs = [e, e + w * (a / (Math.hypot(a, b) || 1))], ys = [f, f + w * (b / (Math.hypot(a, b) || 1))]; const bb = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys) + hh * .8]; return boxes.some(B => rxHit(bb, B, .5)); });
+      if (leak) { tmp.destroy(); return fallback('some text under a mark could not be removed safely'); }
+    } finally { try { tmp.destroy(); } catch {} }
+  } catch (e) { console.warn('redaction check', e); }
+  rep.glyphs = (rep.glyphs || 0) + glyphs; rep.pics = (rep.pics || 0) + pics; rep.art = (rep.art || 0) + art; rep.ann = (rep.ann || 0) + ann; rep.pages = (rep.pages || 0) + 1;
+}
+// Removes every object nothing points to any more: the old content streams, images and comments a redaction replaced
+// would otherwise still be inside the file, readable by anyone who opens it with a text editor.
+function rxGC(pdf) {
+  const L = PDFLib, ctx = pdf.context; const seen = new Set(); const todo = [];
+  const visit = o => { if (o instanceof L.PDFRef) { const k = o.toString(); if (!seen.has(k)) { seen.add(k); todo.push(ctx.lookup(o)); } } else if (o instanceof L.PDFDict) for (const [, v] of o.entries()) visit(v); else if (o instanceof L.PDFArray) for (const v of o.asArray()) visit(v); else if (o && o.dict instanceof L.PDFDict) visit(o.dict); };
+  for (const k of ['Root', 'Info', 'Encrypt', 'ID']) if (ctx.trailerInfo[k]) visit(ctx.trailerInfo[k]);
+  while (todo.length) visit(todo.pop());
+  let n = 0; for (const [ref] of ctx.enumerateIndirectObjects()) if (!seen.has(ref.toString())) { ctx.delete(ref); n++; }
+  return n;
+}
+// Blacks out the parts of an image under the marks, in a new copy of the image used only here.
+async function rxImage(pdf, page, ob, boxes) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context;
+  // this page gets its own resource and XObject dictionaries, so other pages sharing them keep their image
+  const R = page.node.Resources().clone(ctx); const XO = R.lookup(N('XObject')).clone(ctx); R.set(N('XObject'), XO); page.node.set(N('Resources'), R);
+  const ref = XO.get(N(ob.name)); const img = ctx.lookup(ref);
+  const W = img.dict.lookup(N('Width')).asNumber(), H = img.dict.lookup(N('Height')).asNumber();
+  if (img.dict.get(N('ImageMask'))) throw new Error('stencil mask');
+  // decode with pdf.js: a one-image page, W×H points, drawn at 1 pixel per point
+  const one = await PDFDocument.create(); const cp = L.PDFObjectCopier.for(ctx, one.context).copy(ref);
+  const p1 = one.addPage([W, H]); p1.node.set(N('Resources'), one.context.obj({ XObject: { Im: cp } }));
+  const sm = img.dict.get(N('SMask')); if (sm) one.context.lookup(cp).dict.delete(N('SMask'));
+  one.context.lookup(cp).dict.delete(N('Mask'));
+  p1.node.set(N('Contents'), one.context.register(one.context.flateStream(`q ${W} 0 0 ${H} 0 0 cm /Im Do Q`)));
+  const tmp = await pdfjsLib.getDocument({ data: await one.save(), isEvalSupported: false }).promise;
+  try {
+    const pg = await tmp.getPage(1); const vp = pg.getViewport({ scale: 1 }); const c = el('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); await pg.render({ canvasContext: g, viewport: vp }).promise;
+    const inv = CEM.inv(ob.ctm); g.fillStyle = '#000';
+    for (const B of boxes) {
+      const pts = [[B[0], B[1]], [B[2], B[1]], [B[2], B[3]], [B[0], B[3]]].map(([x, y]) => CEM.ap(inv, x, y)).map(([u, v]) => [u * W, (1 - v) * H]);
+      g.beginPath(); pts.forEach(([x, y], k) => k ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.fill();
+    }
+    const jpg = await canvasBytes(c, 'image/jpeg', .92);
+    const nd = { Type: 'XObject', Subtype: 'Image', Width: W, Height: H, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' };
+    if (sm) nd.SMask = sm; // browsers write colour JPEGs, so grey images come back as RGB
+    const nref = ctx.register(ctx.stream(jpg, nd));
+    XO.set(N(ob.name), nref);
+  } finally { tmp.destroy(); }
+}
 
 /* ================= signature ================= */
 async function signatureDialog() {
