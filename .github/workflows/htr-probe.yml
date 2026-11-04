@@ -19,7 +19,7 @@ jobs:
                 'Gallicorpora', 'kraken model Catalan', 'kraken model Czech', 'kraken model Ottoman', 'kraken model Persian', 'kraken model Syriac',
                 'kraken model secretary hand', 'kraken model Fraktur', 'kraken model letters correspondence', 'kraken model Brazil']
           for q in qs:
-              try: r = json.load(urllib.request.urlopen('https://zenodo.org/api/records?size=40&q=' + urllib.parse.quote(q)))
+              try: r = json.load(urllib.request.urlopen('https://zenodo.org/api/records?size=25&q=' + urllib.parse.quote(q)))
               except Exception as e: print('ERR', q, e); continue
               for h in r['hits']['hits']:
                   fs = [f for f in h.get('files', []) if f['key'].lower().endswith(('.mlmodel', '.safetensors'))]
@@ -27,5 +27,17 @@ jobs:
                   m = h['metadata']; seen[h['id']] = 1
                   lic = (m.get('license') or {}).get('id', '') if isinstance(m.get('license'), dict) else m.get('license')
                   print(f"{h['id']} | {m['title'][:110]} | {lic} | {m.get('publication_date','')} | " + ', '.join(f"{f['key']} {f['size']//1000000}MB" for f in fs[:4]))
+          # kraken's own model repository is the Zenodo community ocr_models
+          for page in range(1, 30):
+              try: r = json.load(urllib.request.urlopen(f'https://zenodo.org/api/communities/ocr_models/records?size=25&page={page}'))
+              except Exception as e: print('ERR community', page, e); break
+              hits = r['hits']['hits']
+              if not hits: break
+              for h in hits:
+                  fs = [f for f in h.get('files', []) if f['key'].lower().endswith(('.mlmodel', '.safetensors'))]
+                  if h['id'] in seen: continue
+                  m = h['metadata']; seen[h['id']] = 1
+                  lic = (m.get('license') or {}).get('id', '') if isinstance(m.get('license'), dict) else m.get('license')
+                  print(f"{h['id']} | {m['title'][:110]} | {lic} | {m.get('publication_date','')} | " + ', '.join(f"{f['key']} {f['size']//1000000}MB" for f in fs[:4]) + ' | ' + ','.join(k.get('id','') if isinstance(k, dict) else str(k) for k in (m.get('languages') or [])))
           print(len(seen), 'records')
           PY
