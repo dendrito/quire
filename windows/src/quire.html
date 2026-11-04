@@ -1332,7 +1332,9 @@ const ACTS = {
 };
 function renderRibbon() {
   $('#rtabs').innerHTML = Object.entries(RIB).map(([k, r]) => `<button class="rtab${S.ribbon === k ? ' on' : ''}" data-rib="${k}">${r.label}</button>`).join('');
-  $('#rbtns').innerHTML = RIB[S.ribbon].items.map(it => {
+  // Skip buttons whose feature isn't in this edition (Lite leaves Pro's out), and the separators that would double up.
+  const has = it => it === '|' || (it[0] === '@' ? !!ACTS[it.slice(1)] : !!TOOL[it]);
+  $('#rbtns').innerHTML = RIB[S.ribbon].items.filter(has).filter((it, i, a) => it !== '|' || (i > 0 && i < a.length - 1 && a[i - 1] !== '|')).map(it => {
     if (it === '|') return '<span class="sep"></span>';
     const lb = k => S.labels ? `<span class="rl">${esc(RLBL[k] || (ACTS[k] ? ACTS[k][0] : TOOL[k].label))}</span>` : '';
     if (it[0] === '@') { const a = ACTS[it.slice(1)]; return `<button class="rb${S.task && it.slice(1) === taskOf(S.task) ? ' on' : ''}" data-act="${it.slice(1)}" data-tip="${a[0]}" aria-label="${a[0]}">${svg(a[1])}${lb(it.slice(1))}</button>`; }
@@ -1347,7 +1349,7 @@ $('#toolbar').addEventListener('click', e => {
   if (b.dataset.rib) { S.ribbon = b.dataset.rib; renderRibbon(); return; }
   if (!cur() && !(b.dataset.act && NODOC_ACTS.has(b.dataset.act))) { toast('Open a PDF first'); return; }
   if (b.dataset.tool) setTool(b.dataset.tool);
-  else if (b.dataset.act) ACTS[b.dataset.act][2]();
+  else if (b.dataset.act) ACTS[b.dataset.act]?.[2]();
 });
 let thumbJob = 0;
 async function renderThumbs() {
@@ -4607,22 +4609,12 @@ function hexRgb(h) { const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.ex
 document.addEventListener('click', e => { const b = e.target.closest('[data-bgc]'); if (b) { const i = $('#bgC'); if (i) i.value = b.dataset.bgc; } });
 document.addEventListener('input', e => { if (e.target.id === 'bgO') { const v = $('#bgOv'); if (v) v.textContent = e.target.value + '%'; } });
 
-/* ================= round 4 ideas: find personal data, my details, reading mode, spoken skim ================= */
-Object.assign(IC, {
-  pii: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><rect x="14" y="10" width="8" height="5" rx="1" fill="currentColor"/>',
-  reader: '<path d="M3 5c3-1 6-1 9 1 3-2 6-2 9-1v14c-3-1-6-1-9 1-3-2-6-2-9-1z"/><path d="M12 6v14"/>',
-  mydetails: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 16.5c.6-1.7 1.9-2.6 3.5-2.6s2.9.9 3.5 2.6M15 10h3.5M15 13h3.5"/>'
-});
-Object.assign(RLBL, { pii: 'Find personal data', reader: 'Reading mode', mydetails: 'My details' });
-Object.assign(ACTS, {
-  pii: ['Find personal data to redact', 'pii', () => openTask('pii')],
-  reader: ['Reading mode', 'reader', () => openReader()],
-  mydetails: ['My details for filling forms', 'mydetails', () => myDetailsDialog()]
-});
-Object.assign(CMD_KW, { pii: 'redact personal data pii gdpr lgpd email phone cpf cnpj iban card names find sensitive', reader: 'reading mode reflow book night sepia font size immersive', mydetails: 'autofill profile my details name address fill forms automatically' });
+/* ================= find personal data (with page text positions) ================= */
+Object.assign(IC, { pii: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><rect x="14" y="10" width="8" height="5" rx="1" fill="currentColor"/>' });
+Object.assign(RLBL, { pii: 'Find personal data' });
+Object.assign(ACTS, { pii: ['Find personal data to redact', 'pii', () => openTask('pii')] });
+Object.assign(CMD_KW, { pii: 'redact personal data pii gdpr lgpd email phone cpf cnpj iban card names find sensitive' });
 RIB.tools.items = RIB.tools.items.flatMap(x => x === '@redactApply' ? ['@pii', '@redactApply'] : [x]);
-RIB.view.items.splice(0, 0, '@reader', '|');
-RIB.forms.items = RIB.forms.items.flatMap(x => x === '@fill' ? ['@fill', '@mydetails'] : [x]);
 
 /* ---- page text with positions: one string per page, and boxes for any character range ---- */
 async function pageSpan(d, i) {
@@ -4702,6 +4694,13 @@ TASKS.pii = function (P, d) {
   const mk = $('#piMark', P); if (mk) mk.onclick = () => { const on = H.filter(h => h.on); if (!on.length) return; snapshot(); let n = 0; for (const h of on) for (const b of h.boxes) { d.annots[h.page].push({ type: 'redact', x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }); n++; } redrawAll(); PIIS.hits = null; TASKS.pii(P, d); toast(`Marked ${plural(n, 'area')} for redaction. Tools → Apply redactions removes them for good.`); };
 };
 
+/* ================= my details for filling forms ================= */
+Object.assign(IC, { mydetails: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 16.5c.6-1.7 1.9-2.6 3.5-2.6s2.9.9 3.5 2.6M15 10h3.5M15 13h3.5"/>' });
+Object.assign(RLBL, { mydetails: 'My details' });
+Object.assign(ACTS, { mydetails: ['My details for filling forms', 'mydetails', () => myDetailsDialog()] });
+Object.assign(CMD_KW, { mydetails: 'autofill profile my details name address fill forms automatically' });
+RIB.forms.items = RIB.forms.items.flatMap(x => x === '@fill' ? ['@fill', '@mydetails'] : [x]);
+
 /* ---- my details: a profile for filling forms ---- */
 const MYD = [
   ['name', 'Full name', /^(full)?name$|nomecompleto|^nome$|^yourname|applicantname|fullname|nomedo|^name\d*$/],
@@ -4742,6 +4741,20 @@ function myDetailsFor(F, current) {
   }
   return out;
 }
+
+{ const _tf = TASKS.form; TASKS.form = async function (P, d) {
+  await _tf(P, d); if (!P._ff || S.task !== 'form') return; const { F, read, write } = P._ff; const row = $('#ffGo', P)?.parentElement; if (!row) return;
+  const has = Object.keys(myDetails()).length; const b = el('button', 'btn sm', has ? `${svg('mydetails')}Fill with my details` : `${svg('mydetails')}Set up my details`);
+  b.onclick = () => { if (!has) { myDetailsDialog(); return; } const vals = myDetailsFor(F, read()); const n = write(vals); toast(n ? `Filled ${plural(n, 'field')} from your details. Check them, then Save values.` : 'No empty fields match your details.'); };
+  row.after(el('div', 'row', '')); row.nextElementSibling.append(b);
+}; }
+
+/* ================= reading mode, spoken skim ================= */
+Object.assign(IC, { reader: '<path d="M3 5c3-1 6-1 9 1 3-2 6-2 9-1v14c-3-1-6-1-9 1-3-2-6-2-9-1z"/><path d="M12 6v14"/>' });
+Object.assign(RLBL, { reader: 'Reading mode' });
+Object.assign(ACTS, { reader: ['Reading mode', 'reader', () => openReader()] });
+Object.assign(CMD_KW, { reader: 'reading mode reflow book night sepia font size immersive' });
+RIB.view.items.splice(0, 0, '@reader', '|');
 
 /* ---- reading mode ---- */
 // Text reflowed into one column: paragraphs and headings rebuilt from line positions, hyphenation undone.
@@ -4822,12 +4835,8 @@ async function raSkim(from) {
   await one(from);
 }
 { const _tr = TASKS.read; TASKS.read = function (P, d) { _tr(P, d); const row = $('#raEnd', P); if (!row) return; const b = el('button', 'btn', 'Skim'); b.title = 'Read headings and the first sentence of each paragraph, to the end'; b.onclick = () => raSkim(d.cur); row.after(b); }; }
-{ const _tf = TASKS.form; TASKS.form = async function (P, d) {
-  await _tf(P, d); if (!P._ff || S.task !== 'form') return; const { F, read, write } = P._ff; const row = $('#ffGo', P)?.parentElement; if (!row) return;
-  const has = Object.keys(myDetails()).length; const b = el('button', 'btn sm', has ? `${svg('mydetails')}Fill with my details` : `${svg('mydetails')}Set up my details`);
-  b.onclick = () => { if (!has) { myDetailsDialog(); return; } const vals = myDetailsFor(F, read()); const n = write(vals); toast(n ? `Filled ${plural(n, 'field')} from your details. Check them, then Save values.` : 'No empty fields match your details.'); };
-  row.after(el('div', 'row', '')); row.nextElementSibling.append(b);
-}; }
+
+/* ================= version history ================= */
 
 /* ---- version history: a copy of the file each time it's opened or saved, kept in this browser ---- */
 Object.assign(IC, { versions: '<path d="M12 7v5l3 2"/><path d="M3.5 12a8.5 8.5 0 102.6-6.1"/><path d="M3 4v4h4"/>' });
@@ -4862,6 +4871,8 @@ TASKS.versions = async function (P, d) {
     snapshot(); d.bytes = new Uint8Array(v.bytes); d.annots = d.annots.map(() => []); d.dirty = true; busy('Restoring…'); try { await reloadDoc(d); } finally { unbusy(); } toast('Version restored'); });
   $$('[data-vd]', P).forEach(b => b.onclick = async () => { await verTx('readwrite', st => st.delete(L[+b.dataset.vd].id)); TASKS.versions(P, d); });
 };
+
+/* ================= batch actions ================= */
 
 /* ---- batch actions: run a chain of steps on many files ---- */
 // Like PDF-XChange's Actions: pick files or a folder, tick steps, save the chain as a preset, run.
@@ -4952,6 +4963,8 @@ async function runBatch(P, d) {
   } catch (e) { console.error(e); toast('Batch failed: ' + (e.message || e)); } finally { unbusy(); if (S.task === 'batch') TASKS.batch(P, d); }
 }
 
+/* ================= scan clean-up and QR codes ================= */
+
 /* ---- scan clean-up: straighten, even out lighting, white paper, remove dark edges and specks ---- */
 Object.assign(IC, {
   cleanscan: '<rect x="5" y="3" width="14" height="18" rx="1.5" transform="rotate(-6 12 12)"/><path d="M9 9h6M9 13h6M9 17h3"/><path d="M19.5 3.5l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/>',
@@ -4961,7 +4974,7 @@ Object.assign(RLBL, { cleanscan: 'Clean scans', qr: 'QR codes' });
 Object.assign(ACTS, { cleanscan: ['Clean up scanned pages', 'cleanscan', () => cleanScanDialog()], qr: ['QR codes and barcodes: read or add', 'qr', () => openTask('qr')] });
 Object.assign(CMD_KW, { cleanscan: 'deskew straighten scan shadow background whiten borders despeckle clean up photo of page', qr: 'qr code barcode read scan add stamp generate' });
 RIB.pages.items = RIB.pages.items.flatMap(x => x === '@smartfit' ? ['@smartfit', '@cleanscan'] : [x]);
-RIB.tools.items = RIB.tools.items.flatMap(x => x === '@pii' ? ['@pii', '@qr'] : [x]);
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@redactApply' ? ['@qr', '@redactApply'] : [x]);
 
 // Background (paper) brightness estimated on a coarse grid with the brightest pixels of each cell, then smoothed;
 // dividing by it removes shadows, yellowing and uneven light.
@@ -5096,31 +5109,11 @@ TASKS.qr = function (P, d) {
   };
 };
 
-/* ================= snapshot, loupe, split view, space audit, placeholders, initials, email ================= */
-Object.assign(IC, {
-  snap: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/>',
-  loupe: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20M8 10.5h5M10.5 8v5"/>',
-  splitv: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M12 4v16M6 8h3M6 11h3M15 8h3M15 11h3"/>',
-  audit: '<path d="M4 20V10M9 20V4M14 20v-7M19 20v-11"/>',
-  email: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m4 7 8 6 8-6"/>',
-  initials: '<path d="M5 18V7M5 7l3 0M5 18h3M11 18l3-11 3 11M12 14h4"/><path d="M3 21h18"/>',
-  fsig: '<rect x="3" y="7" width="18" height="11" rx="1.5" stroke-dasharray="2.5 2"/><path d="M6 15c1.5-3 3-3 3.5-1s1.5 2 2.5 0 2-2 3 0M6 4l2 2M4 6l2-2"/>'
-});
-Object.assign(RLBL, { snap: 'Snapshot', loupe: 'Loupe', splitv: 'Split', audit: 'Space', email: 'Email', initials: 'Initials', fsig: 'Sign here' });
-Object.assign(ACTS, {
-  snap: ['Snapshot: copy an area as a picture', 'snap', () => snapToggle()],
-  loupe: ['Loupe: magnify under the pointer', 'loupe', () => loupeToggle()],
-  splitv: ['Split view: see two places at once', 'splitv', () => splitToggle()],
-  audit: ['Audit space usage', 'audit', () => auditDialog()],
-  email: ['Send by email', 'email', () => emailDialog()],
-  initials: ['Initials on every page', 'initials', () => initialsDialog()]
-});
-TOOLS.push({ id: 'fsig', label: 'Signature placeholder', key: '', hint: 'Drag where someone should sign or initial. It becomes an empty signature field that Acrobat, PDF-XChange and Quire’s Digital ID signing all recognise.' });
-TOOL.fsig = TOOLS[TOOLS.length - 1]; FFIELD.add('fsig'); BOX.add('fsig'); PANEL_TOOLS.add('fsig'); CLICKPLACE.fsig = [160, 40];
-RIB.view.items.push('|', '@snap', '@loupe', '@splitv');
-RIB.forms.items = RIB.forms.items.flatMap(x => x === 'fbutton' ? ['fbutton', 'fsig'] : [x]);
-RIB.comment.items = RIB.comment.items.flatMap(x => x === 'sign' ? ['sign', '@initials'] : [x]);
-RIB.tools.items = RIB.tools.items.flatMap(x => x === '@compress' ? ['@compress', '@audit'] : x === '@txt' ? ['@email', '@txt'] : [x]);
+/* ================= snapshot ================= */
+Object.assign(IC, { snap: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/>' });
+Object.assign(RLBL, { snap: 'Snapshot' });
+Object.assign(ACTS, { snap: ['Snapshot: copy an area as a picture', 'snap', () => snapToggle()] });
+RIB.view.items.push('|', '@snap');
 
 /* ---- snapshot: drag an area (or click a page) to copy it as a picture, with its text ---- */
 const SNAP = { on: false, dpi: pref.get('snapDpi', 200) };
@@ -5191,6 +5184,12 @@ async function snapTake(i, r) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+/* ================= loupe ================= */
+Object.assign(IC, { loupe: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20M8 10.5h5M10.5 8v5"/>' });
+Object.assign(RLBL, { loupe: 'Loupe' });
+Object.assign(ACTS, { loupe: ['Loupe: magnify under the pointer', 'loupe', () => loupeToggle()] });
+RIB.view.items.push('@loupe');
+
 /* ---- loupe: a floating magnifier that follows the pointer ---- */
 const LP = { box: null, mag: pref.get('loupeMag', 3), last: null, hi: null, job: null };
 function loupeToggle() {
@@ -5229,6 +5228,12 @@ function loupeDraw() {
   const cw = W * per, ch = H * per; g.drawImage(src, L.fx * sw - cw / 2, L.fy * sh - ch / 2, cw, ch, 0, 0, cv.width, cv.height);
   g.strokeStyle = 'rgba(43,92,255,.6)'; g.lineWidth = k; g.beginPath(); g.moveTo(cv.width / 2 - 8 * k, cv.height / 2); g.lineTo(cv.width / 2 + 8 * k, cv.height / 2); g.moveTo(cv.width / 2, cv.height / 2 - 8 * k); g.lineTo(cv.width / 2, cv.height / 2 + 8 * k); g.stroke();
 }
+
+/* ================= split view ================= */
+Object.assign(IC, { splitv: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M12 4v16M6 8h3M6 11h3M15 8h3M15 11h3"/>' });
+Object.assign(RLBL, { splitv: 'Split' });
+Object.assign(ACTS, { splitv: ['Split view: see two places at once', 'splitv', () => splitToggle()] });
+RIB.view.items.push('@splitv');
 
 /* ---- split view: a second, independent view of the same document ---- */
 const SPL = { on: false, dir: pref.get('splitDir', 'v'), zoom: null, io: null, pane: null, doc: null };
@@ -5269,6 +5274,12 @@ async function splitRender(d, i, w, z) {
   try { const { c } = await viewRender(d, i, z * dpr()); c.style.width = '100%'; c.style.height = '100%'; if (w.isConnected) { w.innerHTML = ''; w.append(c); } } catch {}
 }
 { const _bv = buildViewer; buildViewer = function () { const r = _bv.apply(this, arguments); if (SPL.on) { if (SPL.doc !== cur()) SPL.zoom = null; const top = SPL.pane ? SPL.pane.scrollTop : 0; splitBuild(); SPL.pane.scrollTop = top; } return r; }; }
+
+/* ================= space audit ================= */
+Object.assign(IC, { audit: '<path d="M4 20V10M9 20V4M14 20v-7M19 20v-11"/>' });
+Object.assign(RLBL, { audit: 'Space' });
+Object.assign(ACTS, { audit: ['Audit space usage', 'audit', () => auditDialog()] });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@compress' ? ['@compress', '@audit'] : [x]);
 
 /* ---- audit space usage: what the bytes in the file are spent on ---- */
 const AUD_CATS = [['Images', '#2b5cff'], ['Fonts', '#e08a00'], ['Page content', '#1f9d6b'], ['Annotations and forms', '#b04fd1'], ['Attachments', '#d93a2b'], ['Bookmarks', '#0aa3b8'], ['Tags and structure', '#7a7f2a'], ['Metadata', '#8a6d3b'], ['Thumbnails', '#c25b8a'], ['Colour profiles', '#5f6fa8'], ['Pages and document structure', '#9aa0aa'], ['Other objects', '#c7c9ce'], ['Cross-reference and file overhead', '#e1e2e5']];
@@ -5374,6 +5385,13 @@ async function auditDialog() {
   if (go === 'compress') openTask('compress'); else if (go === 'sanitize') sanitizeDialog(); else if (go && go.startsWith('pg')) gotoPage(+go.slice(2), true);
 }
 
+/* ================= signature placeholders ================= */
+Object.assign(IC, { fsig: '<rect x="3" y="7" width="18" height="11" rx="1.5" stroke-dasharray="2.5 2"/><path d="M6 15c1.5-3 3-3 3.5-1s1.5 2 2.5 0 2-2 3 0M6 4l2 2M4 6l2-2"/>' });
+Object.assign(RLBL, { fsig: 'Sign here' });
+TOOLS.push({ id: 'fsig', label: 'Signature placeholder', key: '', hint: 'Drag where someone should sign or initial. It becomes an empty signature field that Acrobat, PDF-XChange and Quire’s Digital ID signing all recognise.' });
+TOOL.fsig = TOOLS[TOOLS.length - 1]; FFIELD.add('fsig'); BOX.add('fsig'); PANEL_TOOLS.add('fsig'); CLICKPLACE.fsig = [160, 40];
+RIB.forms.items = RIB.forms.items.flatMap(x => x === 'fbutton' ? ['fbutton', 'fsig'] : [x]);
+
 /* ---- signature and initials placeholders: empty signature fields ---- */
 { const _ms = makeShape; makeShape = function (i, s, c) { if (S.tool !== 'fsig') return _ms(i, s, c); return Object.assign({ type: 'fsig' }, norm(toPdf(i, s), toPdf(i, c))); }; }
 { const _af = addFormField; addFormField = async function (i, a) { if (S.tool !== 'fsig') return _af(i, a); return addSigPlaceholder(i, a); }; }
@@ -5422,6 +5440,12 @@ async function sigPlaceholders(d) {
   } catch (e) { console.warn(e); }
   return out;
 }
+
+/* ================= initials ================= */
+Object.assign(IC, { initials: '<path d="M5 18V7M5 7l3 0M5 18h3M11 18l3-11 3 11M12 14h4"/><path d="M3 21h18"/>' });
+Object.assign(RLBL, { initials: 'Initials' });
+Object.assign(ACTS, { initials: ['Initials on every page', 'initials', () => initialsDialog()] });
+RIB.comment.items = RIB.comment.items.flatMap(x => x === 'sign' ? ['sign', '@initials'] : [x]);
 
 /* ---- initials on every page, and filling placeholders with your signature or initials ---- */
 S.initials = pref.get('initials', null);
@@ -5473,6 +5497,12 @@ async function initialsDialog() {
   redrawAll(); renderPanel();
   toast(`Initials added to ${n} page${n === 1 ? '' : 's'}${m ? ` and ${m} placeholder${m === 1 ? '' : 's'} filled` : ''}. Save to keep them.`, 4200);
 }
+
+/* ================= email ================= */
+Object.assign(IC, { email: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m4 7 8 6 8-6"/>' });
+Object.assign(RLBL, { email: 'Email' });
+Object.assign(ACTS, { email: ['Send by email', 'email', () => emailDialog()] });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@txt' ? ['@email', '@txt'] : [x]);
 
 /* ---- email: share the file, or save it and open a new message ---- */
 async function emailDialog() {

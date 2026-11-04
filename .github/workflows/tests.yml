@@ -2,13 +2,14 @@
 # Each test drives the real app in headless Chromium and checks the result with independent tools:
 # veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx, openpyxl and python-pptx plus LibreOffice
 # (Word, Excel, PowerPoint), and the experts' transcriptions of medieval charters (handwriting).
-# The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact.
+# The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact,
+# and the web builds of Quire Lite and Quire Pro (tools/build-editions.js) as "quire-web-editions".
 name: Tests
 on:
   workflow_dispatch:
   pull_request:
   push:
-    paths: ['models/**', 'web/**', 'mac/src/**', 'windows/src/**', 'tests/**', '.github/workflows/tests.yml']
+    paths: ['models/**', 'web/**', 'mac/src/**', 'windows/src/**', 'tests/**', 'tools/editions*', '.github/workflows/tests.yml']
 jobs:
   copies:
     name: App copies in sync
@@ -67,3 +68,8 @@ jobs:
         with:
           name: test-output
           path: tests/out/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quire-web-editions
+          path: web/dist/*.html

@@ -1,5 +1,5 @@
 # Builds the Windows installer and portable app on GitHub's Windows runners.
-# Runs on demand from the Actions tab, and on version tags.
+# Runs on demand from the Actions tab, and on version tags. Builds both editions, Quire Lite and Quire Pro.
 name: Build Windows app
 on:
   workflow_dispatch:
@@ -8,6 +8,12 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [lite, pro]
+    env:
+      QUIRE_EDITION: ${{ matrix.edition }}
     defaults:
       run:
         working-directory: windows
@@ -17,10 +23,11 @@ jobs:
         with:
           node-version: 20
       - run: npm install
-      - run: npm run dist
+      - shell: bash
+        run: node scripts/vendor.js && node scripts/edition-config.js && npx electron-builder --win --config edition-builder.json
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
-          name: Quire-PDF-Studio-windows
+          name: Quire-${{ matrix.edition }}-windows
           path: windows/dist/*.exe

@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition editions)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync, spawnSync } = require('child_process');
@@ -312,6 +312,32 @@ TESTS.htr_inquisition = async () => {
     fs.writeFileSync(out(f.replace(/pdf$/, 'htr.txt')), lines.join('\n'));
     const cer = lev(G, T) / T.length * 100;
     check(`${f}: character error rate at most ${INQ_MAX}%`, cer <= INQ_MAX, `${cer.toFixed(1)}% in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  }
+};
+
+// --- editions: Lite and Pro are built from the one source; each loads cleanly, shows only its own features, and every
+// ribbon tab and button works with a document open
+TESTS.editions = async () => {
+  execFileSync('node', [path.join(__dirname, '..', 'tools', 'build-editions.js'), '--check']);
+  const PRO_ONLY = ['pii', 'reader', 'snap', 'loupe', 'splitv', 'audit', 'email'];
+  for (const ed of ['lite', 'pro']) {
+    const p = await H.open(path.join(__dirname, '..', 'web', 'dist', `quire-${ed}.html`));
+    const r = await p.evaluate(async () => {
+      const pdf = await PDFDocument.create(); const f = await pdf.embedFont(StandardFonts.Helvetica);
+      for (let i = 0; i < 3; i++) pdf.addPage([595, 842]).drawText('Edition check page ' + (i + 1), { x: 72, y: 760, size: 18, font: f });
+      await openBytes(await pdf.save(), 'editions.pdf');
+      const seen = new Set(), bad = [];
+      for (const k of Object.keys(RIB)) { document.querySelector(`[data-rib="${k}"]`).click(); await new Promise(r => setTimeout(r, 30));
+        for (const b of document.querySelectorAll('#rbtns [data-act], #rbtns [data-tool]')) { seen.add(b.dataset.act || b.dataset.tool); if (!b.querySelector('svg')) bad.push(b.dataset.act || b.dataset.tool); } }
+      return { ed: window.QUIRE_EDITION, seen: [...seen], bad, acts: Object.keys(ACTS) };
+    });
+    check(`${ed}: QUIRE_EDITION is set`, r.ed === ed, r.ed);
+    const has = PRO_ONLY.filter(k => r.seen.includes(k) || r.acts.includes(k));
+    check(`${ed}: ${ed === 'lite' ? 'no' : 'all'} Pro-only buttons`, ed === 'lite' ? has.length === 0 : has.length === PRO_ONLY.length, has.join(' ') || 'none');
+    check(`${ed}: core Lite buttons present`, ['batch', 'cleanscan', 'versions', 'qr', 'initials', 'fsig', 'mydetails'].every(k => r.seen.includes(k)), r.seen.length + ' buttons');
+    check(`${ed}: every button has an icon`, !r.bad.length, r.bad.join(' '));
+    check(`${ed}: no errors while loading and switching tabs`, !p.errs.length, p.errs.slice(0, 3).join(' | '));
+    await p.context().close();
   }
 };
 

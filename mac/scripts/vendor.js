@@ -57,6 +57,13 @@ fs.writeFileSync(path.join(vendor, 'fonts', 'fonts.css'), fontCss);
 
 // Build app/index.html
 let html = fs.readFileSync(path.join(root, 'src', 'quire.html'), 'utf8');
+// QUIRE_EDITION=lite or pro builds that edition (see tools/editions.json); unset keeps every feature, as before.
+const EDITION = process.env.QUIRE_EDITION;
+if (EDITION) {
+  const lib = path.join(root, '..', 'tools', 'editions-lib.js');
+  if (!fs.existsSync(lib)) { console.error('QUIRE_EDITION needs tools/editions-lib.js from the full Quire folder.'); process.exit(1); }
+  html = require(lib).build(html, EDITION);
+}
 const swap = (from, to) => {
   if (!html.includes(from)) { console.error('Could not find in src/quire.html: ' + from); process.exit(1); }
   html = html.split(from).join(to);
@@ -74,4 +81,4 @@ const head = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
   + '<script>window.QUIRE_VENDOR = "vendor/"; window.QUIRE_OCR_LANGS = ' + JSON.stringify(OCR_LANGS) + ';</script>'
   + '</head><body>';
 fs.writeFileSync(path.join(appDir, 'index.html'), head + html + '</body></html>');
-console.log(`Bundled ${copies.length} files into app/vendor and built app/index.html. The app runs fully offline.`);
+console.log(`${EDITION ? 'Quire ' + EDITION[0].toUpperCase() + EDITION.slice(1) + ': ' : ''}Bundled ${copies.length} files into app/vendor and built app/index.html. The app runs fully offline.`);

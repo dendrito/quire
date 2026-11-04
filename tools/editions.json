@@ -1,0 +1,12 @@
+{
+  "_about": "Which edition each section of web/quire-pdf-studio.html belongs to. A section is the code from one /* ===== name ===== */ marker to the next; it is matched by the start of its name. Sections not listed are in both editions. Pro is Lite plus the sections marked pro.",
+  "pro": [
+    "find personal data",
+    "reading mode",
+    "snapshot",
+    "loupe",
+    "split view",
+    "space audit",
+    "email"
+  ]
+}

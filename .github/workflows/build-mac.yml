@@ -1,17 +1,24 @@
 # Builds the macOS app (.dmg for Apple silicon and Intel) on GitHub's macOS runners, so no Mac is needed to build it.
 # Runs on demand from the Actions tab, on version tags, and when the Mac app or the web app changes on this branch.
 # The app is not signed with an Apple Developer ID: the first time, open it with right-click > Open.
+# Builds both editions, Quire Lite and Quire Pro (see tools/editions.json), which install side by side.
 name: Build macOS app
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
-    branches: ['claude/project-thread-vzqdhg']
-    paths: ['mac/**', 'web/**', 'models/**', '.github/workflows/build-mac.yml']
+    branches: ['claude/project-thread-vzqdhg', 'claude/project-thread-oh7c7y']
+    paths: ['mac/**', 'web/**', 'models/**', 'tools/editions*', '.github/workflows/build-mac.yml']
 jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [lite, pro]
+    env:
+      QUIRE_EDITION: ${{ matrix.edition }}
     defaults:
       run:
         working-directory: mac
@@ -28,15 +35,15 @@ jobs:
       - name: Stop Spotlight indexing
         run: sudo mdutil -a -i off || true
       - name: Build for Apple silicon
-        run: node scripts/vendor.js && npx electron-builder --mac dmg --arm64
+        run: node scripts/vendor.js && node scripts/edition-config.js && npx electron-builder --mac dmg --arm64 --config edition-builder.json
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - name: Build for Intel
-        run: npx electron-builder --mac dmg --x64
+        run: npx electron-builder --mac dmg --x64 --config edition-builder.json
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
-          name: Quire-PDF-Studio-mac
+          name: Quire-${{ matrix.edition }}-mac
           path: mac/dist/*.dmg
           if-no-files-found: error
