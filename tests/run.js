@@ -39,6 +39,36 @@ TESTS.signatures = async () => {
   check('both signatures valid and intact', r.ok.length === 2 && r.ok.every(Boolean), JSON.stringify(r.ok));
   check('signer name read back', r.cn.every(c => c === 'Test Signer'), JSON.stringify(r.cn));
   check('a changed byte is detected', r.tampered.length && r.tampered.every(x => !x), JSON.stringify(r.tampered));
+
+  // A certificate as a commercial CA issues it (root -> intermediate -> signer, in a .p12 with its chain) and an RFC 3161
+  // timestamp, both checked by pyHanko, an independent validator: chain to a trusted root, integrity, timestamp, and
+  // that the second signature's incremental update did not change what the first one signed.
+  const pki = out('pki'); execFileSync('python3', [path.join(__dirname, 'fixtures', 'pki.py'), 'make', pki]);
+  H.tsa = req => execFileSync('python3', [path.join(__dirname, 'fixtures', 'pki.py'), 'tsa', pki], { input: req });
+  const file = out('signed-ca.pdf');
+  fs.writeFileSync(file, await b64(p, async p12 => {
+    const pdf = await PDFDocument.create(); const f = await pdf.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < 2; i++) pdf.addPage([595, 842]).drawText('Contract page ' + (i + 1), { x: 72, y: 760, size: 18, font: f });
+    const d = await openBytes(await pdf.save(), 'contract-ca.pdf'); const id = await sigOpenId(u64(p12), 'pass1234');
+    const s1 = await sigSign(d, id, { kind: 'corner', page: 0, rect: sigCorner(d, 0, 'bottom-right') }, { reason: 'I approve', tsa: 'https://tsa.quire.test/' });
+    const d2 = await openBytes(s1, 'contract-ca-1.pdf'); return sigSign(d2, id, { kind: 'corner', page: 1, rect: sigCorner(d2, 1, 'top-left') }, { reason: 'Second' });
+  }, fs.readFileSync(path.join(pki, 'signer.p12')).toString('base64')));
+  const own = await p.evaluate(async b => (await sigList(u64(b))).map(s => ({ ok: s.ok, ts: s.timestamp ? s.timestamp.ok : null, tsa: s.timestamp && s.timestamp.tsa })), fs.readFileSync(file).toString('base64'));
+  check('Quire reads its own timestamp back as valid', own[0].ts === true && own[1].ts === null && own.every(s => s.ok), JSON.stringify(own));
+  const V = JSON.parse(execFileSync('python3', [path.join(__dirname, 'fixtures', 'pki.py'), 'validate', pki, file]).toString());
+  check('pyHanko: both signatures intact, valid and trusted through the CA chain', V.length === 2 && V.every(v => v.intact && v.valid && v.trusted), JSON.stringify(V.map(v => v.bottom_line)));
+  check('pyHanko: chain is signer -> intermediate -> root', V[0].chain.join(' > ') === 'Quire Test Root CA > Quire Test Signing CA > Maria Teste', V[0].chain.join(' > '));
+  check('pyHanko: first signature carries a valid, trusted timestamp', V[0].timestamp && V[0].timestamp.intact && V[0].timestamp.valid && V[0].timestamp.trusted, JSON.stringify(V[0].timestamp));
+  // On GitHub (REAL_TSA set by the workflow) the same is done with DigiCert's public timestamp server, the default in the app
+  if (process.env.REAL_TSA) {
+    H.tsa = req => execFileSync('curl', ['-s', '-m', '30', '-H', 'Content-Type: application/timestamp-query', '--data-binary', '@-', process.env.REAL_TSA], { input: req });
+    const f2 = out('signed-digicert.pdf');
+    fs.writeFileSync(f2, await b64(p, async p12 => { const pdf = await PDFDocument.create(); pdf.addPage([595, 842]); const d = await openBytes(await pdf.save(), 'ts.pdf');
+      return sigSign(d, await sigOpenId(u64(p12), 'pass1234'), { kind: 'corner', page: 0, rect: sigCorner(d, 0, 'bottom-right') }, { tsa: 'https://tsa.quire.test/' }); }, fs.readFileSync(path.join(pki, 'signer.p12')).toString('base64')));
+    const T = JSON.parse(execFileSync('python3', [path.join(__dirname, 'fixtures', 'pki.py'), 'validate', pki, f2]).toString())[0];
+    check(`pyHanko: timestamp from ${process.env.REAL_TSA} intact and valid`, T.timestamp && T.timestamp.intact && T.timestamp.valid, JSON.stringify(T.timestamp));
+  }
+  check('pyHanko: the second signature only added to the file (first one still covers its revision, no forbidden changes)', V[0].coverage === 'ENTIRE_REVISION' && V[1].coverage === 'ENTIRE_FILE' && /FORM_FILLING|ANNOTATIONS|LTA_UPDATES|NONE/.test(V[0].modification_level), `${V[0].coverage}, ${V[0].modification_level}`);
 };
 
 // --- PDF/A-2b: a file whose fonts are only named; fonts are embedded, nothing is turned into a picture

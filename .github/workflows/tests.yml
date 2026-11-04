@@ -41,7 +41,7 @@ jobs:
       - name: System tools (poppler, Liberation fonts for the test scans, LibreOffice to open the PowerPoint files)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils fonts-liberation libreoffice-impress
       - name: Python packages
-        run: pip install -q reportlab pillow numpy python-docx openpyxl python-pptx
+        run: pip install -q reportlab pillow numpy python-docx openpyxl python-pptx pyhanko==0.25.1
       - name: veraPDF
         run: |
           mvn -q -f verapdf/pom.xml dependency:copy-dependencies -DoutputDirectory=lib
@@ -61,6 +61,7 @@ jobs:
         run: node run.js
         env:
           VERAPDF: ${{ github.workspace }}/tests/verapdf/vera
+          REAL_TSA: http://timestamp.digicert.com
       - uses: actions/upload-artifact@v4
         if: always()
         with:

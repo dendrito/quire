@@ -5,5 +5,7 @@ contextBridge.exposeInMainWorld('quireDesktop', {
   ready: () => ipcRenderer.send('renderer-ready'),
   askCamera: () => ipcRenderer.invoke('ask-camera'),
   // Send to Zotero: zotero(items in Zotero's item JSON) -> { ok, error }
+  // Trusted timestamp: timestamp(url, request bytes) -> { bytes } or { error }
+  timestamp: (url, req) => ipcRenderer.invoke('timestamp', url, req),
   zotero: items => ipcRenderer.invoke('zotero-save', items)
 });

@@ -43,6 +43,17 @@ ipcMain.handle('ask-camera', async () => {
 
 // Send to Zotero: pass items to the Zotero app on this computer through its connector server (the one the Zotero browser
 // button uses). It runs here, in the main process, so the renderer's offline block stays as it is and Zotero sees a local client.
+// Trusted timestamp for a digital signature (RFC 3161): sends the 32-byte hash of the signature to the timestamp server the
+// user chose and returns its signed answer. Runs here so the renderer's offline block stays as it is.
+ipcMain.handle('timestamp', async (_event, url, req) => {
+  try {
+    if (!/^https?:\/\/[^\s/]+/i.test(String(url)) || !(req instanceof Uint8Array) || req.length > 512) return { error: 'Not a timestamp request.' };
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/timestamp-query' }, body: req, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { error: `The timestamp server answered ${r.status}.` };
+    return { bytes: new Uint8Array(await r.arrayBuffer()) };
+  } catch (e) { return { error: 'The timestamp server could not be reached: ' + String(e && e.message || e) }; }
+});
+
 ipcMain.handle('zotero-save', async (_event, items) => {
   const base = 'http://127.0.0.1:23119/connector/';
   const H = { 'Content-Type': 'application/json', 'X-Zotero-Connector-API-Version': '3' };

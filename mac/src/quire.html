@@ -8400,6 +8400,8 @@ async function sigDialog() {
       <div class="field"><label for="sgLoc">Location</label><input id="sgLoc" class="inp" value="${esc(last.location || '')}"></div></div>
     <label class="chk"><input type="checkbox" id="sgImg" ${S.sig ? 'checked' : 'disabled'}> Show my handwritten signature in the box${S.sig ? '' : ' (make one first with Markup → Sign)'}</label>
     <label class="chk"><input type="checkbox" id="sgLock"> Lock the document after signing (certify: no further changes allowed)</label>
+    <label class="chk"><input type="checkbox" id="sgTs" ${last.tsa ? 'checked' : ''}> Add a trusted timestamp, so the signing time is proven and the signature stays valid after the certificate expires</label>
+    <div class="field" id="sgTsF" ${last.tsa ? '' : 'hidden'}><label for="sgTsU">Timestamp server</label><input id="sgTsU" class="inp" value="${esc(last.tsaUrl || SIG_TSA)}"><p class="hint" style="margin:0">Only a fingerprint of the signature is sent, never the document. The default is DigiCert's free server, which Acrobat trusts.</p></div>
     <p class="hint" style="margin:0">Unsaved changes and markup are written into the file first. The signed file is saved straight away; any later change in any app shows as “changed after signing”.</p>`;
   const idSel = $('#sgId', body);
   const sync = () => { $('#sgNew', body).hidden = idSel.value !== 'new'; $('label[for=sgPw]', body).textContent = idSel.value === 'new' ? 'Choose a password to protect the new ID' : 'Password of the digital ID'; };
@@ -8412,10 +8414,11 @@ async function sigDialog() {
     return true;
   };
   let file = null;
+  { const ts = $('#sgTs', body); if (ts) ts.onchange = () => { $('#sgTsF', body).hidden = !ts.checked; }; }
   const r = await modal({ title: 'Sign with a digital ID', body, actions: [{ label: 'Cancel', value: null }, { label: 'Sign and save', primary: true, value: 'ok' }] });
   if (!r || !(await okBtn())) return;
   const pw = $('#sgPw', body).value; const where = $('#sgWhere', body).value;
-  const opts = { reason: $('#sgWhy', body).value.trim(), location: $('#sgLoc', body).value.trim(), image: $('#sgImg', body).checked ? S.sig : null, certify: $('#sgLock', body).checked };
+  const opts = { reason: $('#sgWhy', body).value.trim(), location: $('#sgLoc', body).value.trim(), image: $('#sgImg', body).checked ? S.sig : null, certify: $('#sgLock', body).checked, tsa: $('#sgTs', body).checked ? ($('#sgTsU', body).value.trim() || SIG_TSA) : '' };
   let id, entry;
   try {
     busy('Opening your digital ID…');
@@ -8435,7 +8438,7 @@ async function sigDialog() {
     } else {
       entry = ids[+idSel.value]; id = await sigOpenId(u64(entry.p12), pw);
     }
-    pref.set('sigLast', { id: entry.fp, reason: opts.reason, location: opts.location });
+    pref.set('sigLast', { id: entry.fp, reason: opts.reason, location: opts.location, tsa: !!opts.tsa, tsaUrl: opts.tsa || last.tsaUrl || '' });
     let place;
     if (where[0] === 'p') place = places[+where.slice(1)];
     else if (where === 'none') place = { kind: 'none', page: d.cur, rect: [0, 0, 0, 0] };
@@ -8565,10 +8568,43 @@ async function sigSign(d, id, place, opts = {}) {
   const asn = p7.toAsn1(); const tbs = id.cert.tbsCertificate || f.pki.getTBSCertificate(id.cert);
   const iss = tbs.value[tbs.value[0].tagClass === f.asn1.Class.CONTEXT_SPECIFIC ? 3 : 2];
   for (const si of asn.value[1].value[0].value.slice(-1)[0].value) si.value[1].value[0] = iss;
+  if (opts.tsa) { const si = asn.value[1].value[0].value.slice(-1)[0].value[0]; await sigAddTimestamp(f, si, opts.tsa); }
   const der = f.asn1.toDer(asn).getBytes(); if (der.length > SIG_LEN) throw new Error('The certificate chain is too large for the space reserved.');
   let hex = ''; for (let i = 0; i < der.length; i++) hex += der.charCodeAt(i).toString(16).padStart(2, '0');
   out.set(s2b(hex), start + 1);
   return out;
+}
+// ---- trusted timestamps (RFC 3161), as PAdES B-T and Acrobat's "timestamped signature" ----
+// The SHA-256 of the signature value goes to a timestamp server, which signs it with the time; its reply is stored in the
+// signature as an unsigned attribute (id-aa-signatureTimeStampToken). Only that hash leaves the computer. A browser page
+// can only reach servers that allow it (CORS); the desktop apps send the request from the app itself.
+const SIG_TSA = 'http://timestamp.digicert.com';
+async function sigTsaFetch(url, req) {
+  if (window.quireDesktop && window.quireDesktop.timestamp) { const r = await window.quireDesktop.timestamp(url, req); if (r && r.error) throw new Error(r.error); return new Uint8Array(r.bytes || r); }
+  let res; try { res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/timestamp-query' }, body: req }); }
+  catch (e) { throw new Error(`The timestamp server ${url} could not be reached from this page${location.protocol === 'https:' && /^http:/.test(url) ? ' (it is not https)' : ' (it may not allow requests from web pages)'}. The desktop app can reach it; or sign without a timestamp.`); }
+  if (!res.ok) throw new Error(`The timestamp server answered ${res.status}.`); return new Uint8Array(await res.arrayBuffer());
+}
+async function sigAddTimestamp(f, si, url) {
+  const A = f.asn1, C = A.Class.UNIVERSAL, T = A.Type, sigVal = si.value[5]; // version, sid, digest, [0] signed attributes, algorithm, signature
+  const imprint = new Uint8Array(await crypto.subtle.digest('SHA-256', s2b(sigVal.value)));
+  const nonce = crypto.getRandomValues(new Uint8Array(8)); nonce[0] &= 0x7f;
+  const req = A.create(C, T.SEQUENCE, true, [A.create(C, T.INTEGER, false, '\x01'),
+    A.create(C, T.SEQUENCE, true, [A.create(C, T.SEQUENCE, true, [A.create(C, T.OID, false, A.oidToDer('2.16.840.1.101.3.4.2.1').getBytes()), A.create(C, T.NULL, false, '')]), A.create(C, T.OCTETSTRING, false, b2s(imprint))]),
+    A.create(C, T.INTEGER, false, b2s(nonce)), A.create(C, T.BOOLEAN, false, '\xff')]);
+  const resp = A.fromDer(b2s(await sigTsaFetch(url, s2b(A.toDer(req).getBytes()))), { strict: false, parseAllBytes: false });
+  const st = resp.value[0].value[0].value.charCodeAt(resp.value[0].value[0].value.length - 1);
+  if (st > 1 || !resp.value[1]) throw new Error('The timestamp server refused the request (status ' + st + ').');
+  const tok = resp.value[1], tst = sigTstInfo(f, tok);
+  if (!tst || b2s(tst.imprint) !== b2s(imprint)) throw new Error('The timestamp server answered for something else; the timestamp was not added.');
+  const attr = A.create(C, T.SEQUENCE, true, [A.create(C, T.OID, false, A.oidToDer('1.2.840.113549.1.9.16.2.14').getBytes()), A.create(C, T.SET, true, [tok])]);
+  si.value.push(A.create(A.Class.CONTEXT_SPECIFIC, 1, true, [attr]));
+}
+// TSTInfo inside a timestamp token: { time, imprint, tsa }
+function sigTstInfo(f, tok) {
+  try { const sd = tok.value[1].value[0].value; const eci = sd[2]; const oct = eci.value[1].value[0]; const raw = oct.constructed ? oct.value.map(x => x.value).join('') : oct.value;
+    const t = f.asn1.fromDer(raw).value; const mi = t[2].value; const g = t[4];
+    return { time: f.asn1.generalizedTimeToDate(g.value), imprint: s2b(mi[1].value), raw: s2b(raw), sd }; } catch (e) { console.warn('tst', e); return null; }
 }
 // The last cross-reference section: where it starts, whether it is a stream, and the file's /Size.
 function sigTrailer(b) {
@@ -8644,10 +8680,25 @@ async function sigCheck(f, bytes, s) {
     r.ok = ok && r.intact;
     if (!r.intact) r.problems.push('The document has been changed since it was signed, or the signature is damaged.');
     else if (!ok) r.problems.push('The signature does not match the signer\'s certificate.');
+    const ua = si[si.length - 1]; if (ua.tagClass === f.asn1.Class.CONTEXT_SPECIFIC && ua.type === 1) for (const a of ua.value) { if (f.asn1.derToOid(a.value[0].value) !== '1.2.840.113549.1.9.16.2.14') continue;
+      const tst = sigTstInfo(f, a.value[1].value[0]); if (!tst) { r.problems.push('The timestamp could not be read.'); break; }
+      const want = new Uint8Array(await crypto.subtle.digest('SHA-256', sigVal)); const tsOk = b2s(tst.imprint) === b2s(want) && await sigTokenOk(f, tst);
+      r.timestamp = { time: tst.time, ok: tsOk, tsa: (() => { try { const c = sigTokenCert(f, tst.sd); return c ? c.subject.cn || c.subject.o : ''; } catch { return ''; } })() };
+      if (tsOk) r.time = tst.time; else r.problems.push('The timestamp does not match this signature.'); }
     const when = r.time || (s.M ? sigPdfDate(s.M) : null) || new Date();
     if (cert.notBefore > when || cert.notAfter < when) r.problems.push('The certificate was not valid when the document was signed.');
   } catch (e) { console.warn(e); r.problems.push('The signature could not be read (' + (e.message || e) + ').'); }
   return r;
+}
+function sigTokenCert(f, sd) { let k = 3; while (sd[k] && sd[k].tagClass === f.asn1.Class.CONTEXT_SPECIFIC) { if (sd[k].type === 0) { const si = sd[sd.length - 1].value[0].value; const ser = f.util.bytesToHex(si[1].value[1] ? si[1].value[1].value : ''); const all = sd[k].value.map(n => sigCertInfo(f, n)); return all.find(c => c.serial === ser) || all[0]; } k++; } return null; }
+// The timestamp server's own signature over the token
+async function sigTokenOk(f, tst) {
+  try { const sd = tst.sd, si = sd[sd.length - 1].value[0].value, cert = sigTokenCert(f, sd); if (!cert) return false;
+    const hash = SIG_HASH[f.asn1.derToOid(si[2].value[0].value)]; const attrs = si[3]; let md = null;
+    for (const a of attrs.value) if (f.asn1.derToOid(a.value[0].value) === '1.2.840.113549.1.9.4') md = s2b(a.value[1].value[0].value);
+    const dg = new Uint8Array(await crypto.subtle.digest(hash, tst.raw)); if (!md || b2s(md) !== b2s(dg)) return false;
+    const der = s2b(f.asn1.toDer(attrs).getBytes()); der[0] = 0x31;
+    return await sigVerifyRaw(cert, f.asn1.derToOid(si[4].value[0].value), hash, der, s2b(si[5].value)); } catch (e) { console.warn('tsa check', e); return false; }
 }
 async function sigVerifyRaw(cert, sigAlg, hash, data, sig) {
   const rsa = cert.keyAlg === '1.2.840.113549.1.1.1'; const pss = sigAlg === '1.2.840.113549.1.1.10';
@@ -8680,7 +8731,7 @@ TASKS.sigs = function (P, d) {
     ${L.length ? `<p class="hint" style="margin:0">${L.every(s => s.ok) ? 'Every signature is intact: the signed parts of this file have not changed.' : 'At least one signature has a problem.'}${d.dirty || d.annots.some(a => a.length) ? ' You have unsaved changes; saving will add them after the signatures.' : ''}</p>` : `<p class="muted">This PDF has no digital signatures.${SG.err ? ' (' + esc(SG.err) + ')' : ''}</p>`}
     <ol class="sig-list" style="margin:0;list-style:none;padding:0;display:flex;flex-direction:column;gap:10px">${L.map((s, k) => { const [cls, txt] = verdict(s); const c = s.cert; return `<li class="sig-${cls}" style="border:1px solid var(--line,#ddd);border-radius:10px;padding:10px;border-left:4px solid ${cls === 'ok' ? '#2e8b57' : cls === 'warn' ? '#d4a017' : '#c33'}">
       <b>${esc((c && (c.subject.cn || c.subject.o)) || s.name || 'Unknown signer')}</b> <span class="muted small">${esc(txt)}</span>${s.certify ? ' <span class="small">· certified</span>' : ''}
-      <div class="small muted">${s.time || s.M ? 'Signed ' + esc(fmt(s.time || sigPdfDate(s.M))) : ''}${s.reason ? ' · ' + esc(s.reason) : ''}${s.location ? ' · ' + esc(s.location) : ''}</div>
+      <div class="small muted">${s.time || s.M ? 'Signed ' + esc(fmt(s.time || sigPdfDate(s.M))) : ''}${s.reason ? ' · ' + esc(s.reason) : ''}${s.location ? ' · ' + esc(s.location) : ''}</div>${s.timestamp ? `<div class="small ${s.timestamp.ok ? 'muted' : ''}">${s.timestamp.ok ? '✓ Time proven by a timestamp' : '✕ Timestamp does not match'}${s.timestamp.tsa ? ' from ' + esc(s.timestamp.tsa) : ''}</div>` : ''}
       <div class="small">${s.intact ? (s.whole ? 'No changes since this signature.' : 'The file was changed after this signature (a later revision). The signed version is intact.') : ''}</div>
       ${s.problems.map(p => `<div class="small" style="color:#c33">${esc(p)}</div>`).join('')}
       <div class="row" style="margin-top:6px">${s.page !== undefined ? `<button class="btn sm" data-sgo="${k}">Page ${s.page + 1}</button>` : ''}<button class="btn sm" data-scert="${k}">Certificate</button>${!s.whole && s.intact ? `<button class="btn sm" data-sver="${k}">Open signed version</button>` : ''}</div></li>`; }).join('')}</ol>

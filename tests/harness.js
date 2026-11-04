@@ -30,6 +30,10 @@ exports.open = async () => {
     const u = r.request().url();
     if (u === 'https://quire.test/') return r.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta charset="utf-8"><style>[hidden]{display:none!important}</style></head><body>' + fs.readFileSync(APP, 'utf8') + '</body></html>' });
     for (const [re, f] of CDN) if (re.test(u)) return r.fulfill({ contentType: type(f), body: fs.readFileSync(NM + f) });
+    // a timestamp server for the signature tests (exports.tsa turns a request into a reply)
+    if (u.startsWith('https://tsa.quire.test/')) { const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'POST' };
+      if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: cors, body: '' });
+      return exports.tsa ? r.fulfill({ status: 200, headers: { ...cors, 'Content-Type': 'application/timestamp-reply' }, body: exports.tsa(r.request().postDataBuffer()) }) : r.fulfill({ status: 503, headers: cors, body: '' }); }
     if (u.startsWith('https://quire.test/v/')) {
       const rel = u.slice(21).split('?')[0]; let f = null;
       const m = rel.match(/^tessdata(-best)?\/(\w+)\.traineddata\.gz$/); if (m) f = `@tesseract.js-data/${m[2]}/${m[1] ? '4.0.0' : '4.0.0_best_int'}/${m[2]}.traineddata.gz`;
