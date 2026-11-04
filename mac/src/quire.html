@@ -1828,7 +1828,8 @@ IC.check = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
 // word lets a search for 東京 find the text, across and down.
 const OCR_CJK_RE = /^[\u3000-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF01-\uFF60]+$/;
 function ocrWords(data) {
-  const ok = w => w.text.trim() && w.confidence > 30;
+  // unsure words are kept when they look like words: on faded pages many right words score low, while low-scoring specks are punctuation-like
+  const ok = w => { const t = w.text.trim(); return t && (w.confidence > 30 || /^[(«“"'‘]?\p{L}[\p{L}\p{M}'’-]*[.,;:!?»”"')]*$/u.test(t) && [...t].length >= 2 || /^\p{N}[\p{N}.,]*$/u.test(t) && w.confidence > 15); };
   if (!data.lines || !data.lines.length) return (data.words || []).filter(ok);
   const out = [];
   for (const ln of data.lines) {

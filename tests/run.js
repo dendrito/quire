@@ -85,17 +85,18 @@ const ocr = async (f, lang = 'por', more = {}) => {
   await p.waitForSelector('#oGo'); const n0 = await p.evaluate(() => cur().bytes.length); const t0 = Date.now();
   await p.click('#oGo');
   await p.waitForFunction(n => cur().bytes.length !== n || (document.querySelector('#oMsg') && /fail|could not|No text/i.test(document.querySelector('#oMsg').textContent)), n0, { timeout: 600000, polling: 500 });
-  const file = out('ocr-' + f); fs.writeFileSync(file, await b64(p, async () => buildOutput(cur())));
+  const file = out('ocr-' + f.replace(/\//g, '-')); fs.writeFileSync(file, await b64(p, async () => buildOutput(cur())));
   return { file, secs: (Date.now() - t0) / 1000, p };
 };
-// faded.pdf reads 58% here and 49.5% on GitHub's runner (Pillow and numpy draw the page slightly differently); before the faded-page work it was 30%
-const OCR_MIN = { 'book.pdf': 95, 'faded.pdf': 45, 'table-ruled.pdf': 95, 'table-free.pdf': 95 };
+// real/herculano-faded.pdf (a page of Herculano's history of the Inquisition, faded) reads 95.6%.
+// faded.pdf reads 60.6% here and about 50% on GitHub's runner (Pillow and numpy draw the page slightly differently); before the faded-page work it was 30%
+const OCR_MIN = { 'book.pdf': 95, 'faded.pdf': 45, 'table-ruled.pdf': 95, 'table-free.pdf': 95, 'real/herculano-faded.pdf': 93 };
 TESTS.ocr = async () => {
   for (const [f, min] of Object.entries(OCR_MIN)) {
     const { file, secs } = await ocr(f); const acc = lcs(fs.readFileSync(fx(f.replace(/pdf$/, 'txt')), 'utf8'), pdftotext(file));
     check(`${f}: at least ${min}% of words read`, acc >= min, `${acc.toFixed(1)}% in ${secs.toFixed(0)} s`);
   }
-  // the most accurate (full-precision) models on the faded page: 60.6% here against 58.2% with the everyday ones
+  // the most accurate (full-precision) models on the faded page: 63.5% here against 60.6% with the everyday ones
   const { file, secs } = await ocr('faded.pdf', 'por', { best: true }); const acc = lcs(fs.readFileSync(fx('faded.txt'), 'utf8'), pdftotext(file));
   check(`faded.pdf with the most accurate models: at least ${OCR_MIN['faded.pdf'] + 2}% of words read`, acc >= OCR_MIN['faded.pdf'] + 2, `${acc.toFixed(1)}% in ${secs.toFixed(0)} s`);
 };
