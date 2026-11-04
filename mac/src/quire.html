@@ -3550,7 +3550,10 @@ function lxDropTree(ctx, ref, seen = new Set()) { // deletes an old outline tree
 async function ixLines(d, i) {
   d.ixLines = d.ixLines && d.ixLines.bytes === d.bytes ? d.ixLines : { bytes: d.bytes, p: [] };
   if (d.ixLines.p[i]) return d.ixLines.p[i];
-  const tc = await pageText(d, i); const L = []; let ln = null;
+  return d.ixLines.p[i] = ixLinesFromTC(await pageText(d, i));
+}
+function ixLinesFromTC(tc) {
+  const L = []; let ln = null;
   for (const it of tc.items) {
     if (!it.str || !it.transform) { if (it.hasEOL) ln = null; continue; }
     const t = it.transform; const size = Math.round((it.height || Math.hypot(t[2], t[3])) * 2) / 2; const x = t[4], y = t[5];
@@ -3562,14 +3565,14 @@ async function ixLines(d, i) {
     if (it.hasEOL) ln = null;
   }
   L.forEach(l => l.text = l.text.replace(/\s+/g, ' ').trim());
-  const out = L.filter(l => l.text).sort((a, b) => b.y - a.y || a.x - b.x);
-  d.ixLines.p[i] = out; return out;
+  return L.filter(l => l.text).sort((a, b) => b.y - a.y || a.x - b.x);
 }
 // Accent- and case-insensitive form used by the full-text index and index search.
 const ixFold = s => s.normalize('NFKD').replace(/[̀-֑ͯ-ׇ]/g, '').toLowerCase().replace(/[ﬁ]/g, 'fi').replace(/[ﬂ]/g, 'fl').replace(/ß/g, 'ss');
 // One string per page with hyphenated line breaks joined ("biblio-\ngraphy" → "bibliography").
-async function ixPageString(d, i) {
-  const ls = await ixLines(d, i); let s = '';
+async function ixPageString(d, i) { return ixJoinLines(await ixLines(d, i)); }
+function ixJoinLines(ls) {
+  let s = '';
   for (const l of ls) { if (/[\p{L}]-$/u.test(s) && /^[\p{Ll}]/u.test(l.text)) s = s.slice(0, -1) + l.text; else s += (s ? '\n' : '') + l.text; }
   return s;
 }
@@ -4391,6 +4394,323 @@ TASKS.toc = async function (P, d) {
 .tc-b li{grid-template-columns:1fr 58px}.tc-b li.sel{background:var(--accent-soft)}
 .tc-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}.tc-t:hover{text-decoration:underline}
 .tc-rows .inp{padding:4px 6px;font-size:12px}`; document.head.append(st); })();
+
+/* ---- library search: one index over every PDF in chosen folders (like Acrobat Catalog), ranked with BM25 ---- */
+// Folders are picked with the File System Access API (kept between visits) or, where that is blocked, a folder
+// input (kept for this session). Each PDF's text is read once on this device and stored in IndexedDB
+// ('quire-library'): page text for snippets and copying, and a term index sharded by term so a search reads only
+// the terms it needs. Terms are accent-folded light stems (Portuguese, Spanish, English), so inquisição, inquisições
+// and Inquisition meet; a query word that matches nothing falls back to words one or two edits away (OCR slips).
+// Pages are ranked with Okapi BM25 (k1 1.2, b .75). Changed files are re-indexed; removed ones are dropped.
+Object.assign(IC, { libsearch: '<circle cx="15.5" cy="15.5" r="4"/><path d="M21 21l-2.6-2.6M4 4h3v14H4zM9 4h3v8H9z"/>' });
+Object.assign(ACTS, { libsearch: ['Search all your books', 'libsearch', () => libOpen()] });
+Object.assign(RLBL, { libsearch: 'Library' });
+Object.assign(CMD_KW, { libsearch: 'search every book folder drive library catalog all pdfs find word across books citations zotero merge' });
+RIB.index.items = ['@libsearch', '|', ...RIB.index.items];
+NODOC_ACTS.add('libsearch');
+const LB = { db: null, open: false, roots: [], files: new Map(), job: null, sel: new Set(), hits: [], q: '', vocab: null, view: 'books', style: pref.get('citeStyle', 'abnt') };
+function lbDB() {
+  return LB.db || (LB.db = new Promise((res, rej) => { const r = indexedDB.open('quire-library', 1); r.onupgradeneeded = () => { const db = r.result; db.createObjectStore('roots', { keyPath: 'id' }); db.createObjectStore('books', { keyPath: 'id' }); db.createObjectStore('text', { keyPath: 'id' }); db.createObjectStore('terms'); db.createObjectStore('meta'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+}
+const lbReq = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function lbAll(store) { const db = await lbDB(); return lbReq(db.transaction(store).objectStore(store).getAll()); }
+async function lbGet(store, key) { const db = await lbDB(); return lbReq(db.transaction(store).objectStore(store).get(key)); }
+async function lbPut(store, val, key) { const db = await lbDB(); const tx = db.transaction(store, 'readwrite'); tx.objectStore(store).put(val, key); return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function lbDel(store, key) { const db = await lbDB(); const tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(key); return new Promise(res => { tx.oncomplete = res; tx.onerror = res; }); }
+// Light stemmer for pt/es/en after accent folding: plural and gender endings, then the commonest derivational suffixes.
+const LB_SUF = ['amentos', 'imentos', 'amento', 'imento', 'idades', 'idade', 'acoes', 'icoes', 'acao', 'icao', 'aciones', 'acion', 'iciones', 'icion', 'itions', 'ition', 'mente', 'ismos', 'ismo', 'istas', 'ista', 'ments', 'ment', 'ations', 'ation', 'ings', 'ing', 'edly', 'ness', 'ivas', 'ivos', 'iva', 'ivo', 'osas', 'osos', 'osa', 'oso', 'eiras', 'eiros', 'eira', 'eiro', 'ores', 'ador', 'dor', 'ies', 'oes', 'aes', 'ais', 'eis', 'les', 'res', 'zes', 'ses', 'es', 'ed', 'ly', 'as', 'os', 'a', 'o', 'e', 's'];
+function lbStem(w) {
+  if (w.length < 5 || /\d/.test(w)) return w;
+  if (w.endsWith('oes') || w.endsWith('aes')) w = w.slice(0, -3) + 'ao'; else if (w.endsWith('ies') && w.length > 5) w = w.slice(0, -3) + 'y';
+  for (const s of LB_SUF) if (w.endsWith(s) && w.length - s.length >= 4) { w = w.slice(0, -s.length); break; }
+  if (w.endsWith('cao') && w.length > 6) w = w.slice(0, -3) + 'c'; if (w.endsWith('ao') && w.length > 5) w = w.slice(0, -2);
+  return w;
+}
+const LB_WORD = /[\p{L}\p{N}]+/gu;
+const lbTerms = s => (ixFold(s).match(LB_WORD) || []).filter(w => w.length > 1 || /\d/.test(w)).map(lbStem);
+function lbLev(a, b, max) { if (Math.abs(a.length - b.length) > max) return max + 1; let prev = Array.from({ length: b.length + 1 }, (_, j) => j); for (let i = 1; i <= a.length; i++) { const cur = [i]; let best = i; for (let j = 1; j <= b.length; j++) { cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); best = Math.min(best, cur[j]); } if (best > max) return max + 1; prev = cur; } return prev[b.length]; }
+
+/* folders and files */
+async function lbLoadRoots() { LB.roots = await lbAll('roots'); return LB.roots; }
+async function lbAddFolder() {
+  if (window.showDirectoryPicker) {
+    try { const h = await window.showDirectoryPicker({ id: 'quire-library', mode: 'read' }); const id = 'r' + Date.now().toString(36); await lbPut('roots', { id, name: h.name, handle: h }); await lbLoadRoots(); return lbIndex(); }
+    catch (e) { if (e && e.name === 'AbortError') return; console.warn(e); }
+  }
+  const inp = el('input'); inp.type = 'file'; inp.multiple = true; inp.webkitdirectory = true; inp.hidden = true; document.body.append(inp);
+  inp.onchange = async () => { const files = [...inp.files].filter(f => /\.pdf$/i.test(f.name)); inp.remove(); if (!files.length) { toast('No PDFs in that folder'); return; } const top = files[0].webkitRelativePath.split('/')[0]; let r = LB.roots.find(x => !x.handle && x.name === top); if (!r) { r = { id: 'r' + Date.now().toString(36), name: top, handle: null }; await lbPut('roots', r); await lbLoadRoots(); } for (const f of files) LB.files.set(r.id + ':' + f.webkitRelativePath.split('/').slice(1).join('/'), f); lbIndex(); };
+  inp.click();
+}
+async function lbPermit(root, ask) { if (!root.handle) return false; try { const o = { mode: 'read' }; if (await root.handle.queryPermission(o) === 'granted') return true; return ask ? (await root.handle.requestPermission(o)) === 'granted' : false; } catch { return false; } }
+async function* lbWalk(dir, path = '') { for await (const [name, h] of dir.entries()) { if (name.startsWith('.')) continue; if (h.kind === 'directory') yield* lbWalk(h, path + name + '/'); else if (/\.pdf$/i.test(name)) yield { path: path + name, h }; } }
+async function lbFile(book, ask = true) {
+  const f = LB.files.get(book.id); if (f) return f;
+  const root = LB.roots.find(r => r.id === book.root); if (!root || !root.handle) throw new Error(`Pick the folder "${root ? root.name : '?'}" again (Add folder) to open its files in this session`);
+  if (!(await lbPermit(root, ask))) throw new Error(`Quire needs permission to read "${root.name}" again`);
+  let h = root.handle; const parts = book.path.split('/'); for (const p of parts.slice(0, -1)) h = await h.getDirectoryHandle(p); return (await h.getFileHandle(parts[parts.length - 1])).getFile();
+}
+
+/* indexing */
+async function lbBookMeta(pdf, name) {
+  let info = {}, x = null; try { const md = await pdf.getMetadata(); info = md.info || {}; x = md.metadata; } catch {}
+  const g = k => { try { const v = x && x.get(k); return Array.isArray(v) ? v : v ? String(v) : null; } catch { return null; } };
+  const arr = v => Array.isArray(v) ? v : v ? [v] : [];
+  let title = [].concat(g('dc:title') || [])[0] || info.Title || name.replace(/\.pdf$/i, ''); let authors = arr(g('dc:creator')); if (!authors.length && info.Author) authors = splitAuthors(info.Author);
+  if (!info.Title && !authors.length) { const m = name.replace(/\.pdf$/i, '').match(/^(.+?)\s+-\s+(.+)$/); if (m) { title = m[1]; authors = splitAuthors(m[2]); } } // "Title - Author.pdf"
+  const date = [].concat(g('dc:date') || [])[0] || ''; const isbn = g('prism:isbn') || (info.Custom && info.Custom.ISBN) || ''; const pub = [].concat(g('dc:publisher') || [])[0] || (info.Custom && info.Custom.Publisher) || '';
+  return { title: String(title).trim(), authors, year: (String(date).match(/\d{4}/) || [''])[0], publisher: pub, isbn, lang: info.Language || '' };
+}
+async function lbIndexOne(root, path, file, stats) {
+  const id = root.id + ':' + path; const old = await lbGet('books', id);
+  if (old && old.size === file.size && old.mtime === file.lastModified && old.done) { stats.seen.add(id); return false; }
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+  try {
+    const n = pdf.numPages; const pages = [], lens = []; const post = new Map(); let labels = null; try { labels = await pdf.getPageLabels(); } catch {}
+    for (let i = 0; i < n; i++) {
+      if (LB.job && LB.job.cancel) throw Object.assign(new Error('cancelled'), { cancelled: true });
+      const pg = await pdf.getPage(i + 1); const s = ixJoinLines(ixLinesFromTC(await pg.getTextContent())); pg.cleanup(); pages.push(s);
+      const T = lbTerms(s); lens.push(T.length); const tf = new Map(); for (const t of T) tf.set(t, (tf.get(t) || 0) + 1);
+      for (const [t, c] of tf) { let a = post.get(t); if (!a) post.set(t, a = []); a.push(i, c); }
+      if (i % 10 === 9) { LB.job.msg = `${path} · page ${i + 1} of ${n}`; lbProgress(); await new Promise(r => setTimeout(r)); }
+    }
+    const meta = await lbBookMeta(pdf, path.split('/').pop());
+    const num = old ? old.num : ((await lbGet('meta', 'seq')) || 0) + 1; if (!old) await lbPut('meta', num, 'seq');
+    const book = { id, num, root: root.id, path, name: path.split('/').pop(), size: file.size, mtime: file.lastModified, pages: n, lens, labels, textless: pages.filter(p => p.replace(/\s/g, '').length < 20).length, meta, gen: Date.now(), done: false };
+    await lbPut('text', { id, pages });
+    // merge postings into the term shards: "num.gen|page,tf,page,tf;…" — old generations of a book are ignored at search time and dropped here
+    const db = await lbDB(); const tx = db.transaction('terms', 'readwrite'); const st = tx.objectStore('terms'); const tag = num + '.' + book.gen;
+    for (const [t, a] of post) { const r = st.get(t); r.onsuccess = () => { const prev = (r.result || '').split(';').filter(e => e && !e.startsWith(num + '.')); prev.push(tag + '|' + a.join(',')); st.put(prev.join(';'), t); }; }
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    book.done = true; await lbPut('books', book); stats.seen.add(id); stats.added++; LB.vocab = null; return true;
+  } finally { pdf.destroy(); }
+}
+async function lbIndex() {
+  if (LB.job) { toast('Already indexing'); return; }
+  const job = LB.job = { msg: 'Looking for PDFs…', n: 0, total: 0, cancel: false, errors: [] }; lbProgress();
+  const stats = { seen: new Set(), added: 0 }; const reachable = new Set();
+  try {
+    await lbLoadRoots(); const todo = [];
+    for (const r of LB.roots) {
+      if (r.handle) { if (!(await lbPermit(r, true))) { job.errors.push(`No permission for ${r.name}`); continue; } reachable.add(r.id); for await (const f of lbWalk(r.handle)) { todo.push({ r, path: f.path, get: () => f.h.getFile() }); job.msg = `Found ${todo.length} PDFs…`; if (todo.length % 50 === 0) lbProgress(); } }
+      else { const mine = [...LB.files].filter(([k]) => k.startsWith(r.id + ':')); if (mine.length) reachable.add(r.id); for (const [k, f] of mine) todo.push({ r, path: k.slice(r.id.length + 1), get: async () => f }); }
+    }
+    job.total = todo.length;
+    for (const t of todo) { if (job.cancel) break; job.n++; job.msg = t.path; lbProgress(); try { await lbIndexOne(t.r, t.path, await t.get(), stats); } catch (e) { if (e.cancelled) break; console.warn(t.path, e); job.errors.push(`${t.path}: ${e.message || e}`); } }
+    if (!job.cancel) for (const b of await lbAll('books')) if (reachable.has(b.root) && !stats.seen.has(b.id)) { await lbDel('books', b.id); await lbDel('text', b.id); } // file gone from the folder
+  } finally { LB.job = null; LB.vocab = null; lbProgress(); }
+  toast(job.cancel ? 'Indexing stopped. Run it again to continue where it left off.' : `Library up to date: ${stats.added} PDF${stats.added === 1 ? '' : 's'} indexed${job.errors.length ? `, ${job.errors.length} could not be read` : ''}`, 5000);
+  if (LB.open) { await lbRender(); if (LB.q) lbSearch(LB.q); }
+}
+
+/* search */
+async function lbSearch(q) {
+  LB.q = q; const books = new Map((await lbAll('books')).filter(b => b.done).map(b => [b.num, b])); if (!books.size || !q.trim()) { LB.hits = []; LB.notes = ''; return lbResults(); }
+  const parts = []; q.replace(/"([^"]+)"|(\S+)/g, (_, ph, w) => { if (ph) parts.push({ phrase: ixFold(ph).replace(/\s+/g, ' ').trim(), terms: lbTerms(ph) }); else if (w[0] === '-' && w.length > 1) parts.push({ not: lbTerms(w.slice(1)) }); else if (w.endsWith('*') && w.length > 2) parts.push({ prefix: ixFold(w.slice(0, -1)) }); else parts.push({ terms: lbTerms(w) }); });
+  const db = await lbDB(); const notes = [];
+  const getT = t => lbReq(db.transaction('terms').objectStore('terms').get(t));
+  const decode = raw => { const m = new Map(); for (const e of (raw || '').split(';')) { if (!e) continue; const [tag, list] = e.split('|'); const [num, gen] = tag.split('.').map(Number); const b = books.get(num); if (!b || b.gen !== gen) continue; const a = list.split(',').map(Number); for (let k = 0; k < a.length; k += 2) m.set(num + ':' + a[k], (m.get(num + ':' + a[k]) || 0) + a[k + 1]); } return m; };
+  const vocab = async () => LB.vocab || (LB.vocab = await lbReq(db.transaction('terms').objectStore('terms').getAllKeys()));
+  const groups = []; // each: Map page→tf for one query word (alternatives merged)
+  for (const p of parts) {
+    if (p.not) continue;
+    if (p.prefix) { const keys = await lbReq(db.transaction('terms').objectStore('terms').getAllKeys(IDBKeyRange.bound(p.prefix, p.prefix + '\uffff'), 400)); for (let i = p.prefix.length - 1; i >= 4; i--) if (await getT(p.prefix.slice(0, i)) != null) keys.push(p.prefix.slice(0, i)); /* stems shorter than the typed beginning: inquisi* also takes inquis */ const m = new Map(); for (const k of keys) for (const [pg, c] of decode(await getT(k))) m.set(pg, (m.get(pg) || 0) + c); groups.push({ m, w: p.prefix + '*' }); continue; }
+    for (const t of p.terms) {
+      let m = decode(await getT(t));
+      if (!m.size && t.length >= 4) { const max = t.length >= 8 ? 2 : 1; const near = (await vocab()).filter(v => Math.abs(v.length - t.length) <= max && lbLev(v, t, max) <= max).slice(0, 8); for (const v of near) for (const [pg, c] of decode(await getT(v))) m.set(pg, (m.get(pg) || 0) + c); if (near.length) notes.push(`${t} → also ${near.join(', ')}`); }
+      groups.push({ m, w: t });
+    }
+  }
+  let cand = null; for (const g of groups) { const keys = new Set(g.m.keys()); cand = cand ? new Set([...cand].filter(k => keys.has(k))) : keys; }
+  cand = cand || new Set();
+  for (const p of parts) if (p.not) for (const t of p.not) for (const k of decode(await getT(t)).keys()) cand.delete(k);
+  // BM25 over pages of the whole library
+  let N = 0, L = 0; for (const b of books.values()) { N += b.pages; for (const l of b.lens) L += l; } const avg = L / Math.max(1, N); const k1 = 1.2, bb = .75;
+  const hits = [];
+  for (const key of cand) { const [num, pg] = key.split(':').map(Number); const b = books.get(num); const len = b.lens[pg] || avg; let s = 0; for (const g of groups) { const tf = g.m.get(key) || 0; const df = g.m.size; s += Math.log(1 + (N - df + .5) / (df + .5)) * tf * (k1 + 1) / (tf + k1 * (1 - bb + bb * len / avg)); } hits.push({ book: b, page: pg, score: s }); }
+  const phrases = parts.filter(p => p.phrase); const texts = new Map(); const textOf = async b => texts.get(b.id) || (texts.set(b.id, (await lbGet('text', b.id)).pages), texts.get(b.id));
+  hits.sort((a, b) => b.score - a.score); const out = [];
+  for (const h of hits.slice(0, 3000)) {
+    const raw = (await textOf(h.book))[h.page] || ''; const flat = raw.replace(/\s+/g, ' '); const f = ixFold(flat);
+    if (phrases.some(p => !f.includes(p.phrase))) continue;
+    const needles = [...phrases.map(p => p.phrase), ...parts.filter(p => p.prefix).map(p => p.prefix), ...parts.filter(p => p.terms && !p.phrase).flatMap(p => p.terms)];
+    let at = -1, len = 0; for (const n of needles) { const k = f.search(new RegExp(`(?<![\\p{L}\\p{N}])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u')); if (k >= 0) { at = k; len = (f.slice(k).match(/^[\p{L}\p{N}]+/u) || [n])[0].length; if (phrases.length && n === phrases[0].phrase) len = n.length; break; } }
+    h.text = flat; h.at = at; h.len = len; out.push(h);
+  }
+  LB.hits = out; LB.notes = notes.join(' · '); LB.sel = new Set([...LB.sel].filter(k => out.some(h => lbKey(h) === k))); lbResults();
+}
+const lbKey = h => h.book.id + '#' + h.page;
+const lbPageName = h => h.book.labels && h.book.labels[h.page] && h.book.labels[h.page] !== String(h.page + 1) ? h.book.labels[h.page] : String(h.page + 1);
+function lbSnip(h, n = 110) { if (h.at < 0) return esc(h.text.slice(0, n * 2)); const a = Math.max(0, h.at - n), b = Math.min(h.text.length, h.at + h.len + n); return (a ? '…' : '') + esc(h.text.slice(a, h.at)) + '<b>' + esc(h.text.slice(h.at, h.at + h.len)) + '</b>' + esc(h.text.slice(h.at + h.len, b)) + (b < h.text.length ? '…' : ''); }
+function lbPassage(h, n = 400) { if (h.at < 0) return h.text.slice(0, n * 2).trim(); let a = Math.max(0, h.at - n), b = Math.min(h.text.length, h.at + h.len + n); const s0 = h.text.lastIndexOf('. ', h.at); if (s0 >= a) a = s0 + 2; const s1 = h.text.indexOf('. ', h.at + h.len); if (s1 >= 0 && s1 < b) b = s1 + 1; return (a ? '…' : '') + h.text.slice(a, b).trim() + (b < h.text.length ? '…' : ''); }
+
+/* citations */
+function lbCite(meta, pages, style) {
+  const A = meta.authors || []; const pg = pages.length ? pages.join(', ') : ''; const multi = pages.length > 1 || /[-–,]/.test(pg);
+  const last = a => { if (/,/.test(a)) return a.split(',')[0].trim(); const p = a.trim().split(/\s+/); return p[p.length - 1]; };
+  const first = a => { if (/,/.test(a)) return a.split(',').slice(1).join(',').trim(); const p = a.trim().split(/\s+/); return p.slice(0, -1).join(' '); };
+  const init = s => s.split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase() + '.').join(' ');
+  const T = meta.title || 'Untitled', Y = meta.year || '[s.d.]', P = meta.publisher;
+  if (style === 'apa') { const au = A.length ? A.map(a => `${last(a)}, ${init(first(a))}`).join(A.length > 2 ? ', ' : ' & ').replace(/, ([^,]*)$/, A.length > 2 ? ', & $1' : ', $1') : ''; return `${au ? au + ' ' : ''}(${meta.year || 'n.d.'}). ${T}.${P ? ' ' + P + '.' : ''}${pg ? ` (${multi ? 'pp.' : 'p.'} ${pg})` : ''}`; }
+  if (style === 'chicago') { const au = A.length ? `${last(A[0])}, ${first(A[0])}${A.length > 1 ? ', and ' + A.slice(1).join(', ') : ''}. ` : ''; return `${au}${T}.${P ? ' ' + P + ',' : ''} ${meta.year || 'n.d.'}${pg ? ', ' + pg : ''}.`; }
+  const au = A.length ? A.map(a => `${last(a).toUpperCase()}, ${first(a)}`).join('; ') + '. ' : ''; return `${au}${T}. ${P ? '[S.l.]: ' + P + ', ' : ''}${Y}${Y.endsWith('.') ? '' : '.'}${pg ? ` p. ${pg}.` : ''}`; // ABNT NBR 6023
+}
+function lbGroups(sel) { const m = new Map(); for (const h of sel) { let g = m.get(h.book.id); if (!g) m.set(h.book.id, g = { book: h.book, hits: [] }); g.hits.push(h); } for (const g of m.values()) g.hits.sort((a, b) => a.page - b.page); return [...m.values()]; }
+function lbRis(groups) { return groups.map(({ book: b, hits }) => ['TY  - BOOK', `TI  - ${b.meta.title}`, ...b.meta.authors.map(a => `AU  - ${a}`), b.meta.year && `PY  - ${b.meta.year}`, b.meta.publisher && `PB  - ${b.meta.publisher}`, b.meta.isbn && `SN  - ${b.meta.isbn}`, `SP  - ${hits.map(lbPageName).join(', ')}`, ...hits.map(h => `N1  - p. ${lbPageName(h)}: ${lbPassage(h, 200).replace(/\s+/g, ' ')}`), `L1  - ${b.path}`, 'ER  - '].filter(Boolean).join('\r\n')).join('\r\n\r\n') + '\r\n'; }
+function lbBib(groups) { const used = new Set(); return groups.map(({ book: b, hits }) => { let key = ((b.meta.authors[0] || 'anon').split(/[\s,]+/).filter(Boolean).pop() + (b.meta.year || '')).replace(/[^\w]/g, '').toLowerCase() || 'book'; while (used.has(key)) key += 'a'; used.add(key); const e = s => String(s).replace(/[{}]/g, ''); return `@book{${key},\n  title = {${e(b.meta.title)}},\n${b.meta.authors.length ? `  author = {${e(b.meta.authors.join(' and '))}},\n` : ''}${b.meta.year ? `  year = {${b.meta.year}},\n` : ''}${b.meta.publisher ? `  publisher = {${e(b.meta.publisher)}},\n` : ''}${b.meta.isbn ? `  isbn = {${b.meta.isbn}},\n` : ''}  pages = {${hits.map(lbPageName).join(', ')}},\n  file = {${e(b.path)}}\n}`; }).join('\n\n') + '\n'; }
+
+/* export: plain text, formatted (Google Docs / Word paste), Markdown, .docx */
+function lbDocModel(sel) { return lbGroups(sel).map(g => ({ cite: lbCite(g.book.meta, [], LB.style), book: g.book, quotes: g.hits.map(h => ({ page: lbPageName(h), text: lbPassage(h), cite: lbCite(g.book.meta, [lbPageName(h)], LB.style) })) })); }
+function lbAsText(M) { return M.map(g => g.quotes.map(q => `"${q.text}"\n— ${q.cite}`).join('\n\n')).join('\n\n') + '\n\nReferences\n' + M.map(g => g.cite).join('\n'); }
+function lbAsHtml(M) { return `<h2>Passages for “${esc(LB.q)}”</h2>` + M.map(g => `<h3>${esc(g.book.meta.title)}</h3>` + g.quotes.map(q => `<blockquote><p>${esc(q.text)}</p><p><i>${esc(q.cite)}</i></p></blockquote>`).join('')).join('') + `<h3>References</h3>` + M.map(g => `<p>${esc(g.cite)}</p>`).join(''); }
+function lbAsMd(M) { return `## Passages for “${LB.q}”\n\n` + M.map(g => `### ${g.book.meta.title}\n\n` + g.quotes.map(q => `> ${q.text.replace(/\n/g, ' ')}\n>\n> — *${q.cite}*`).join('\n\n')).join('\n\n') + '\n\n### References\n\n' + M.map(g => `- ${g.cite}`).join('\n') + '\n'; }
+async function lbDocx(M) {
+  await loadScript(JSZIP_URL); const z = new JSZip(); const x = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const p = (t, o = {}) => `<w:p>${o.style ? `<w:pPr><w:pStyle w:val="${o.style}"/></w:pPr>` : ''}<w:r>${o.i ? '<w:rPr><w:i/></w:rPr>' : ''}<w:t xml:space="preserve">${x(t)}</w:t></w:r></w:p>`;
+  const body = [p(`Passages for “${LB.q}”`, { style: 'Heading1' }), ...M.flatMap(g => [p(g.book.meta.title, { style: 'Heading2' }), ...g.quotes.flatMap(q => [p(q.text, { style: 'Quote' }), p(q.cite, { i: true })])]), p('References', { style: 'Heading2' }), ...M.map(g => p(g.cite))].join('');
+  z.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
+  z.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  z.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+  const sty = (id, name, rpr, ppr = '') => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr>${ppr}</w:pPr><w:rPr>${rpr}</w:rPr></w:style>`;
+  z.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr></w:style>${sty('Heading1', 'heading 1', '<w:b/><w:sz w:val="32"/>', '<w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/>')}${sty('Heading2', 'heading 2', '<w:b/><w:sz w:val="26"/>', '<w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="1"/>')}${sty('Quote', 'Quote', '<w:sz w:val="21"/>', '<w:ind w:left="720" w:right="360"/><w:spacing w:after="40"/>')}</w:styles>`);
+  z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1418" w:right="1418" w:bottom="1418" w:left="1418" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  return z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+async function lbCopy(text, html) { try { if (html && window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })]); else await navigator.clipboard.writeText(text); return true; } catch { return false; } }
+async function lbMerge(sel) {
+  const groups = lbGroups(sel); const out = await PDFDocument.create(); out.setTitle(`Pages for “${LB.q}”`); out.setProducer('Quire PDF Studio'); const marks = [];
+  for (const g of groups) { busy(`Copying from ${g.book.meta.title}…`); const src = await PDFDocument.load(new Uint8Array(await (await lbFile(g.book)).arrayBuffer()), { ignoreEncryption: true, updateMetadata: false }); marks.push([`${g.book.meta.title}${g.book.meta.authors[0] ? ' — ' + g.book.meta.authors[0] : ''}`, out.getPageCount()]); for (const p of await out.copyPages(src, g.hits.map(h => h.page))) out.addPage(p); }
+  addOutline(out, marks); return out.save();
+}
+
+/* the window */
+async function libOpen() {
+  if (LB.open) return; LB.open = true; await lbLoadRoots();
+  const w = el('div', '', `<div class="org-top"><h2>Library</h2><div class="lb-q"><input id="lbQ" type="search" class="inp" placeholder='Search every book, e.g. inquisição "cristãos novos" -lisboa' value="${esc(LB.q)}" aria-label="Search your library"></div><div class="org-end"><div class="segs" id="lbView"><button type="button" data-v="books" class="${LB.view === 'books' ? 'on' : ''}">By book</button><button type="button" data-v="pages" class="${LB.view === 'pages' ? 'on' : ''}">Best pages</button></div><button class="icon-btn" id="lbClose" aria-label="Close library">${svg('x')}</button></div></div>
+    <div class="lb-body"><aside class="lb-side" id="lbSide"></aside><main class="lb-res" id="lbRes"></main></div><div class="lb-bar" id="lbBar"></div>`);
+  w.id = 'lib'; document.body.append(w);
+  $('#lbClose').onclick = libClose; let t = null; $('#lbQ').oninput = e => { clearTimeout(t); t = setTimeout(() => lbSearch(e.target.value), 250); };
+  $('#lbQ').onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); libClose(); } };
+  $$('#lbView button').forEach(b => b.onclick = () => { LB.view = b.dataset.v; $$('#lbView button').forEach(x => x.classList.toggle('on', x === b)); lbResults(); });
+  await lbRender(); setTimeout(() => $('#lbQ').focus(), 30); if (LB.q) lbSearch(LB.q);
+}
+function libClose() { LB.open = false; const w = $('#lib'); if (w) w.remove(); }
+async function lbRender() {
+  const side = $('#lbSide'); if (!side) return; const books = (await lbAll('books')).filter(b => b.done); const pages = books.reduce((s, b) => s + b.pages, 0); const tl = books.filter(b => b.textless);
+  side.innerHTML = `<h3>Folders</h3>${LB.roots.length ? `<ul class="lb-roots">${LB.roots.map(r => `<li><span title="${esc(r.name)}">${svg('open')}${esc(r.name)}</span><span class="muted small">${books.filter(b => b.root === r.id).length}</span><button class="icon-btn sm" data-rm="${r.id}" aria-label="Remove ${esc(r.name)} from the library">${svg('x')}</button></li>`).join('')}</ul>` : '<p class="hint">Add the folders that hold your books. Subfolders are included. To search a whole disk, or your Google Drive folder on this computer, add its top folder.</p>'}
+    <div class="row"><button class="btn primary" id="lbAdd">${svg('plus')}Add folder</button>${LB.roots.length ? `<button class="btn" id="lbRe">${LB.job ? 'Stop' : 'Update index'}</button>` : ''}</div>
+    <div id="lbProg"></div>
+    <dl class="kv"><dt>Books</dt><dd>${books.length.toLocaleString()}</dd><dt>Pages</dt><dd>${pages.toLocaleString()}</dd></dl>
+    ${tl.length ? `<p class="hint">${tl.length} book${tl.length > 1 ? 's have' : ' has'} pages with no text (scans). Open ${tl.length > 1 ? 'them' : 'it'} and run OCR, then update the index, to search ${tl.length > 1 ? 'them' : 'it'} too.</p><ul class="lb-tl">${tl.slice(0, 30).map(b => `<li><button data-ob="${esc(b.id)}">${esc(b.meta.title)}</button> <span class="muted small">${b.textless}/${b.pages}</span></li>`).join('')}</ul>` : ''}
+    <h3>Citation style</h3><select id="lbStyle" class="inp">${[['abnt', 'ABNT'], ['apa', 'APA'], ['chicago', 'Chicago']].map(([v, l]) => `<option value="${v}"${LB.style === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+    ${pref.get('zoteroKey', '') ? '<p class="hint">Zotero is connected to your online library. <button class="linkbtn" id="lbZk">Disconnect</button></p>' : ''}
+    <p class="hint">Everything stays on this device. Search ignores accents and word endings (inquisição finds inquisições and Inquisition) and forgives small OCR slips. Use "quotes" for exact phrases, word* for beginnings, -word to leave out.</p>`;
+  $('#lbAdd').onclick = lbAddFolder; const re = $('#lbRe'); if (re) re.onclick = () => { if (LB.job) LB.job.cancel = true; else lbIndex(); };
+  $$('[data-rm]', side).forEach(b => b.onclick = async () => { const id = b.dataset.rm; for (const bk of await lbAll('books')) if (bk.root === id) { await lbDel('books', bk.id); await lbDel('text', bk.id); } await lbDel('roots', id); await lbLoadRoots(); LB.vocab = null; await lbRender(); lbSearch(LB.q); });
+  $$('[data-ob]', side).forEach(b => b.onclick = () => lbOpenAt({ book: books.find(x => x.id === b.dataset.ob), page: 0 }));
+  const zk = $('#lbZk'); if (zk) zk.onclick = () => { pref.set('zoteroKey', ''); pref.set('zoteroUser', ''); lbRender(); };
+  $('#lbStyle').onchange = e => { LB.style = e.target.value; pref.set('citeStyle', LB.style); lbResults(); };
+  lbProgress();
+}
+function lbProgress() { const p = $('#lbProg'); if (!p) return; const j = LB.job; p.innerHTML = j ? `<div class="prog"><i style="width:${j.total ? Math.round(j.n / j.total * 100) : 5}%"></i></div><p class="muted small" style="margin:4px 0 0;overflow-wrap:anywhere">${j.total ? `${j.n} of ${j.total} · ` : ''}${esc(j.msg)}</p>` : ''; const re = $('#lbRe'); if (re) re.textContent = j ? 'Stop' : 'Update index'; }
+async function lbOpenAt(h) {
+  try { busy('Opening ' + h.book.name + '…'); const f = await lbFile(h.book); unbusy(); const have = S.docs.findIndex(d => d.libId === h.book.id && d.libMtime === h.book.mtime); if (have >= 0) activate(have); else { const d = await openBytes(new Uint8Array(await f.arrayBuffer()), h.book.name); if (d) { d.libId = h.book.id; d.libMtime = h.book.mtime; } } libClose(); setTimeout(() => gotoPage(h.page), 120); }
+  catch (e) { unbusy(); toast(e.message || String(e), 6000); }
+}
+function lbResults() {
+  const R = $('#lbRes'); if (!R) return; const H = LB.hits;
+  if (!LB.q.trim()) R.innerHTML = '<div class="lb-empty muted">Type a word to see every page, in every book, that mentions it.</div>';
+  else if (!H.length) R.innerHTML = `<div class="lb-empty muted">No pages match “${esc(LB.q)}”.${LB.notes ? '<br>' + esc(LB.notes) : ''}</div>`;
+  else {
+    const books = new Set(H.map(h => h.book.id)).size; const row = h => `<li class="${LB.sel.has(lbKey(h)) ? 'sel' : ''}" data-k="${esc(lbKey(h))}"><input type="checkbox" ${LB.sel.has(lbKey(h)) ? 'checked' : ''} aria-label="Select page ${esc(lbPageName(h))}"><span class="lb-pg">p. ${esc(lbPageName(h))}</span><span class="lb-sn">${LB.view === 'pages' ? `<span class="lb-bk">${esc(h.book.meta.title)}</span> ` : ''}${lbSnip(h)}</span><button class="btn sm" data-open="${esc(lbKey(h))}">Open</button></li>`;
+    let html = `<p class="muted small lb-sum">${H.length.toLocaleString()} page${H.length === 1 ? '' : 's'} in ${books} book${books === 1 ? '' : 's'}${H.length > 600 ? ' · showing the best 600' : ''}${LB.notes ? ' · ' + esc(LB.notes) : ''}</p>`;
+    const shown = H.slice(0, 600);
+    if (LB.view === 'pages') html += `<ul class="lb-list">${shown.map(row).join('')}</ul>`;
+    else { const order = []; const by = new Map(); for (const h of shown) { if (!by.has(h.book.id)) { by.set(h.book.id, []); order.push(h.book); } by.get(h.book.id).push(h); }
+      html += order.map(b => { const hs = by.get(b.id).sort((x, y) => x.page - y.page); const all = hs.every(h => LB.sel.has(lbKey(h))); return `<section class="lb-book"><header><input type="checkbox" data-all="${esc(b.id)}" ${all ? 'checked' : ''} aria-label="Select every page from this book"><div><b>${esc(b.meta.title)}</b><span class="muted small">${esc(b.meta.authors.join(' & '))}${b.meta.year ? ' · ' + b.meta.year : ''} · ${hs.length} page${hs.length > 1 ? 's' : ''} · ${esc(b.path)}</span></div></header><ul class="lb-list">${hs.map(row).join('')}</ul></section>`; }).join(''); }
+    R.innerHTML = html;
+    const byKey = new Map(H.map(h => [lbKey(h), h]));
+    $$('.lb-list li', R).forEach(li => li.onclick = e => { if (e.target.closest('[data-open]')) return; const k = li.dataset.k; LB.sel.has(k) ? LB.sel.delete(k) : LB.sel.add(k); li.classList.toggle('sel', LB.sel.has(k)); $('input', li).checked = LB.sel.has(k); lbBar(); });
+    $$('[data-open]', R).forEach(b => b.onclick = () => lbOpenAt(byKey.get(b.dataset.open)));
+    $$('[data-all]', R).forEach(c => c.onchange = () => { for (const h of H) if (h.book.id === c.dataset.all) c.checked ? LB.sel.add(lbKey(h)) : LB.sel.delete(lbKey(h)); lbResults(); });
+  }
+  lbBar();
+}
+function lbBar() {
+  const B = $('#lbBar'); if (!B) return; const sel = LB.hits.filter(h => LB.sel.has(lbKey(h)));
+  B.innerHTML = sel.length ? `<span><b>${sel.length}</b> page${sel.length > 1 ? 's' : ''} from ${new Set(sel.map(h => h.book.id)).size} book${new Set(sel.map(h => h.book.id)).size > 1 ? 's' : ''}</span>
+    <button class="btn" data-x="copy">Copy with citations</button><button class="btn" data-x="docx">Word (.docx)</button><button class="btn" data-x="gdocs">Google Docs</button><button class="btn" data-x="md">Markdown</button><button class="btn" data-x="zotero">Send to Zotero</button><button class="btn" data-x="ris">Mendeley / EndNote (.ris)</button><button class="btn" data-x="bib">BibTeX</button><button class="btn primary" data-x="merge">Merge into a PDF</button><button class="btn ghost" data-x="none">Clear</button>`
+    : `<span class="muted">Click pages to select them${LB.hits.length ? ', or tick a book to take all its pages' : ''}.</span>${LB.hits.length ? '<button class="btn ghost" data-x="all">Select all</button>' : ''}`;
+  $$('[data-x]', B).forEach(b => b.onclick = async () => {
+    const x = b.dataset.x; const M = () => lbDocModel(sel); const slug = (LB.q || 'passages').replace(/[^\p{L}\p{N}]+/gu, '-').slice(0, 40);
+    try {
+      if (x === 'all') { LB.hits.slice(0, 600).forEach(h => LB.sel.add(lbKey(h))); return lbResults(); }
+      if (x === 'none') { LB.sel.clear(); return lbResults(); }
+      if (x === 'copy') { const m = M(); toast(await lbCopy(lbAsText(m), lbAsHtml(m)) ? 'Copied the passages with their citations' : 'The clipboard is blocked here. Use Word or Markdown instead.'); }
+      if (x === 'gdocs') { const m = M(); const ok = await lbCopy(lbAsText(m), lbAsHtml(m)); await modal({ title: 'Google Docs', body: `<p style="margin:0">${ok ? 'The passages are copied with their formatting. Paste them into a Google Doc with Ctrl+V (⌘V on a Mac).' : 'The clipboard is blocked here, so download the Word file and upload it to Google Drive. Drive opens it as a Google Doc.'}</p><p class="muted" style="margin:0">To start a new document, open <b>docs.new</b> in your browser.</p>`, actions: [{ label: 'Download .docx instead', value: 'docx' }, { label: 'OK', primary: true, value: null }] }).then(async r => { if (r === 'docx') saveFile(slug + '.docx', await lbDocx(m)); }); }
+      if (x === 'docx') { busy('Writing the Word file…'); const blob = await lbDocx(M()); unbusy(); saveFile(slug + '.docx', blob); }
+      if (x === 'md') saveFile(slug + '.md', new Blob([lbAsMd(M())], { type: 'text/markdown' }));
+      if (x === 'zotero') { busy('Sending to Zotero…'); const m = await lbZotero(lbGroups(sel)); unbusy(); if (m) toast(m, 5000); }
+      if (x === 'ris') saveFile(slug + '.ris', new Blob([lbRis(lbGroups(sel))], { type: 'application/x-research-info-systems' }));
+      if (x === 'bib') saveFile(slug + '.bib', new Blob([lbBib(lbGroups(sel))], { type: 'application/x-bibtex' }));
+      if (x === 'merge') { busy('Merging pages…'); const bytes = await lbMerge(sel); unbusy(); libClose(); await openBytes(bytes, `Pages for ${slug}.pdf`); }
+    } catch (e) { unbusy(); console.error(e); toast(e.message || String(e), 6000); }
+  });
+}
+(function () { const st = document.createElement('style'); st.textContent = `
+#lib{position:fixed;inset:0;z-index:30;background:var(--desk);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.lb-q{flex:1;min-width:200px}.lb-q .inp{font-size:15px;padding:9px 12px}
+.lb-body{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:0}
+.lb-side{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px;border-right:1px solid var(--line)}
+.lb-side h3{margin:6px 0 0;font:600 10.5px var(--f-ui);text-transform:uppercase;letter-spacing:.08em;color:var(--faint)}
+.lb-roots,.lb-tl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.lb-roots li{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;font-size:12.5px}
+.lb-roots li>span:first-child{display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.lb-roots svg{width:15px;height:15px;color:var(--muted)}
+.linkbtn{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline}
+.lb-tl button{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font-size:12px;text-align:left}
+.lb-res{overflow:auto;padding:16px 24px 24px}
+.lb-empty{display:grid;place-items:center;height:60%;text-align:center;font-size:14px}
+.lb-sum{margin:0 0 10px}
+.lb-book{background:var(--solid);border-radius:12px;box-shadow:0 0 0 1px var(--line);margin-bottom:12px;overflow:hidden}
+.lb-book header{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid var(--line)}
+.lb-book header div{display:flex;flex-direction:column;min-width:0}.lb-book header .small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-list{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:1px}
+.lb-res>.lb-list{background:var(--solid);border-radius:12px;box-shadow:0 0 0 1px var(--line)}
+.lb-list li{display:grid;grid-template-columns:auto 56px 1fr auto;gap:10px;align-items:start;padding:7px 8px;border-radius:8px;cursor:pointer;font-size:12.5px;line-height:1.5}
+.lb-list li:hover{background:var(--hover)}.lb-list li.sel{background:var(--accent-soft)}
+.lb-list input{margin-top:3px;accent-color:var(--on)}
+.lb-pg{font:500 11px var(--f-mono);color:var(--muted);padding-top:2px}
+.lb-sn b{background:var(--accent-soft);font-weight:600;border-radius:3px;padding:0 1px}.lb-bk{font-weight:600}
+.lb-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));border-top:1px solid var(--line);background:var(--solid)}
+.lb-bar>span{margin-right:6px}
+@media (max-width:760px){.lb-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.lb-side{max-height:30vh;border-right:0;border-bottom:1px solid var(--line)}.lb-res{padding:10px}.lb-list li{grid-template-columns:auto 44px 1fr}.lb-list li .btn{display:none}}`; document.head.append(st); })();
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); libOpen(); } }, true);
+
+/* Send to Zotero, live: the desktop apps hand items to the Zotero app on this computer (its connector server on port
+   23119, the one the Zotero browser button uses; items land in the collection selected in Zotero). The browser version
+   uses the Zotero web API with the owner's key, so items reach their online library and sync to the app. */
+function lbZotItems(groups) {
+  return groups.map(({ book: b, hits }) => ({
+    itemType: 'book', title: b.meta.title, date: b.meta.year || '', publisher: b.meta.publisher || '', ISBN: b.meta.isbn || '', language: b.meta.lang || '',
+    creators: b.meta.authors.map(a => /,/.test(a) ? { lastName: a.split(',')[0].trim(), firstName: a.split(',').slice(1).join(',').trim(), creatorType: 'author' } : (p => p.length > 1 ? { lastName: p.pop(), firstName: p.join(' '), creatorType: 'author' } : { name: a, creatorType: 'author' })(a.trim().split(/\s+/))),
+    tags: LB.q ? [{ tag: LB.q.replace(/["*-]/g, '').trim() }] : [],
+    notes: hits.map(h => ({ note: `<p><b>p. ${esc(lbPageName(h))}</b></p><blockquote>${esc(lbPassage(h))}</blockquote><p><i>Found by Quire for “${esc(LB.q)}” in ${esc(b.path)}</i></p>` }))
+  }));
+}
+async function lbZotero(groups) {
+  const items = lbZotItems(groups);
+  if (window.quireDesktop && window.quireDesktop.zotero) { const r = await window.quireDesktop.zotero(items); if (r && r.ok) return 'Sent to Zotero. Look in the collection that is selected there.'; throw new Error(r && r.error || 'Zotero did not answer. Open the Zotero app and try again.'); }
+  const key = pref.get('zoteroKey', '');
+  if (!key) { const k = await lbZoteroKey(); if (!k) return null; return lbZotero(groups); }
+  const H = { 'Zotero-API-Key': key, 'Zotero-API-Version': '3', 'Content-Type': 'application/json' };
+  let uid = pref.get('zoteroUser', ''); if (!uid) { const r = await fetch('https://api.zotero.org/keys/' + encodeURIComponent(key), { headers: H }); if (!r.ok) { pref.set('zoteroKey', ''); throw new Error('Zotero did not accept that key. Make a new one with "Allow write access" ticked.'); } uid = String((await r.json()).userID); pref.set('zoteroUser', uid); }
+  const post = async body => { const r = await fetch(`https://api.zotero.org/users/${uid}/items`, { method: 'POST', headers: H, body: JSON.stringify(body) }); if (!r.ok) throw new Error(`Zotero said ${r.status}: ${(await r.text()).slice(0, 200)}`); const j = await r.json(); if (Object.keys(j.failed || {}).length) throw new Error('Zotero refused an item: ' + Object.values(j.failed)[0].message); return j; };
+  for (const { notes, ...it } of items) { const j = await post([it]); const parent = j.successful['0'].key; for (let i = 0; i < notes.length; i += 50) await post(notes.slice(i, i + 50).map(n => ({ itemType: 'note', note: n.note, parentItem: parent, tags: it.tags }))); }
+  return `Sent ${items.length} book${items.length > 1 ? 's' : ''} to your Zotero library. It shows in the Zotero app after its next sync.`;
+}
+async function lbZoteroKey() {
+  const r = await modal({ title: 'Connect Zotero', body: `<p style="margin:0">Quire sends books and passages to your online Zotero library, and the Zotero app picks them up when it syncs. In the Mac and Windows apps this goes straight to the Zotero app instead, with no key.</p><ol style="margin:0;padding-left:18px;font-size:13px;line-height:1.6"><li>Open <b>zotero.org/settings/keys/new</b> and sign in.</li><li>Tick <b>Allow library access</b> and <b>Allow write access</b>, then save.</li><li>Paste the key here.</li></ol><input id="zkIn" class="inp" placeholder="Zotero key" autocomplete="off" spellcheck="false"><p class="hint" style="margin:0">The key is kept in this browser only. Remove it any time from the Library window.</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Connect', primary: true, value: 'ok' }] });
+  const k = r === 'ok' ? ($('#zkIn').value || '').trim() : null; if (k) { pref.set('zoteroKey', k); pref.set('zoteroUser', ''); } return k;
+}
 
 /* ================= signature ================= */
 async function signatureDialog() {
