@@ -3529,9 +3529,11 @@ TASKS.bookmarks = async function (P, d) {
 function parseRanges(s, n) { const out = []; for (const part of s.split(/[,;\s]+/)) { const m = part.match(/^(\d+)(?:-(\d+))?$/); if (!m) continue; const a = +m[1], b = m[2] ? +m[2] : a; for (let i = Math.max(1, a); i <= Math.min(n, b); i++) out.push(i - 1); } return [...new Set(out)]; }
 
 /* ---- library info: metadata, XMP, initial view, profiles ---- */
+const libCal = p => p === 'calibre' || p === 'estante';
 const LIB_PROFILES = {
   acrobat: { label: 'Acrobat', hint: 'Standard PDF properties and XMP, like Acrobat\'s Document Properties. Works in every PDF reader.' },
   calibre: { label: 'Calibre', hint: 'Adds calibre\'s own XMP fields (series and number, sort names, identifiers, rating), joins authors with "&" and names the file "Title - Author".' },
+  drive: { label: 'Drive', hint: 'For finding words inside your books with Google Drive search, which reads only the file name and the PDF\'s text. Checks that every page has searchable text (scans need OCR) and names the file "Title - Author".' },
   estante: { label: 'Estante', hint: 'Everything in the Calibre profile, plus tags from your Estante shelves and a button that sends the book straight to Estante.' }
 };
 const XNS = { x: 'adobe:ns:meta/', rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#', dc: 'http://purl.org/dc/elements/1.1/', pdf: 'http://ns.adobe.com/pdf/1.3/', xmp: 'http://ns.adobe.com/xap/1.0/', xmpMM: 'http://ns.adobe.com/xap/1.0/mm/', xmpidq: 'http://ns.adobe.com/xmp/Identifier/qual/1.0/', prism: 'http://prismstandard.org/namespaces/basic/2.0/', calibre: 'http://calibre-ebook.com/xmp-namespace', calibreSI: 'http://calibre-ebook.com/xmp-namespace-series-index' };
@@ -3565,7 +3567,7 @@ function lxReadXmp(pdf) {
 }
 const xe = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function xmpPacket(m, profile) {
-  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z'); const cal = profile !== 'acrobat';
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z'); const cal = libCal(profile);
   const alt = v => `<rdf:Alt><rdf:li xml:lang="x-default">${xe(v)}</rdf:li></rdf:Alt>`; const seq = a => `<rdf:Seq>${a.map(v => `<rdf:li>${xe(v)}</rdf:li>`).join('')}</rdf:Seq>`; const bag = a => `<rdf:Bag>${a.map(v => `<rdf:li>${xe(v)}</rdf:li>`).join('')}</rdf:Bag>`;
   const ids = Object.entries(m.ids || {}).filter(([, v]) => v);
   const dc = [m.title && `<dc:title>${alt(m.title)}</dc:title>`, m.authors.length && `<dc:creator>${seq(m.authors)}</dc:creator>`, m.description && `<dc:description>${alt(m.description)}</dc:description>`, m.tags.length && `<dc:subject>${bag(m.tags)}</dc:subject>`, m.publisher && `<dc:publisher>${bag([m.publisher])}</dc:publisher>`, m.language && `<dc:language>${bag([m.language])}</dc:language>`, m.date && `<dc:date>${seq([m.date])}</dc:date>`, ids.length && `<dc:identifier>${xe(ids.map(([k, v]) => k === 'isbn' ? 'urn:isbn:' + v : k + ':' + v)[0])}</dc:identifier>`, '<dc:format>application/pdf</dc:format>'].filter(Boolean).join('\n   ');
@@ -3615,7 +3617,7 @@ async function libRead(d) {
   };
 }
 function libApply(pdf, m, profile) {
-  const N = LX.N, ctx = pdf.context, cat = pdf.catalog; const cal = profile !== 'acrobat';
+  const N = LX.N, ctx = pdf.context, cat = pdf.catalog; const cal = libCal(profile);
   pdf.setTitle(m.title || '', { showInWindowTitleBar: !!m.showTitle }); pdf.setAuthor(m.authors.join(cal ? ' & ' : '; ')); pdf.setSubject(m.description || ''); pdf.setProducer('Quire PDF Studio'); pdf.setModificationDate(new Date());
   const info = pdf.getInfoDict(); for (const k of ['ISBN', 'Publisher', 'Series']) info.delete(N(k)); info.set(N('Keywords'), LX.T(m.tags.join(', '))); // calibre splits Keywords on commas
   if (m.ids.isbn) info.set(N('ISBN'), LX.T(m.ids.isbn)); if (m.publisher) info.set(N('Publisher'), LX.T(m.publisher)); if (m.series) info.set(N('Series'), LX.T(m.series + (m.seriesIndex ? ' ' + m.seriesIndex : '')));
@@ -3667,7 +3669,7 @@ function libFormRead(P, base) {
   return Object.assign({}, base, { title: g('lbTitle').trim(), authors: splitAuthors(g('lbAuth')), titleSort: g('lbTS').trim(), authorSort: g('lbAS').trim(), series: g('lbSer').trim(), seriesIndex: g('lbSerN') ? +g('lbSerN') : '', publisher: g('lbPub').trim(), date: g('lbDate'), language: g('lbLang'), ids, tags: g('lbTags').split(/\s*,\s*/).map(t => t.trim()).filter(Boolean), rating: g('lbRate') ? +g('lbRate') : '', description: g('lbDesc').trim(), pageMode: g('lbMode'), pageLayout: g('lbLay'), openPage: +g('lbOpen') || 1, zoom: g('lbZoom'), showTitle: !!($('#lbShowT', P) || {}).checked });
 }
 async function libChecks(d, m, profile) {
-  const out = []; const ok = (state, text) => out.push({ state, text }); const cal = profile !== 'acrobat';
+  const out = []; const ok = (state, text) => out.push({ state, text }); const cal = libCal(profile);
   ok(m.title ? 'ok' : 'bad', m.title ? 'Title is set' : 'No title: libraries will use the file name');
   ok(m.authors.length ? 'ok' : 'bad', m.authors.length ? `Author${m.authors.length > 1 ? 's' : ''}: ${m.authors.join(cal ? ' & ' : '; ')}` : 'No author: it will be filed under Unknown');
   if (cal) ok(m.ids.isbn ? (isbnValid(m.ids.isbn) ? 'ok' : 'bad') : 'info', m.ids.isbn ? (isbnValid(m.ids.isbn) ? 'ISBN is valid, so calibre can fetch covers and reviews' : 'The ISBN fails its check digit') : 'No ISBN. Try "Find in book".');
@@ -3675,6 +3677,12 @@ async function libChecks(d, m, profile) {
   if (cal) ok(m.series ? 'ok' : 'info', m.series ? `Series: ${m.series} #${m.seriesIndex || 1}` : 'Not part of a series');
   const bm = d.bm && !d.bm.dirty ? d.bm.tree : await bmRead(d); ok(bm.length ? 'ok' : 'info', bm.length ? `${bmCount(bm)} bookmarks (shown as the table of contents)` : 'No bookmarks: readers will have no table of contents. Index → Bookmarks can make them.');
   const lab = await docLabels(d); ok(lab ? 'ok' : 'info', lab ? `Page labels: starts ${lab[0]}, ends ${lab[lab.length - 1]}` : 'No page labels: page numbers follow the file, not the printed book');
+  if (profile === 'drive') {
+    const n = d.info.length; const empty = []; for (let i = 0; i < n; i++) if (!(await ixLines(d, i)).some(l => l.chars > 3)) empty.push(i);
+    ok(empty.length ? 'bad' : 'ok', empty.length ? `${empty.length} of ${n} page${n > 1 ? 's' : ''} ${empty.length > 1 ? 'have' : 'has'} no text, so Drive can't find words on ${empty.length > 1 ? 'them' : 'it'} (page ${empty.slice(0, 6).map(i => i + 1).join(', ')}${empty.length > 6 ? '…' : ''}). Run OCR.` : `All ${n} pages have searchable text`);
+    out.ocr = empty.length > 0;
+    const want = m.title ? calibreName(m) : null; ok(want && d.name === want ? 'ok' : 'info', want ? (d.name === want ? `File name: ${d.name}` : `File will be named "${want}" when you apply`) : 'Add a title so the file gets a searchable name');
+  }
   if (cal) ok('info', 'Calibre and Estante make the cover from page 1. Check that page 1 is the cover.');
   return out;
 }
@@ -3685,7 +3693,7 @@ TASKS.library = async function (P, d) {
   let m = d.lib.m; const prof = () => S.lib.profile; let shelves = null;
   const opt = (v, l, cur) => `<option value="${v}"${String(cur) === String(v) ? ' selected' : ''}>${l}</option>`;
   const draw = () => {
-    const cal = prof() !== 'acrobat'; const ids = Object.entries(m.ids || {}).filter(([k, v]) => k !== 'isbn' && v).map(([k, v]) => `${k}:${v}`).join(', ');
+    const cal = libCal(prof()); const named = cal || prof() === 'drive'; const ids = Object.entries(m.ids || {}).filter(([k, v]) => k !== 'isbn' && v).map(([k, v]) => `${k}:${v}`).join(', ');
     P.innerHTML = `<section class="sec">${head('Library info')}
       <div class="segs" id="lbProf" role="radiogroup" aria-label="Profile">${Object.entries(LIB_PROFILES).map(([k, p]) => `<button type="button" role="radio" aria-checked="${prof() === k}" data-p="${k}" class="${prof() === k ? 'on' : ''}">${p.label}</button>`).join('')}</div>
       <p class="hint">${LIB_PROFILES[prof()].hint}</p>
@@ -3706,12 +3714,12 @@ TASKS.library = async function (P, d) {
       <div class="field"><label for="lbLay">Layout</label><select id="lbLay" class="inp">${[['', 'Reader default'], ['SinglePage', 'Single page'], ['OneColumn', 'Scrolling'], ['TwoPageLeft', 'Two-up'], ['TwoPageRight', 'Two-up, cover alone'], ['TwoColumnRight', 'Two-up scrolling, cover alone']].map(([v, l]) => opt(v, l, m.pageLayout)).join('')}</select></div></div>
       <div class="grid2"><div class="field"><label for="lbOpen">Open at page</label><input id="lbOpen" class="inp" type="number" min="1" max="${d.info.length}" value="${m.openPage || 1}"></div><div class="field"><label for="lbZoom">Zoom</label><select id="lbZoom" class="inp">${[['', 'Reader default'], ['Fit', 'Fit page'], ['FitH', 'Fit width'], ['XYZ100', '100%']].map(([v, l]) => opt(v, l, m.zoom)).join('')}</select></div></div>
       <label class="chk"><input type="checkbox" id="lbShowT" ${m.showTitle ? 'checked' : ''}> Show the title, not the file name, in the window</label></section>
-    <section class="sec">${cal ? `<label class="chk"><input type="checkbox" id="lbRen" ${S.lib.rename ? 'checked' : ''}> Name the file "Title - Author.pdf"</label>` : ''}
+    <section class="sec">${named ? `<label class="chk"><input type="checkbox" id="lbRen" ${S.lib.rename ? 'checked' : ''}> Name the file "Title - Author.pdf"</label>` : ''}
       <div class="row"><button class="btn primary" id="lbGo">Apply to PDF</button>${cal ? '<button class="btn" id="lbOpf">Save .opf</button>' : ''}${prof() === 'estante' ? `<button class="btn" id="lbEst">${svg('send')}Send to Estante</button>` : ''}</div>
-      <p class="hint">${cal ? 'The .opf file is calibre\'s metadata format; keep it next to the PDF (as metadata.opf in the book\'s folder) and calibre reads it when you add the folder.' : 'Writes the Info dictionary and an XMP packet, the two places Acrobat\'s Document Properties read.'}</p></section>`;
+      <p class="hint">${prof() === 'drive' ? 'Drive finds a book by its file name and by the words on its pages. Quire\'s embedded index (Index → Index) is for searching inside Quire; Drive ignores it.' : cal ? 'The .opf file is calibre\'s metadata format; keep it next to the PDF (as metadata.opf in the book\'s folder) and calibre reads it when you add the folder.' : 'Writes the Info dictionary and an XMP packet, the two places Acrobat\'s Document Properties read.'}</p></section>`;
     bindClose(P);
     $$('#lbProf button', P).forEach(b => b.onclick = () => { m = libFormRead(P, m); d.lib.m = m; S.lib.profile = b.dataset.p; pref.set('lib', S.lib); draw(); });
-    const recheck = async () => { const list = $('#lbChecks', P); if (!list) return; const c = await libChecks(d, libFormRead(P, m), prof()); if (!list.isConnected) return; list.innerHTML = c.map(x => `<li class="${x.state}"><span aria-hidden="true">${x.state === 'ok' ? '✓' : x.state === 'bad' ? '!' : '·'}</span>${esc(x.text)}</li>`).join(''); };
+    const recheck = async () => { const list = $('#lbChecks', P); if (!list) return; const c = await libChecks(d, libFormRead(P, m), prof()); if (!list.isConnected) return; list.innerHTML = c.map(x => `<li class="${x.state}"><span aria-hidden="true">${x.state === 'ok' ? '✓' : x.state === 'bad' ? '!' : '·'}</span>${esc(x.text)}</li>`).join(''); if (c.ocr) { list.insertAdjacentHTML('beforeend', '<li><span></span><button class="btn sm" id="lbOcr" style="justify-self:start">Run OCR</button></li>'); $('#lbOcr', list).onclick = () => openTask('ocr'); } };
     recheck(); $$('input,select,textarea', P).forEach(n => n.addEventListener('change', recheck));
     $('#lbFind', P).onclick = async () => { const out = $('#lbIsbnMsg', P); out.textContent = 'Looking in the first and last pages…'; const f = await findIsbns(d); if (!f.length) { out.textContent = 'No valid ISBN found in the text. Scanned books need OCR first.'; return; } $('#lbIsbn', P).value = f[0].isbn; out.textContent = `Found on page ${f[0].page + 1}${f.length > 1 ? ` (also ${f.slice(1, 4).map(x => x.isbn).join(', ')})` : ''}: “${f[0].ctx}”`; recheck(); };
     if (prof() === 'estante') (async () => {
@@ -3723,7 +3731,7 @@ TASKS.library = async function (P, d) {
     const ren = $('#lbRen', P); if (ren) ren.onchange = () => { S.lib.rename = ren.checked; pref.set('lib', S.lib); };
     $('#lbGo', P).onclick = async () => {
       const v = libFormRead(P, m); if (v.ids.isbn && !isbnValid(v.ids.isbn)) { toast('That ISBN fails its check digit. Fix it or clear it.'); return; }
-      const p = prof(); if (p !== 'acrobat') { if (!v.titleSort && v.title) v.titleSort = titleSortOf(v.title); if (!v.authorSort && v.authors.length) v.authorSort = v.authors.map(authorSortOf).join(' & '); }
+      const p = prof(); if (libCal(p)) { if (!v.titleSort && v.title) v.titleSort = titleSortOf(v.title); if (!v.authorSort && v.authors.length) v.authorSort = v.authors.map(authorSortOf).join(' & '); }
       if (await editBytes('Library info saved', pdf => libApply(pdf, v, p))) { d.lib = { bytes: d.bytes, m: v }; if (p !== 'acrobat' && S.lib.rename && v.title) { d.name = calibreName(v); renderTabs(); } }
     };
     const opf = $('#lbOpf', P); if (opf) opf.onclick = () => { const v = libFormRead(P, m); saveFile(baseName({ name: calibreName(v) }) + '.opf', new Blob([opfFor(v)], { type: 'application/oebps-package+xml' })); };
