@@ -4415,7 +4415,7 @@ TASKS.toc = async function (P, d) {
 // - Invisible OCR text (render mode 3) can be shown over the scan and corrected line by line; corrected words are stretched
 //   to cover the same area as before so selection and search still line up with the picture.
 const CE = { WS: new Set([0, 9, 10, 12, 13, 32]), DL: new Set([40, 41, 60, 62, 91, 93, 123, 125, 47, 37]) };
-const CM = {
+const CEM = {
   mul: (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]],
   ap: (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]],
   inv: m => { const d = (m[0] * m[3] - m[1] * m[2]) || 1e-9; return [m[3] / d, -m[1] / d, -m[2] / d, m[0] / d, (m[2] * m[5] - m[3] * m[4]) / d, (m[1] * m[4] - m[0] * m[5]) / d]; },
@@ -4619,12 +4619,12 @@ function ceModel(pdf, i, pjs) {
   const FD = dict('Font'), XO = dict('XObject'), fonts = new Map();
   const font = nm => { if (fonts.has(nm)) return fonts.get(nm); let f = null; try { const o = FD && FD.lookup(N(nm)); if (o instanceof L.PDFDict) f = ceFont(pdf, o, nm); } catch (e) { console.warn('Quire edit: font', nm, e); } fonts.set(nm, f); return f; };
   if (FD) for (const k of FD.keys()) font(k.decodeText());
-  let g = { ctm: CM.I, fcs: '', fc: '', frgb: [0, 0, 0], scs: '', sc: '', lw: 1, gsop: '', font: '', ftok: '', size: 0, tc: 0, tw: 0, th: 1, tl: 0, rise: 0, tr: 0 };
-  const stack = [], runs = [], objs = []; let tm = CM.I, tlm = CM.I, path = null, clipPend = false, clip0 = false;
+  let g = { ctm: CEM.I, fcs: '', fc: '', frgb: [0, 0, 0], scs: '', sc: '', lw: 1, gsop: '', font: '', ftok: '', size: 0, tc: 0, tw: 0, th: 1, tl: 0, rise: 0, tr: 0 };
+  const stack = [], runs = [], objs = []; let tm = CEM.I, tlm = CEM.I, path = null, clipPend = false, clip0 = false;
   const T = o => ceStr(raw.subarray(o.s, o.e));
-  const quad = (m, x0, y0, x1, y1) => [CM.ap(m, x0, y0), CM.ap(m, x1, y0), CM.ap(m, x1, y1), CM.ap(m, x0, y1)];
-  const addPts = a => { for (let k = 0; k + 1 < a.length; k += 2) path.pts.push(CM.ap(g.ctm, +a[k] || 0, +a[k + 1] || 0)); };
-  const nl = () => { tlm = CM.mul(CM.T(0, -g.tl), tlm); tm = tlm; };
+  const quad = (m, x0, y0, x1, y1) => [CEM.ap(m, x0, y0), CEM.ap(m, x1, y0), CEM.ap(m, x1, y1), CEM.ap(m, x0, y1)];
+  const addPts = a => { for (let k = 0; k + 1 < a.length; k += 2) path.pts.push(CEM.ap(g.ctm, +a[k] || 0, +a[k + 1] || 0)); };
+  const nl = () => { tlm = CEM.mul(CEM.T(0, -g.tl), tlm); tm = tlm; };
   const show = (k, items) => {
     const f = font(g.font), fs = g.size, th = g.th, glyphs = []; let x = 0;
     for (const it of items) {
@@ -4640,14 +4640,14 @@ function ceModel(pdf, i, pjs) {
     }
     runs.push({ k: runs.length, op: k, f, font: g.font, ftok: g.ftok, size: fs, tc: g.tc, tw: g.tw, th, rise: g.rise, tr: g.tr, tm, ctm: g.ctm, adv: x, glyphs,
       fill: [g.fcs, g.fc].filter(Boolean).join(' '), frgb: g.frgb, stroke: [g.scs, g.sc].filter(Boolean).join(' '), gsop: g.gsop });
-    tm = CM.mul(CM.T(x, 0), tm);
+    tm = CEM.mul(CEM.T(x, 0), tm);
   };
   for (let k = 0; k < ops.length; k++) {
     const o = ops[k], a = o.a;
     switch (o.op) {
       case 'q': stack.push(g); g = Object.assign({}, g); break;
       case 'Q': if (stack.length) g = stack.pop(); break;
-      case 'cm': if (a.length >= 6) g.ctm = CM.mul(a.slice(0, 6).map(Number), g.ctm); break;
+      case 'cm': if (a.length >= 6) g.ctm = CEM.mul(a.slice(0, 6).map(Number), g.ctm); break;
       case 'w': g.lw = +a[0] || 0; break;
       case 'gs': g.gsop = T(o); break;
       case 'g': g.fcs = ''; g.fc = T(o); g.frgb = [+a[0], +a[0], +a[0]]; break;
@@ -4658,7 +4658,7 @@ function ceModel(pdf, i, pjs) {
       case 'G': case 'RG': case 'K': g.scs = ''; g.sc = T(o); break;
       case 'CS': g.scs = T(o); g.sc = ''; break;
       case 'SC': case 'SCN': g.sc = T(o); break;
-      case 'BT': tm = tlm = CM.I; break;
+      case 'BT': tm = tlm = CEM.I; break;
       case 'Tf': g.font = a[0] && a[0].v || ''; g.ftok = o.ar[0] ? ceStr(raw.subarray(o.ar[0][0], o.ar[0][1])) : '/' + g.font; g.size = +a[1] || 0; break;
       case 'Tc': g.tc = +a[0] || 0; break;
       case 'Tw': g.tw = +a[0] || 0; break;
@@ -4666,8 +4666,8 @@ function ceModel(pdf, i, pjs) {
       case 'TL': g.tl = +a[0] || 0; break;
       case 'Ts': g.rise = +a[0] || 0; break;
       case 'Tr': g.tr = +a[0] || 0; break;
-      case 'Td': tlm = CM.mul(CM.T(+a[0] || 0, +a[1] || 0), tlm); tm = tlm; break;
-      case 'TD': g.tl = -(+a[1] || 0); tlm = CM.mul(CM.T(+a[0] || 0, +a[1] || 0), tlm); tm = tlm; break;
+      case 'Td': tlm = CEM.mul(CEM.T(+a[0] || 0, +a[1] || 0), tlm); tm = tlm; break;
+      case 'TD': g.tl = -(+a[1] || 0); tlm = CEM.mul(CEM.T(+a[0] || 0, +a[1] || 0), tlm); tm = tlm; break;
       case 'Tm': if (a.length >= 6) tm = tlm = a.slice(0, 6).map(Number); break;
       case 'T*': nl(); break;
       case 'Tj': show(k, [a[0]]); break;
@@ -4689,9 +4689,9 @@ function ceModel(pdf, i, pjs) {
         try { xo = XO && XO.lookup(N(nm)); const s = xo && xo.dict && xo.dict.lookup(N('Subtype')); sub = s instanceof L.PDFName ? s.decodeText() : ''; } catch {}
         if (sub === 'Image') objs.push({ kind: 'img', a: k, b: k, name: nm, ctm: g.ctm, pts: quad(g.ctm, 0, 0, 1, 1), xo });
         else if (sub === 'Form') {
-          let bb = [0, 0, 1, 1], fm = CM.I;
+          let bb = [0, 0, 1, 1], fm = CEM.I;
           try { const B = xo.dict.lookup(N('BBox')); if (B instanceof L.PDFArray) bb = B.asArray().map(v => v.asNumber()); const Mx = xo.dict.lookup(N('Matrix')); if (Mx instanceof L.PDFArray) fm = Mx.asArray().map(v => v.asNumber()); } catch {}
-          objs.push({ kind: 'form', a: k, b: k, name: nm, ctm: g.ctm, pts: quad(CM.mul(fm, g.ctm), Math.min(bb[0], bb[2]), Math.min(bb[1], bb[3]), Math.max(bb[0], bb[2]), Math.max(bb[1], bb[3])) });
+          objs.push({ kind: 'form', a: k, b: k, name: nm, ctm: g.ctm, pts: quad(CEM.mul(fm, g.ctm), Math.min(bb[0], bb[2]), Math.min(bb[1], bb[3]), Math.max(bb[0], bb[2]), Math.max(bb[1], bb[3])) });
         }
         break;
       }
@@ -4716,10 +4716,10 @@ function ceModel(pdf, i, pjs) {
 }
 function ceGeom(m) {
   for (const r of m.runs) {
-    const X = CM.mul(r.tm, r.ctm), lu = Math.hypot(X[0], X[1]) || 1e-9;
+    const X = CEM.mul(r.tm, r.ctm), lu = Math.hypot(X[0], X[1]) || 1e-9;
     r.u = [X[0] / lu, X[1] / lu]; let nv = [-r.u[1], r.u[0]]; if (ceDot(nv, [X[2], X[3]]) < 0) nv = [-nv[0], -nv[1]]; r.nv = nv;
     const dv = Math.abs(ceDot([X[2], X[3]], nv)) || lu;
-    r.B = CM.ap(X, 0, 0); r.O = CM.ap(X, 0, r.rise);
+    r.B = CEM.ap(X, 0, 0); r.O = CEM.ap(X, 0, r.rise);
     r.fsU = Math.abs(r.size) * dv; r.lu = lu; r.len = r.adv * lu;
     r.hs = Math.abs(r.th) * lu / dv; r.tcU = r.tc * dv;
     r.visible = r.tr !== 3 && r.tr !== 7;
@@ -4830,7 +4830,7 @@ function ceWrite(pdf, m, reps, tail) {
   const chunks = []; let pos = m.raw.length;
   for (const r of reps) { if (r.e > pos) continue; chunks.push(m.raw.subarray(r.e, pos), ceLat(' ' + r.t + ' ')); pos = r.s; }
   chunks.push(m.raw.subarray(0, pos)); chunks.reverse();
-  const ident = m.ctmEnd.every((v, k) => Math.abs(v - CM.I[k]) < 1e-9);
+  const ident = m.ctmEnd.every((v, k) => Math.abs(v - CEM.I[k]) < 1e-9);
   const wrap = !!tail && (m.depth > 0 || !ident || m.clip0);
   if (wrap) chunks.unshift(ceLat('q\n'));
   if (tail) chunks.push(ceLat('\n' + (wrap ? 'Q\n'.repeat(m.depth + 1) : '') + tail));
@@ -4846,9 +4846,9 @@ function ceNeutral(m, r) {
 function ceClone(m, r, D) {
   const o = m.ops[r.op], ar = o.ar[o.ar.length - 1]; if (!ar) return '';
   const s = ceStr(m.raw.subarray(ar[0], ar[1]));
-  return `q ${cmat(CM.mul(r.ctm, D))} cm ${r.gsop} ${r.fill || '0 g'} ${r.stroke} BT ${r.ftok} ${cn(r.size)} Tf ${cn(r.tc)} Tc ${cn(r.tw)} Tw ${cn(r.th * 100)} Tz ${cn(r.rise)} Ts ${r.tr} Tr ${cmat(r.tm)} Tm ${s} ${o.op === 'TJ' ? 'TJ' : 'Tj'} ET Q\n`;
+  return `q ${cmat(CEM.mul(r.ctm, D))} cm ${r.gsop} ${r.fill || '0 g'} ${r.stroke} BT ${r.ftok} ${cn(r.size)} Tf ${cn(r.tc)} Tc ${cn(r.tw)} Tw ${cn(r.th * 100)} Tz ${cn(r.rise)} Ts ${r.tr} Tr ${cmat(r.tm)} Tm ${s} ${o.op === 'TJ' ? 'TJ' : 'Tj'} ET Q\n`;
 }
-function ceWrapObj(m, o, D) { const C = o.ctm, X = CM.mul(CM.mul(C, D), CM.inv(C)); return { s: m.ops[o.a].s, e: m.ops[o.b].e, t: `q ${cmat(X)} cm\n${ceStr(m.raw.subarray(m.ops[o.a].s, m.ops[o.b].e))}\nQ` }; }
+function ceWrapObj(m, o, D) { const C = o.ctm, X = CEM.mul(CEM.mul(C, D), CEM.inv(C)); return { s: m.ops[o.a].s, e: m.ops[o.b].e, t: `q ${cmat(X)} cm\n${ceStr(m.raw.subarray(m.ops[o.a].s, m.ops[o.b].e))}\nQ` }; }
 function ceDelObj(m, o) { return { s: m.ops[o.a].s, e: m.ops[o.b].e, t: '' }; }
 // Fonts installed on this computer (Chrome, Edge and the desktop apps can read them once allowed). They let new letters
 // use the document's own typeface when the file only carries a subset, and cover letters outside the standard fonts'
@@ -5118,7 +5118,7 @@ function edDraw(ctx, d, i) {
   const g = ED.drag && ED.drag.page === i ? ED.drag : ED.nudge && ED.nudge.page === i ? ED.nudge : null;
   const sr = edSelOk(d) && ED.sel.page === i ? edSelRect(d, i, m) : null;
   if (sr && g && (g.mode === 'move' && g.moved || g.mode === 'resize' || g.mode === 'nudge')) {
-    const T = edViewT(d, i, g, m); const q = [[sr.x, sr.y], [sr.x + sr.w, sr.y + sr.h]].map(p => CM.ap(T, p[0], p[1]));
+    const T = edViewT(d, i, g, m); const q = [[sr.x, sr.y], [sr.x + sr.w, sr.y + sr.h]].map(p => CEM.ap(T, p[0], p[1]));
     const sc = v.c.width / v.vp.width; ctx.globalAlpha = .85;
     try { ctx.drawImage(v.c, sr.x * sc, sr.y * sc, sr.w * sc, sr.h * sc, Math.min(q[0][0], q[1][0]), Math.min(q[0][1], q[1][1]), Math.abs(q[1][0] - q[0][0]), Math.abs(q[1][1] - q[0][1])); } catch {}
     ctx.globalAlpha = 1; ctx.strokeStyle = '#2b5cff'; ctx.setLineDash([4, 3]); ctx.strokeRect(Math.min(q[0][0], q[1][0]), Math.min(q[0][1], q[1][1]), Math.abs(q[1][0] - q[0][0]), Math.abs(q[1][1] - q[0][1])); ctx.setLineDash([]);
@@ -5131,17 +5131,17 @@ function edDraw(ctx, d, i) {
 }
 // A drag as a transform in viewport space (move, or scale about the opposite corner).
 function edViewT(d, i, g, m) {
-  if (g.mode === 'nudge') return CM.T(g.vx, g.vy);
-  if (g.mode === 'move') return CM.T(g.cur[0] - g.start[0], g.cur[1] - g.start[1]);
+  if (g.mode === 'nudge') return CEM.T(g.vx, g.vy);
+  if (g.mode === 'move') return CEM.T(g.cur[0] - g.start[0], g.cur[1] - g.start[1]);
   const r = edSelRect(d, i, m), cs = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]], c = cs[g.h], a = cs[(g.h + 2) % 4];
   let sx = (g.cur[0] - a[0]) / ((c[0] - a[0]) || 1), sy = (g.cur[1] - a[1]) / ((c[1] - a[1]) || 1);
   const it = edSelItems(d, m)[0], keep = it && it.kind !== 'path' ? !g.shift : g.shift;
   if (keep) { const s = Math.abs(sx - 1) > Math.abs(sy - 1) ? sx : sy; sx = sy = s; }
   sx = Math.sign(sx || 1) * Math.max(.03, Math.abs(sx)); sy = Math.sign(sy || 1) * Math.max(.03, Math.abs(sy));
-  return CM.mul(CM.mul(CM.T(-a[0], -a[1]), [sx, 0, 0, sy, 0, 0]), CM.T(a[0], a[1]));
+  return CEM.mul(CEM.mul(CEM.T(-a[0], -a[1]), [sx, 0, 0, sy, 0, 0]), CEM.T(a[0], a[1]));
 }
-const edUserT = (vp, T) => { const Vt = vp.transform; return CM.mul(CM.mul(Vt, T), CM.inv(Vt)); };
-function edBoxT(b, D) { const q = edBoxPts(b).map(p => CM.ap(D, p[0], p[1])); const xs = q.map(p => p[0]), ys = q.map(p => p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; }
+const edUserT = (vp, T) => { const Vt = vp.transform; return CEM.mul(CEM.mul(Vt, T), CEM.inv(Vt)); };
+function edBoxT(b, D) { const q = edBoxPts(b).map(p => CEM.ap(D, p[0], p[1])); const xs = q.map(p => p[0]), ys = q.map(p => p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; }
 function edDown(i, e, p) {
   const d = cur();
   if (d.encrypted) { toast('This PDF is password-protected. Editing needs an unlocked copy.'); return; }
@@ -5218,7 +5218,7 @@ function edKey(e, mod) {
     e.preventDefault(); const st = (e.shiftKey ? 10 : 1) * d.zoom, i = ED.sel.page;
     if (!ED.nudge || ED.nudge.page !== i) ED.nudge = { mode: 'nudge', page: i, vx: 0, vy: 0 };
     ED.nudge.vx += dir[0] * st; ED.nudge.vy += dir[1] * st; drawOverlay(i);
-    clearTimeout(ED.nudge.t); ED.nudge.t = setTimeout(() => { const n = ED.nudge; ED.nudge = null; if (n && ED.sel) edTransform(n.page, ED.sel.ids, edUserT(d.views[n.page].vp, CM.T(n.vx, n.vy)), 'Moved'); }, 450);
+    clearTimeout(ED.nudge.t); ED.nudge.t = setTimeout(() => { const n = ED.nudge; ED.nudge = null; if (n && ED.sel) edTransform(n.page, ED.sel.ids, edUserT(d.views[n.page].vp, CEM.T(n.vx, n.vy)), 'Moved'); }, 450);
     return true;
   }
   return false;
@@ -5441,7 +5441,7 @@ function edPanel(P, d) {
   if (its.length) {
     const names = { para: 'Text', img: 'Image', inl: 'Image', form: 'Object', path: 'Shape' };
     const one = its.length === 1 ? its[0] : null, isImg = one && (one.kind === 'img' || one.kind === 'inl');
-    const b = edBoxT(one ? one.box : [Math.min(...its.map(x => x.box[0])), Math.min(...its.map(x => x.box[1])), Math.max(...its.map(x => x.box[2])), Math.max(...its.map(x => x.box[3]))], CM.I);
+    const b = edBoxT(one ? one.box : [Math.min(...its.map(x => x.box[0])), Math.min(...its.map(x => x.box[1])), Math.max(...its.map(x => x.box[2])), Math.max(...its.map(x => x.box[3]))], CEM.I);
     const u = (S.ps && S.ps.unit) || 'mm', f = PT[u] || 1, w = ((b[2] - b[0]) / f).toFixed(u === 'pt' ? 0 : 1), hh = ((b[3] - b[1]) / f).toFixed(u === 'pt' ? 0 : 1);
     h += `<section class="sec"><div class="task-h"><h3>${one ? names[one.kind] : its.length + ' items'}</h3><span class="muted small">Page ${ED.sel.page + 1}</span></div>
       <p class="hint">${w} × ${hh} ${u}. Drag to move${one && one.kind !== 'para' ? ', or drag a corner to resize (hold Shift to stretch)' : ''}. Arrow keys nudge by 1 pt, with Shift by 10 pt.</p>
@@ -5483,7 +5483,7 @@ function edPanel(P, d) {
 function edRotFlip(k) {
   const d = cur(), i = ED.sel.page, m = edModel(d, i), r = edSelRect(d, i, m); if (!r) return;
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2, A = { rotl: [0, -1, 1, 0, 0, 0], rotr: [0, 1, -1, 0, 0, 0], fliph: [-1, 0, 0, 1, 0, 0], flipv: [1, 0, 0, -1, 0, 0] }[k];
-  const T = CM.mul(CM.mul(CM.T(-cx, -cy), A), CM.T(cx, cy));
+  const T = CEM.mul(CEM.mul(CEM.T(-cx, -cy), A), CEM.T(cx, cy));
   edTransform(i, ED.sel.ids, edUserT(d.views[i].vp, T), { rotl: 'Rotated', rotr: 'Rotated', fliph: 'Flipped', flipv: 'Flipped' }[k]);
 }
 async function edReplaceImage(o) {
