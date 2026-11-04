@@ -1,0 +1,53 @@
+{
+ "segmenter": "blla",
+ "readers": [
+  {
+   "id": "mccatmus",
+   "name": "Early modern and modern hands, 16th–21st century (McCATMuS)",
+   "langs": "Portuguese, Spanish, French, Latin, Italian, English, German, Dutch",
+   "era": "1500–2000",
+   "about": "Trained on handwritten, printed and typewritten documents from the 16th to the 21st century. The best free choice for Inquisition records, notarial deeds and letters.",
+   "file": "McCATMuS_nfd_nofix_V1.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Chagué, Alix (2024). McCATMuS - Transcription model for handwritten, printed and typewritten documents from the 16th century to the 21st century. Zenodo. https://doi.org/10.5281/zenodo.13788177",
+   "doi": "10.5281/zenodo.13788177",
+   "accuracy": [
+    271602,
+    0.9280267357826233
+   ],
+   "bytes": 16182160
+  },
+  {
+   "id": "catmus-medieval",
+   "name": "Medieval book hands, 8th–16th century (CATMuS Medieval)",
+   "langs": "Latin, French, Spanish, Italian, Catalan, Occitan, Dutch, Venetian",
+   "era": "800–1550",
+   "about": "Trained on over 200 medieval manuscripts: caroline, gothic textualis, cursiva, hybrida and humanistic scripts. Keeps abbreviations as written (MUFI characters).",
+   "file": "catmus-medieval-1.6.0.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Pinche, Ariane, Clérice, Thibault, Vlachou-Efstathiou, Malamatenia, Chagué, Alix et al. (2025). CATMuS Medieval. Zenodo. https://doi.org/10.5281/zenodo.15030337",
+   "doi": "10.5281/zenodo.15030337",
+   "accuracy": [
+    369765,
+    0.9485183358192444
+   ],
+   "bytes": 16398705
+  },
+  {
+   "id": "tridis",
+   "name": "Medieval and early modern documents, charters and registers (TRIDIS)",
+   "langs": "Latin, French, Spanish, German, Czech",
+   "era": "1100–1600",
+   "about": "Trained on documentary manuscripts (charters, registers, accounts) and expands abbreviations into full words.",
+   "file": "Tridis_Medieval_EarlyModern.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Torres Aguilar, Sergio, Jolivet, Vincent (2024). TRIDIS: HTR model for Multilingual Medieval and Early Modern Documentary Manuscripts (11th-16th). Zenodo. https://doi.org/10.5281/zenodo.10800223",
+   "doi": "10.5281/zenodo.10800223",
+   "accuracy": [
+    2877441,
+    0.9218370318412781
+   ],
+   "bytes": 24903662
+  }
+ ]
+}
