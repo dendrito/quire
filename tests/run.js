@@ -55,9 +55,19 @@ TESTS.pdfa = async () => {
 };
 
 // --- PDF/UA-1: Fix all on an untagged file with unembedded fonts, then the PDF/UA mark
+// a file that names Georgia (not embedded) with its own, wider widths: the fix must embed a font and keep the spacing
+const georgia = async () => { const p = await H.open(); const file = out('georgia.pdf');
+  fs.writeFileSync(file, await b64(p, async () => { const L = PDFLib, N = n => L.PDFName.of(n);
+    const pdf = await PDFDocument.create(); const f = await pdf.embedFont(StandardFonts.TimesRoman); const pg = pdf.addPage([595, 842]);
+    pg.drawText('Georgia text with its own spacing: The quick brown fox.', { x: 50, y: 780, size: 14, font: f }); await pdf.save();
+    const fd = pdf.context.lookup(f.ref); fd.set(N('BaseFont'), N('Georgia'));
+    const enc = L.StandardFontEmbedder.for('Times-Roman'); const W = []; for (let c = 32; c <= 255; c++) { let w = 500; try { const e = ceEnc().win.get(c); if (e) w = Math.round(enc.font.getWidthOfGlyph(e.name) * 1.12); } catch {} W.push(w || 500); }
+    fd.set(N('FirstChar'), L.PDFNumber.of(32)); fd.set(N('LastChar'), L.PDFNumber.of(255)); fd.set(N('Widths'), pdf.context.obj(W)); return pdf.save(); }));
+  return file; };
 TESTS.pdfua = async () => {
-  for (const f of ['report.pdf', 'columns.pdf']) {
-    const p = await H.open(); await H.load(p, fx(f));
+  for (const f of ['report.pdf', 'columns.pdf', 'georgia.pdf']) {
+    const src = f === 'georgia.pdf' ? await georgia() : fx(f);
+    const p = await H.open(); await H.load(p, src);
     const log = await p.evaluate(async () => { const fixable = ['title', 'lang', 'tags', 'tabs', 'links', 'fields', 'fonts', 'uaid']; const log = [];
       let R = await a11yScan(cur());
       for (let k = 0; k < 3; k++) { const ids = R.checks.filter(c => c.state === 'fail' && fixable.includes(c.fix)).map(c => c.fix); if (!ids.length) break; log.push((await a11yFix(cur(), ids, { title: 'Test document', lang: 'en' })).join(', ')); R = await a11yScan(cur()); }
