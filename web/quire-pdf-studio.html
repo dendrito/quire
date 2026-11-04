@@ -149,6 +149,14 @@ dialog:has(.imgdlg){width:min(780px,calc(100vw - 32px));max-height:calc(100vh - 
 .cmb-n{font:500 11px var(--f-mono);color:var(--faint);width:18px;text-align:right;flex:none}
 .cmb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
 .cmb-r{width:78px!important;flex:none;padding:5px 7px!important;background:var(--solid)!important}
+#sfit{position:fixed;inset:0;z-index:30;background:var(--desk);display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}
+.sf-ctl{display:flex;flex-wrap:wrap;gap:8px 12px;flex:1;min-width:0;align-items:flex-end}
+.sf-f{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
+.sf-f .inp{padding:6px 8px;font-size:12.5px;width:auto}
+.sf-sum{margin:0;padding:10px 16px 0;font-size:13px;color:var(--ink);text-align:center}
+.sf-cell{cursor:default}.sf-pg{background:transparent;box-shadow:none}.sf-pg canvas{cursor:grab;touch-action:none;width:auto!important;height:auto!important;max-width:100%;max-height:240px}
+.sf-tag.warn{color:#c2410c}
+@media (max-width:760px){#sfGrid{--ow:140px!important}.sf-ctl{gap:6px 8px}.sf-sum{font-size:12px}}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -2653,6 +2661,167 @@ async function overlayPages() {
       }
     }
   }, 'Overlaying…');
+}
+
+/* ---- smart fit: one page size for every page, by moving a crop window rather than scaling ---- */
+// Works on the whole page (MediaBox), not just what is visible, so earlier crops can be undone or moved.
+// Cropping only hides: the full page stays in the file, and Smart fit or Remove crop can bring it back.
+Object.assign(IC, { smartfit: '<rect x="3" y="5" width="18" height="14" rx="1.5" stroke-dasharray="2.5 2"/><rect x="7" y="8" width="10" height="8" rx="1"/>' });
+Object.assign(ACTS, { smartfit: ['Smart fit', 'smartfit', () => sfOpen()] });
+RLBL.smartfit = 'Smart fit';
+RIB.pages.items = RIB.pages.items.flatMap(x => x === '@pagesize' ? ['@pagesize', '@smartfit'] : [x]);
+CMD_KW.smartfit = 'same size uniform normalize crop fit pages auto margins consistent';
+const SF = Object.assign({ target: 'smart', orient: 'auto', place: 'content', pad: 5, scope: 'all', cw: 210, ch: 297 }, pref.get('sfit', {}));
+const SFS = { open: false, pages: [], job: 0 };
+async function sfOpen() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; } if (d.encrypted) { toast('This PDF is password-protected.'); return; }
+  if (S.task) closeTask();
+  busy('Measuring pages…');
+  try {
+    const pdf = await PDFDocument.load(d.bytes, LOAD); const N = PDFLib.PDFName.of;
+    const meta = pdf.getPages().map(p => { const m = p.getMediaBox(), c = p.getCropBox(); return { m, c }; });
+    pdf.getPages().forEach((p, i) => { const m = meta[i].m; p.setCropBox(m.x, m.y, m.width, m.height); });
+    const full = await pdfjsLib.getDocument({ data: await pdf.save(), isEvalSupported: false }).promise;
+    SFS.pages = []; SFS.full = full; SFS.doc = d;
+    for (let i = 0; i < d.info.length; i++) {
+      $('#busyMsg').textContent = `Measuring page ${i + 1} of ${d.info.length}…`;
+      const pg = await full.getPage(i + 1); const vp = pg.getViewport({ scale: 1 });
+      const s = Math.min(1, 700 / Math.max(vp.width, vp.height)); const tv = pg.getViewport({ scale: s }); const c = cnv(tv.width, tv.height); const x = c.getContext('2d', { willReadFrequently: true }); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: x, viewport: tv }).promise;
+      const box = inkBox(c, s);
+      const toVp = r => { const a = vp.convertToViewportPoint(r.x, r.y), b = vp.convertToViewportPoint(r.x + r.width, r.y + r.height); return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]; };
+      SFS.pages.push({ i, vp, thumb: c, ts: s, W: vp.width, H: vp.height, content: box, crop: toVp(meta[i].c), media: meta[i].m, manual: null });
+    }
+  } catch (e) { console.error(e); toast('Smart fit failed: ' + e.message); return; } finally { unbusy(); }
+  let w = $('#sfit'); if (!w) { w = el('div', '', ''); w.id = 'sfit'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-label', 'Smart fit'); document.body.append(w); }
+  SFS.open = true; w.hidden = false; sfBuild();
+}
+function inkBox(c, s) {
+  const w = c.width, h = c.height, px = c.getContext('2d').getImageData(0, 0, w, h).data; const rows = new Uint32Array(h), cols = new Uint32Array(w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const j = (y * w + x) * 4; if (px[j] * .299 + px[j + 1] * .587 + px[j + 2] * .114 < 220) { rows[y]++; cols[x]++; } }
+  const rmin = Math.max(1, w * .004), cmin = Math.max(1, h * .004); let y0 = 0, y1 = h - 1, x0 = 0, x1 = w - 1;
+  while (y0 < h && rows[y0] < rmin) y0++; while (y1 > y0 && rows[y1] < rmin) y1--; while (x0 < w && cols[x0] < cmin) x0++; while (x1 > x0 && cols[x1] < cmin) x1--;
+  if (y0 >= h || x0 >= w || x1 - x0 < 2 || y1 - y0 < 2) return null;
+  return [x0 / s, y0 / s, (x1 + 1) / s, (y1 + 1) / s];
+}
+function sfClose() { SFS.open = false; SFS.job++; const w = $('#sfit'); if (w) { w.hidden = true; w.innerHTML = ''; } if (SFS.full) { SFS.full.destroy(); SFS.full = null; } }
+function sfScope() { const d = SFS.doc; return SF.scope === 'sel' ? selPages().filter(i => i < SFS.pages.length) : [...d.info.keys()]; }
+const sfOrient = (p, a, b) => { const land = SF.orient === 'landscape' || (SF.orient === 'auto' && p.W > p.H); return land ? [b, a] : [a, b]; };
+// Plan for one page at a target size [w, h] (portrait numbers): window in full-page coordinates, scale, paper added.
+function sfPlace(p, tw, th) {
+  const [w, h] = sfOrient(p, Math.min(tw, th), Math.max(tw, th)); let pad = SF.pad * CU.mm;
+  const c = p.content || [p.W / 2, p.H / 2, p.W / 2, p.H / 2]; // the padding is kept at its real size on the result, so only the content is scaled
+  const s = Math.max(.05, Math.min(1, (w - 2 * pad) / Math.max(c[2] - c[0], 1), (h - 2 * pad) / Math.max(c[3] - c[1], 1))); const ww = w / s, wh = h / s; if (s < 1) pad /= s;
+  const sameAsCrop = Math.abs((p.crop[2] - p.crop[0]) - ww) < 1 && Math.abs((p.crop[3] - p.crop[1]) - wh) < 1 && !p.manual;
+  const axis = (lo, hi, size, full, mode) => {
+    if (size > full) return (full - size) / 2; // bigger than the paper: centre and add paper on both sides
+    let v = mode === 'page' ? (full - size) / 2 : mode === 'start' ? lo - pad : (lo + hi) / 2 - size / 2;
+    v = Math.max(Math.min(v, lo - Math.min(pad, (size - (hi - lo)) / 2)), hi + Math.min(pad, (size - (hi - lo)) / 2) - size); // keep content (and padding if possible) inside
+    return Math.max(0, Math.min(full - size, v));
+  };
+  let x0, y0;
+  if (sameAsCrop) { x0 = p.crop[0]; y0 = p.crop[1]; }
+  else { x0 = axis(c[0], c[2], ww, p.W, SF.place === 'page' ? 'page' : 'mid'); y0 = axis(c[1], c[3], wh, p.H, SF.place === 'page' ? 'page' : SF.place === 'top' ? 'start' : 'mid'); }
+  if (p.manual) { x0 = p.W >= ww ? Math.max(0, Math.min(p.W - ww, x0 + p.manual[0])) : x0; y0 = p.H >= wh ? Math.max(0, Math.min(p.H - wh, y0 + p.manual[1])) : y0; }
+  const cut = !p.content ? 0 : Math.max(0, x0 - c[0]) + Math.max(0, c[2] - x0 - ww) + Math.max(0, y0 - c[1]) + Math.max(0, c[3] - y0 - wh);
+  const paper = Math.max(0, ww - p.W) * wh + Math.max(0, wh - p.H) * ww;
+  return { win: [x0, y0, x0 + ww, y0 + wh], s, paper: paper / (ww * wh), cut, w, h };
+}
+function sfCandidates(idx) {
+  const P = SFS.pages, set = new Map(); const add = (a, b, label) => { const k = `${Math.round(Math.min(a, b))}x${Math.round(Math.max(a, b))}`; if (!set.has(k) && a > 36 && b > 36) set.set(k, [Math.min(a, b), Math.max(a, b), label]); };
+  for (const i of idx) { const p = P[i]; add(p.crop[2] - p.crop[0], p.crop[3] - p.crop[1]); add(p.W, p.H); }
+  const pad = SF.pad * CU.mm * 2; const cont = idx.map(i => P[i].content).filter(Boolean);
+  if (cont.length) { const cw = Math.max(...cont.map(c => Math.min(c[2] - c[0], c[3] - c[1]))) + pad, ch = Math.max(...cont.map(c => Math.max(c[2] - c[0], c[3] - c[1]))) + pad; add(cw, ch, 'Tightest fit around the content'); }
+  for (const k of ['a4', 'letter', 'a5', 'legal']) add(PAPER[k][0], PAPER[k][1]);
+  return [...set.values()];
+}
+function sfCost(idx, tw, th) { let cost = 0; for (const i of idx) { const r = sfPlace(SFS.pages[i], tw, th); cost += (1 - r.s) * 400 + r.paper * 60 + r.cut * .5; } return cost; }
+function sfTarget(idx) {
+  const P = SFS.pages; const k = CU.mm;
+  if (PAPER[SF.target]) return PAPER[SF.target];
+  if (SF.target === 'custom') return [SF.cw * k, SF.ch * k, `${SF.cw} × ${SF.ch} mm`];
+  if (SF.target === 'common') { const cnt = new Map(); for (const i of idx) { const p = P[i]; const a = p.crop[2] - p.crop[0], b = p.crop[3] - p.crop[1]; const key = [Math.round(Math.min(a, b)), Math.round(Math.max(a, b))].join('x'); cnt.set(key, (cnt.get(key) || 0) + 1); } const [a, b] = [...cnt.entries()].sort((x, y) => y[1] - x[1])[0][0].split('x').map(Number); return [a, b, sfName(a, b)]; }
+  if (SF.target === 'smallest') { const v = idx.map(i => { const p = P[i]; const a = p.crop[2] - p.crop[0], b = p.crop[3] - p.crop[1]; return [Math.min(a, b), Math.max(a, b)]; }).sort((x, y) => x[0] * x[1] - y[0] * y[1])[0]; return [v[0], v[1], sfName(v[0], v[1])]; }
+  // smart: the candidate with the least shrinking, then the least added paper, then the least content cut
+  // prefer a real paper size, or one already in the file, when it costs about the same
+  const near = (a, b, c, d) => Math.abs(a - c) < 3 && Math.abs(b - d) < 3;
+  const familiar = (a, b) => Object.values(PAPER).some(p => near(a, b, p[0], p[1])) || idx.some(i => { const p = P[i]; const x = p.crop[2] - p.crop[0], y = p.crop[3] - p.crop[1]; return near(a, b, Math.min(x, y), Math.max(x, y)); });
+  let best = null; for (const [a, b] of sfCandidates(idx)) { const c = sfCost(idx, a, b) + (a * b) / 1e7 - (familiar(a, b) ? 15 : 0); if (!best || c < best[0]) best = [c, a, b]; }
+  return [best[1], best[2], sfName(best[1], best[2])];
+}
+const sfName = (a, b) => { const n = Object.values(PAPER).find(p => Math.abs(p[0] - a) < 3 && Math.abs(p[1] - b) < 3); return n ? n[2] : `${Math.round(a / CU.mm)} × ${Math.round(b / CU.mm)} mm`; };
+function sfBuild() {
+  const w = $('#sfit'); const d = SFS.doc; if (!w || !d) return; const job = ++SFS.job;
+  const opt = (v, l, c) => `<option value="${v}"${c === v ? ' selected' : ''}>${l}</option>`;
+  w.innerHTML = `<header class="org-top"><h2>Smart fit</h2>
+    <div class="sf-ctl">
+      <label class="sf-f"><span>Size</span><select id="sfT" class="inp">${opt('smart', 'Smart: least shrinking', SF.target)}${opt('common', 'Most common size', SF.target)}${opt('smallest', 'Smallest page', SF.target)}${opt('a4', 'A4', SF.target)}${opt('letter', 'Letter', SF.target)}${opt('a5', 'A5', SF.target)}${opt('legal', 'Legal', SF.target)}${opt('custom', 'Custom…', SF.target)}</select></label>
+      ${SF.target === 'custom' ? `<label class="sf-f"><span>W mm</span><input id="sfW" class="inp" type="number" min="20" value="${SF.cw}"></label><label class="sf-f"><span>H mm</span><input id="sfH" class="inp" type="number" min="20" value="${SF.ch}"></label>` : ''}
+      <label class="sf-f"><span>Orientation</span><select id="sfO" class="inp">${opt('auto', 'Match each page', SF.orient)}${opt('portrait', 'Portrait', SF.orient)}${opt('landscape', 'Landscape', SF.orient)}</select></label>
+      <label class="sf-f"><span>Position</span><select id="sfP" class="inp">${opt('content', 'Centre the content', SF.place)}${opt('top', 'Content at the top', SF.place)}${opt('page', 'Centre of the page', SF.place)}</select></label>
+      <label class="sf-f"><span>Keep around content</span><input id="sfPad" class="inp" type="number" min="0" step="1" value="${SF.pad}" style="width:70px"></label>
+      <label class="sf-f"><span>Pages</span><select id="sfS" class="inp">${opt('all', `All ${d.info.length}`, SF.scope)}${opt('sel', `Selected (${selPages().length})`, SF.scope)}</select></label>
+    </div>
+    <div class="org-end"><button class="btn" id="sfReset">Reset positions</button><button class="btn" id="sfX">Cancel</button><button class="btn primary" id="sfGo">Apply</button></div></header>
+    <p class="sf-sum" id="sfSum"></p>
+    <div class="org-grid" id="sfGrid" style="--ow:210px"></div>
+    <p class="org-hint">The bright area is what will show. Drag it to move the crop on a page. Nothing is deleted: the full page stays in the file, and you can open Smart fit or Remove crop again at any time.</p>`;
+  const G = $('#sfGrid', w); const idx = sfScope(); const [tw, th, name] = sfTarget(idx);
+  const plans = new Map(idx.map(i => [i, sfPlace(SFS.pages[i], tw, th)]));
+  const shr = [...plans.values()].filter(r => r.s < .995), pap = [...plans.values()].filter(r => r.paper > .002), cut = [...plans.values()].filter(r => r.cut > 2);
+  $('#sfSum', w).textContent = idx.length ? `Every page becomes ${name}. ${plural(idx.length - shr.length - pap.length, 'page')} only cropped${pap.length ? `, ${plural(pap.length, 'page')} get extra paper` : ''}${shr.length ? `, ${plural(shr.length, 'page')} shrunk (smallest ${Math.round(Math.min(...shr.map(r => r.s)) * 100)}%)` : ', nothing shrunk'}${cut.length ? `. ${plural(cut.length, 'page')} would lose some content at the edges: drag to adjust` : ''}.` : 'No pages selected.';
+  SFS.plans = plans; SFS.target = [tw, th, name];
+  for (const i of idx) {
+    const p = SFS.pages[i]; const r = plans.get(i);
+    const tag = r.s < .995 ? `shrunk ${Math.round(r.s * 100)}%` : r.paper > .002 ? 'paper added' : r.cut > 2 ? 'check edges' : 'cropped';
+    const cell = el('div', 'org-cell sf-cell', `<div class="org-pg sf-pg"><canvas></canvas></div><span class="n">${i + 1} · <span class="sf-tag ${r.s < .995 || r.cut > 2 ? 'warn' : ''}">${tag}</span></span>`); cell.dataset.i = i;
+    const cv = $('canvas', cell); sfDraw(cv, p, r); G.append(cell);
+    let drag = null;
+    cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, m: p.manual ? [...p.manual] : [0, 0] }; };
+    cv.onpointermove = e => { if (!drag) return; const k = p.W / cv.getBoundingClientRect().width; p.manual = [drag.m[0] + (e.clientX - drag.x) * k, drag.m[1] + (e.clientY - drag.y) * k]; const nr = sfPlace(p, tw, th); plans.set(i, nr); sfDraw(cv, p, nr); };
+    cv.onpointerup = () => { drag = null; };
+  }
+  const re = () => { pref.set('sfit', SF); sfBuild(); };
+  $('#sfT', w).onchange = e => { SF.target = e.target.value; re(); };
+  for (const [id, k] of [['sfW', 'cw'], ['sfH', 'ch']]) { const n = $('#' + id, w); if (n) n.onchange = () => { SF[k] = Math.max(20, +n.value || 20); re(); }; }
+  $('#sfO', w).onchange = e => { SF.orient = e.target.value; re(); };
+  $('#sfP', w).onchange = e => { SF.place = e.target.value; SFS.pages.forEach(p => p.manual = null); re(); };
+  $('#sfPad', w).onchange = e => { SF.pad = Math.max(0, +e.target.value || 0); re(); };
+  $('#sfS', w).onchange = e => { SF.scope = e.target.value; re(); };
+  $('#sfReset', w).onclick = () => { SFS.pages.forEach(p => { p.manual = null; p.crop = [0, 0, p.W, p.H]; }); sfBuild(); };
+  $('#sfX', w).onclick = sfClose;
+  $('#sfGo', w).onclick = sfApply;
+}
+function sfDraw(cv, p, r) {
+  const dpr2 = Math.min(2, devicePixelRatio || 1); const [x0, y0, x1, y1] = r.win;
+  const L = Math.min(0, x0), T = Math.min(0, y0), R = Math.max(p.W, x1), B = Math.max(p.H, y1); // include added paper
+  const k = 210 / Math.max(R - L, B - T); cv.width = (R - L) * k * dpr2; cv.height = (B - T) * k * dpr2; cv.style.aspectRatio = `${R - L} / ${B - T}`;
+  const x = cv.getContext('2d'); x.setTransform(k * dpr2, 0, 0, k * dpr2, -L * k * dpr2, -T * k * dpr2);
+  x.fillStyle = '#fff'; x.fillRect(x0, y0, x1 - x0, y1 - y0); x.drawImage(p.thumb, 0, 0, p.W, p.H);
+  x.fillStyle = 'rgba(18,20,26,.5)'; x.beginPath(); x.rect(L, T, R - L, B - T); x.rect(x0, y0, x1 - x0, y1 - y0); x.fill('evenodd');
+  if (r.paper > .002) { x.strokeStyle = 'rgba(0,0,0,.25)'; x.lineWidth = 1 / k; x.setLineDash([3 / k, 3 / k]); x.strokeRect(0, 0, p.W, p.H); }
+  x.setLineDash([]); x.strokeStyle = '#2b5cff'; x.lineWidth = 2 / k; x.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  if (p.content) { x.strokeStyle = 'rgba(255,140,0,.7)'; x.lineWidth = 1 / k; x.setLineDash([2 / k, 2 / k]); x.strokeRect(p.content[0], p.content[1], p.content[2] - p.content[0], p.content[3] - p.content[1]); }
+}
+async function sfApply() {
+  const d = SFS.doc; const plans = [...SFS.plans.entries()]; const pages = SFS.pages; const name = SFS.target[2];
+  const todo = plans.filter(([i, r]) => { const p = pages[i]; return r.s < .995 || r.paper > .002 || r.win.some((v, k) => Math.abs(v - p.crop[k]) > .5); });
+  sfClose(); if (cur() !== d) activate(S.docs.indexOf(d));
+  if (!todo.length) { toast(`Those pages are already ${name}.`); return; }
+  await editBytes(`Smart fit: ${plural(todo.length, 'page')} now ${name}`, pdf => {
+    for (const [i, r] of todo) {
+      const p = pages[i]; const pg = pdf.getPage(i); const M = pg.getMediaBox();
+      const a = p.vp.convertToPdfPoint(r.win[0], r.win[1]), b = p.vp.convertToPdfPoint(r.win[2], r.win[3]);
+      const R = { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), x2: Math.max(a[0], b[0]), y2: Math.max(a[1], b[1]) };
+      const inside = R.x >= M.x - .01 && R.y >= M.y - .01 && R.x2 <= M.x + M.width + .01 && R.y2 <= M.y + M.height + .01;
+      if (r.s >= .995 && inside) { pg.setCropBox(R.x, R.y, R.x2 - R.x, R.y2 - R.y); continue; }
+      const s = r.s >= .995 ? 1 : r.s;
+      placeContent(pdf, d, i, M, s, M.x * s, M.y * s, 1, 1); // scales about the origin and clips to the old paper
+      const U = { x: Math.min(M.x, R.x) * s, y: Math.min(M.y, R.y) * s, x2: Math.max(M.x + M.width, R.x2) * s, y2: Math.max(M.y + M.height, R.y2) * s };
+      pg.setMediaBox(U.x, U.y, U.x2 - U.x, U.y2 - U.y);
+      for (const f of ['setCropBox', 'setTrimBox', 'setBleedBox', 'setArtBox']) pg[f](R.x * s, R.y * s, (R.x2 - R.x) * s, (R.y2 - R.y) * s);
+    }
+  }, 'Fitting pages…');
 }
 
 /* ================= compression and combine ================= */
