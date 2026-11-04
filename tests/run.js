@@ -222,10 +222,10 @@ TESTS.bigfile_edit = async () => {
     const r = await p.evaluate(async kind => {
       const a = S.docs.find(x => /report/.test(x.name)); const src = kind === 'table' ? a.bytes.slice() : await (await PDFDocument.load(a.bytes)).save({ useObjectStreams: true });
       window.QUIRE_BIG_FILE = 1; window.__dbg = src; const d = await openBytes(src, kind + '.pdf'); activate(S.docs.indexOf(d));
-      const n0 = d.info.length; d.sel = new Set([0]); await rotatePages(90); d.sel = new Set([1]); await duplicatePages(); await movePage(0, 3);
+      const n0 = d.info.length; const warn = console.warn; let lazy = true; console.warn = (...a) => { if (/full parse/.test(a[0])) lazy = false; warn(...a); }; d.sel = new Set([0]); await rotatePages(90); console.warn = warn; d.sel = new Set([1]); await duplicatePages(); await movePage(0, 3);
       const after = d.bytes; const same = after.length > src.length && src.every((v, i) => after[i] === v);
       const pages = d.info.length; let undone = true; for (let k = 0; k < 3; k++) { await undo(); undone = undone && d.bytes.buffer === after.buffer; } undone = undone && d.info.length === n0 && d.bytes.length === src.length;
-      window.QUIRE_BIG_FILE = 0; return { same, pages, n0, undone, grew: after.length - src.length, b64: btoa(Array.from(after, c => String.fromCharCode(c)).join('')) };
+      window.QUIRE_BIG_FILE = 0; return { lazy, same, pages, n0, undone, grew: after.length - src.length, b64: btoa(Array.from(after, c => String.fromCharCode(c)).join('')) };
     }, kind);
     const file = out(`incremental-${kind}.pdf`); fs.writeFileSync(file, Buffer.from(r.b64, 'base64'));
     let q = ''; try { q = execFileSync('python3', ['-c', 'import sys;from pyhanko.pdf_utils.reader import PdfFileReader as R;r=R(open(sys.argv[1],"rb"),strict=True);print("ok",len(r.root["/Pages"]["/Kids"]),r.xrefs.total_revisions)', file], { stdio: ['ignore', 'pipe', 'pipe'] }).toString(); } catch (e) { q = String(e.stderr || e).slice(-300); }
@@ -234,6 +234,7 @@ TESTS.bigfile_edit = async () => {
     check(`${kind}: earlier bytes untouched, ${r.grew} bytes appended`, r.same && r.grew < 20000, String(r.grew));
     check(`${kind}: pyHanko (strict) and poppler read it with no errors`, /^ok/.test(q) && !perr.trim(), q.trim() + ' ' + perr.slice(0, 200));
     check(`${kind}: one page more, rotated page moved to third place`, r.pages === r.n0 + 1 && rots[2] === 90 && rots.filter(x => x).length === 1, `${r.pages} pages, rot ${rots}`);
+    check(`${kind}: rotation read only the page objects (no full parse)`, r.lazy);
     check(`${kind}: text still there`, /committee/.test(execFileSync('pdftotext', [file, '-']).toString()));
     check(`${kind}: undo shares the same memory`, r.undone);
   }
