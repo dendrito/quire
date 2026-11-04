@@ -43,5 +43,19 @@ def pptx(path):
             'text': '\n'.join(sh.text_frame.text for s in sl for sh in s.shapes if sh.has_text_frame)}
 
 
+def tracked(path):
+    # Track-changes facts read straight from the XML: python-docx ignores w:ins / w:del
+    import zipfile, re
+    x = zipfile.ZipFile(path).read('word/document.xml').decode('utf8')
+    st = zipfile.ZipFile(path).read('word/settings.xml').decode('utf8')
+    ins = ' '.join(re.sub(r'<[^>]+>', '', m).strip() for m in re.findall(r'<w:ins [^>]*>(.*?)</w:ins>', x))
+    dele = ' '.join(re.sub(r'<[^>]+>', '', m).strip() for m in re.findall(r'<w:del [^>]*>(.*?)</w:del>', x))
+    paras = re.findall(r'<w:p>(.*?)</w:p>', x)
+    text = '\n'.join(re.sub(r'<[^>]+>', '', re.sub(r'<w:del .*?</w:del>', '', q)) for q in paras)
+    return {'ins': ins, 'del': dele, 'paras': len(paras), 'tracking': '<w:trackRevisions/>' in st, 'text': text}
+
+
+if sys.argv[1] == 'tracked':
+    print(json.dumps(tracked(sys.argv[2]), ensure_ascii=False)); sys.exit()
 f = sys.argv[1]
 print(json.dumps(docx(f) if f.endswith('.docx') else pptx(f) if f.endswith('.pptx') else xlsx(f), ensure_ascii=False))

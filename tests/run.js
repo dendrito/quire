@@ -164,6 +164,17 @@ TESTS.compare = async () => {
   const p = await H.open(); await H.load(p, fx('report.pdf'));
   const r = await p.evaluate(async () => { const a = cur(); const b = await PDFDocument.load(a.bytes); b.getPage(0).drawText('Extra line added in v2', { x: 90, y: 60, size: 11 }); const d2 = await openBytes(await b.save(), 'v2.pdf'); CMP.src = a.bytes; CMP.name = 'report.pdf'; CMP.mode = 'text'; const R = await runCompare(d2); return { changes: R.H.length, added: R.added, removed: R.removed }; });
   check('finds the one added line and nothing else', r.changes === 1 && r.added === 5 && r.removed === 0, JSON.stringify(r));
+  // Word with tracked changes, both ways round: the added line is a tracked insertion, then (swapped) a tracked deletion
+  for (const [name, swap] of [['tracked-ins.docx', false], ['tracked-del.docx', true]]) {
+    const file = out(name);
+    fs.writeFileSync(file, await b64(p, async swap => { const a = S.docs.find(x => /report/.test(x.name)); const b = await PDFDocument.load(a.bytes); b.getPage(0).drawText('Extra line added in v2', { x: 90, y: 60, size: 11 }); const v2 = await b.save();
+      const d2 = await openBytes(swap ? a.bytes : v2, 'new.pdf'); CMP.src = swap ? v2 : a.bytes; CMP.name = 'old.pdf'; CMP.mode = 'text'; const R = await runCompare(d2); return cmpDocx(d2, R); }, swap));
+    const X = JSON.parse(execFileSync('python3', [path.join(__dirname, 'office_facts.py'), 'tracked', file]).toString());
+    check(`${name}: change tracked as ${swap ? 'a deletion' : 'an insertion'}`, swap ? X.del === 'Extra line added in v2' && !X.ins : X.ins === 'Extra line added in v2' && !X.del, JSON.stringify(X).slice(0, 200));
+    check(`${name}: rest of the text untouched, in paragraphs`, /committee reviewed the budget/.test(X.text) && X.paras >= 5, `${X.paras} paragraphs`);
+    let ok = false; try { execFileSync('soffice', ['--headless', '--convert-to', 'txt', '--outdir', OUT, file], { timeout: 120000, stdio: 'ignore' }); ok = fs.existsSync(file.replace(/docx$/, 'txt')); } catch {}
+    check(`${name}: LibreOffice opens it`, ok);
+  }
 };
 
 // --- PowerPoint: a born-digital report and an OCR'd scan; slides open in python-pptx and LibreOffice, text is editable

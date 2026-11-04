@@ -4038,7 +4038,7 @@ async function runCompare(d) {
       let ops = myers(A.map(x => key(x.w)), B.map(x => key(x.w)));
       if (!ops) throw new Error('The documents are too different to line up word by word. Try visual compare.');
       const H = cmpHunks(A, B, ops).filter(h => !CMP.loose || h.oldText.replace(/[^\p{L}\p{N}]/gu, '') !== h.newText.replace(/[^\p{L}\p{N}]/gu, ''));
-      return { mode: 'text', A, B, H, added: H.reduce((s, h) => s + h.ins.length, 0), removed: H.reduce((s, h) => s + h.del.length, 0), pagesA: other.numPages, pagesB: mine.numPages };
+      return { mode: 'text', A, B, H, ops, added: H.reduce((s, h) => s + h.ins.length, 0), removed: H.reduce((s, h) => s + h.del.length, 0), pagesA: other.numPages, pagesB: mine.numPages };
     }
     const n = Math.min(other.numPages, mine.numPages); const P = [];
     for (let p = 0; p < n; p++) {
@@ -4088,7 +4088,7 @@ TASKS.compare = function (P, d) {
   if (R && R.mode === 'text') {
     res = `<p class="small" style="margin:0"><b>${R.H.length ? plural(R.H.length, 'change') : 'No differences in the text'}</b>${R.H.length ? ` · ${plural(R.added, 'word')} added, ${plural(R.removed, 'word')} removed` : ''}${R.pagesA !== R.pagesB ? ` · ${R.pagesA} pages before, ${R.pagesB} now` : ''}</p>
       <ol class="results cm-list cmp-list">${R.H.slice(0, 400).map((h, n) => `<li class="cmp-li ${h.state ? 'cmp-st-' + h.state : ''}"><span class="cmp-acts"><button data-acc="${n}" title="Accept this change" aria-label="Accept">✓</button><button data-rej="${n}" title="Reject this change" aria-label="Reject">✕</button></span><button data-ch="${n}" class="${n === CMP.sel ? 'on' : ''}"><span class="muted">p.${h.page + 1}</span> <b class="cmp-${h.kind}">${h.kind}</b> ${h.oldText ? `<del>${esc(h.oldText.slice(0, 90))}</del> ` : ''}${h.newText ? `<ins>${esc(h.newText.slice(0, 90))}</ins>` : ''}</button></li>`).join('')}${R.H.length > 400 ? `<li class="muted">and ${R.H.length - 400} more</li>` : ''}</ol>
-      ${R.H.length ? `<p class="muted small" style="margin:0">${R.H.filter(h => h.state === 'acc').length} accepted · ${R.H.filter(h => h.state === 'rej').length} rejected · ${R.H.filter(h => !h.state).length} to review</p><div class="row"><button class="btn sm primary" id="cpMark">Mark changes on this document</button><button class="btn sm" id="cpRep">Save report</button><button class="btn sm" id="cpCsv">Change list (CSV)</button></div>` : ''}`;
+      ${R.H.length ? `<p class="muted small" style="margin:0">${R.H.filter(h => h.state === 'acc').length} accepted · ${R.H.filter(h => h.state === 'rej').length} rejected · ${R.H.filter(h => !h.state).length} to review</p><div class="row"><button class="btn sm primary" id="cpMark">Mark changes on this document</button><button class="btn sm" id="cpRep">Save report</button><button class="btn sm" id="cpCsv">Change list (CSV)</button><button class="btn sm" id="cpDocx" title="Opens in Word with Track Changes: accept or reject each change there">Word with tracked changes</button></div>` : ''}`;
   } else if (R) {
     const diffP = R.P.map((p, k) => [p, k]).filter(([p]) => p.regions.length);
     res = `<p class="small" style="margin:0"><b>${diffP.length ? `${plural(diffP.length, 'page')} look different` : 'The pages look the same'}</b>${R.pagesA !== R.pagesB ? ` · ${R.pagesA} pages before, ${R.pagesB} now (only the first ${Math.min(R.pagesA, R.pagesB)} compared)` : ''}</p>
@@ -4113,8 +4113,52 @@ TASKS.compare = function (P, d) {
   const mk = $('#cpMark', P); if (mk) mk.onclick = () => cmpMark(d, R);
   $$('[data-acc],[data-rej]', P).forEach(b => b.onclick = () => { const h = R.H[+(b.dataset.acc ?? b.dataset.rej)]; const st = b.dataset.acc != null ? 'acc' : 'rej'; h.state = h.state === st ? '' : st; TASKS.compare(P, d); });
   const cv = $('#cpCsv', P); if (cv) cv.onclick = () => { const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`; const t = ['Page,Change,Was,Now,Decision', ...R.H.map(h => [h.page + 1, h.kind, h.oldText, h.newText, h.state === 'acc' ? 'accepted' : h.state === 'rej' ? 'rejected' : ''].map(q).join(','))].join('\r\n'); saveFile(`${baseName(d)}-changes.csv`, new Blob(['\ufeff' + t], { type: 'text/csv' })); };
+  const dx = $('#cpDocx', P); if (dx) dx.onclick = async () => { busy('Writing the Word file…'); try { await saveFile(`${baseName(d)}-tracked.docx`, await cmpDocx(d, R)); } catch (e) { console.error(e); toast(e.message || String(e)); } finally { unbusy(); } };
   const rp = $('#cpRep', P); if (rp) rp.onclick = () => { const t = `Compared "${d.name}" (newer) with "${CMP.name}"\n${R.H.length} changes, ${R.added} words added, ${R.removed} removed\n\n` + R.H.map(h => `Page ${h.page + 1} · ${h.kind}${h.state ? (h.state === 'acc' ? ' · accepted' : ' · rejected') : ''}\n${h.oldText ? '  was: ' + h.oldText + '\n' : ''}${h.newText ? '  now: ' + h.newText + '\n' : ''}`).join('\n'); saveFile(`${baseName(d)}-compare.txt`, new Blob([t], { type: 'text/plain' })); };
 };
+// Word file of the newer text with every unreviewed change as a tracked insertion or deletion (w:ins / w:del).
+// Changes accepted in Quire are written as plain new text, rejected ones as plain old text.
+async function cmpDocx(d, R, author = 'Quire Compare') {
+  await loadScript(JSZIP_URL); const x = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const hunkOf = new Map(); R.H.forEach(h => { for (const k of h.del) hunkOf.set('-' + k, h); for (const k of h.ins) hunkOf.set('+' + k, h); });
+  // the words in reading order, each with how it is written: '=' plain, '+' inserted, '-' deleted
+  const seq = [];
+  for (const o of R.ops) {
+    if (o[0] === '=') { seq.push({ t: '=', w: R.B[o[2]] }); continue; }
+    const h = hunkOf.get(o[0] + o[1]); const w = o[0] === '-' ? R.A[o[1]] : R.B[o[1]];
+    if (!h) { if (o[0] === '+') seq.push({ t: '=', w }); continue; } // left out as a capitals/punctuation-only change: keep the new wording
+    if (h.state === 'acc') { if (o[0] === '+') seq.push({ t: '=', w }); }
+    else if (h.state === 'rej') { if (o[0] === '-') seq.push({ t: '=', w }); }
+    else seq.push({ t: o[0], w });
+  }
+  // paragraphs follow the newer document's lines: a new paragraph at a page break or a gap wider than a line and a half
+  const paras = []; let cur = [], prev = null, lineH = 12;
+  for (const it of seq) {
+    const w = it.w; let brk = false;
+    if (it.t !== '-' && prev && w.y1 != null && prev.y1 != null) {
+      if (w.p !== prev.p) brk = true;
+      else { const dy = prev.y1 - w.y1; const h = Math.max(4, w.y2 - w.y1); if (Math.abs(dy) > h * .5) { if (dy > 0 && dy < h * 3) lineH = lineH * .7 + dy * .3; if (dy > lineH * 1.5 || dy < -h * 1.5) brk = true; } }
+    } else if (it.t !== '-' && prev && w.p !== prev.p) brk = true;
+    if (brk && cur.length) { paras.push(cur); cur = []; }
+    cur.push(it); if (it.t !== '-') prev = w;
+  }
+  if (cur.length) paras.push(cur);
+  let id = 1; const date = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const run = (t, txt) => t === '-' ? `<w:del w:id="${id++}" w:author="${x(author)}" w:date="${date}"><w:r><w:delText xml:space="preserve">${x(txt)}</w:delText></w:r></w:del>`
+    : t === '+' ? `<w:ins w:id="${id++}" w:author="${x(author)}" w:date="${date}"><w:r><w:t xml:space="preserve">${x(txt)}</w:t></w:r></w:ins>` : `<w:r><w:t xml:space="preserve">${x(txt)}</w:t></w:r>`;
+  const body = paras.map(P => { const runs = []; let t = null, buf = '';
+    P.forEach((it, k) => { const txt = (k ? ' ' : '') + it.w.w; if (it.t === t) buf += txt; else { if (t) runs.push(run(t, buf)); t = it.t; buf = txt; } });
+    if (t) runs.push(run(t, buf)); return `<w:p>${runs.join('')}</w:p>`; }).join('');
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"', head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const z = new JSZip();
+  z.file('[Content_Types].xml', `${head}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`);
+  z.file('_rels/.rels', `${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`);
+  z.file('word/_rels/document.xml.rels', `${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>`);
+  z.file('word/settings.xml', `${head}<w:settings ${W}><w:trackRevisions/></w:settings>`);
+  z.file('docProps/core.xml', `${head}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${x(`Changes from ${CMP.name} to ${d.name}`)}</dc:title><dc:creator>Quire</dc:creator></cp:coreProperties>`);
+  z.file('word/document.xml', `${head}<w:document ${W}><w:body>${body || '<w:p/>'}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  return z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
 function cmpBoxes(R, h) {
   const by = new Map();
   for (const k of h.ins) { const w = R.B[k]; if (w.x1 == null) continue; const key = w.p + ':' + Math.round(w.y1); const L = by.get(key); if (L && w.x1 - L.x2 < 12) { L.x2 = Math.max(L.x2, w.x2); L.y2 = Math.max(L.y2, w.y2); L.y1 = Math.min(L.y1, w.y1); } else by.set(key + ':' + w.x1, { p: w.p, x1: w.x1, x2: w.x2, y1: w.y1, y2: w.y2 }), by.set(key, by.get(key + ':' + w.x1)); }
