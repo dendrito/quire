@@ -7244,22 +7244,24 @@ async function sigSign(d, id, place, opts = {}) {
   const w = rect[2] - rect[0], h = rect[3] - rect[1]; let ap = null;
   if (w > 1 && h > 1) {
     const rot = ((d.info[place.page].rot % 360) + 360) % 360; const vw = rot % 180 ? h : w, vh = rot % 180 ? w : h;
-    const font = await pdf.embedFont(StandardFonts.Helvetica); const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
-    let img = null, iw = 0; if (opts.image && opts.image.src) { img = await pdf.embedPng(dataUrlBytes(opts.image.src)); }
-    await pdf.flush();
-    const pad = Math.min(4, vh * .06); let ops = '';
-    if (img) { const ar = img.width / img.height; let ih = vh - 2 * pad, iw2 = ih * ar; const maxW = place.kind === 'mark' ? vw - 2 * pad : vw * .45; if (iw2 > maxW) { iw2 = maxW; ih = iw2 / ar; } iw = iw2 + pad; ops += `q ${iw2.toFixed(2)} 0 0 ${ih.toFixed(2)} ${pad.toFixed(2)} ${((vh - ih) / 2).toFixed(2)} cm /Im1 Do Q\n`; }
-    if (place.kind !== 'mark' || !img) {
+    // drawn on a canvas and embedded as one image: no fonts, so it also suits PDF/A files
+    const K = 4; const c = el('canvas'); c.width = Math.max(1, Math.round(vw * K)); c.height = Math.max(1, Math.round(vh * K)); const g = c.getContext('2d');
+    const pad = Math.min(4, vh * .06) * K; let iw = 0;
+    if (opts.image && opts.image.src) { const im = await loadImg(opts.image.src); const ar = im.naturalWidth / im.naturalHeight; let ih = c.height - 2 * pad, iw2 = ih * ar; const maxW = place.kind === 'mark' ? c.width - 2 * pad : c.width * .45; if (iw2 > maxW) { iw2 = maxW; ih = iw2 / ar; } g.drawImage(im, pad, (c.height - ih) / 2, iw2, ih); iw = iw2 + pad; }
+    if (place.kind !== 'mark' || !opts.image) {
       const tz = now.getTimezoneOffset(), z = (tz > 0 ? '-' : '+') + String(Math.floor(Math.abs(tz) / 60)).padStart(2, '0') + ':' + String(Math.abs(tz) % 60).padStart(2, '0');
       const dt = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${now.toTimeString().slice(0, 8)} ${z}`;
-      const lines = [[fontB, 'Digitally signed by ' + nm.cn], [font, 'Date: ' + dt]]; if (opts.reason) lines.push([font, 'Reason: ' + opts.reason]); if (opts.location) lines.push([font, 'Location: ' + opts.location]);
-      const tw = vw - iw - 2 * pad; let size = Math.min(10, (vh - 2 * pad) / (lines.length * 1.2));
-      for (const [fn, s] of lines) size = Math.min(size, tw / Math.max(1, fn.widthOfTextAtSize(safe(fn, s), 1)));
-      size = Math.max(3, size); let y = vh - pad - size;
-      for (const [fn, s] of lines) { ops += `BT /${fn === font ? 'F1' : 'F2'} ${size.toFixed(2)} Tf 0.1 0.1 0.35 rg ${(iw + pad).toFixed(2)} ${y.toFixed(2)} Td ${fn.encodeText(safe(fn, s)).toString()} Tj ET\n`; y -= size * 1.2; }
+      const lines = [[1, 'Digitally signed by ' + nm.cn], [0, 'Date: ' + dt]]; if (opts.reason) lines.push([0, 'Reason: ' + opts.reason]); if (opts.location) lines.push([0, 'Location: ' + opts.location]);
+      const fnt = (b, s) => `${b ? '600 ' : ''}${s}px system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif`;
+      const tw = c.width - iw - 2 * pad; let size = Math.min(10 * K, (c.height - 2 * pad) / (lines.length * 1.2));
+      for (const [b, s] of lines) { g.font = fnt(b, 100); size = Math.min(size, tw / Math.max(1, g.measureText(s).width / 100)); }
+      g.fillStyle = '#1a1a59'; g.textBaseline = 'top'; let y = pad;
+      for (const [b, s] of lines) { g.font = fnt(b, size); g.fillText(s, iw + pad, y); y += size * 1.2; }
     }
+    const png = await pdf.embedPng(await canvasBytes(c, 'image/png')); await pdf.flush();
+    const ops = `q ${vw.toFixed(2)} 0 0 ${vh.toFixed(2)} 0 0 cm /Im1 Do Q\n`;
     const mtx = rot === 90 ? [0, 1, -1, 0, vh, 0] : rot === 180 ? [-1, 0, 0, -1, vw, vh] : rot === 270 ? [0, -1, 1, 0, 0, vw] : [1, 0, 0, 1, 0, 0];
-    const res = { Font: { F1: font.ref, F2: fontB.ref } }; if (img) res.XObject = { Im1: img.ref };
+    const res = { XObject: { Im1: png.ref } };
     ap = ctx.register(ctx.flateStream(ops, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, vw, vh], Matrix: mtx, Resources: res }));
   }
   // field and widget
@@ -7478,6 +7480,260 @@ async function sigIdsDialog() {
 // One ribbon tab for everything about trust: signatures, passwords, hidden data, redaction.
 RIB.protect = { label: 'Protect', items: ['@certsign', '@sigs', '|', '@protect', '@unlock', '@sanitize', '|', '@redactApply'] };
 RIB.tools.items = RIB.tools.items.filter(x => !['@protect', '@unlock', '@sanitize', '@redactApply'].includes(x)).filter((x, i, a) => !(x === '|' && (i === 0 || a[i - 1] === '|' || i === a.length - 1)));
+
+/* ================= PDF/A-2b: archive copy with a preflight report ================= */
+// Converts to PDF/A-2b (ISO 19005-2, level B: looks the same forever). Fixes what can be fixed in place: XMP in sync with
+// the Info dictionary (keeping Calibre/ISBN fields, declared as PDF/A extension schemas), an sRGB output intent, no scripts,
+// attachments or forbidden actions, printable annotations with appearances, no LZW, transfer functions or PostScript.
+// Pages that cannot comply as they are (fonts not inside the file, CMYK and RGB mixed) are redrawn as an image with
+// the page's text kept as invisible, searchable text. Checked with veraPDF.
+Object.assign(IC, { pdfa: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 15l3-7 3 7M10.2 12.5h3.6"/>' });
+Object.assign(ACTS, { pdfa: ['Save as PDF/A (archive)', 'pdfa', () => pdfaDialog()] });
+Object.assign(RLBL, { pdfa: 'PDF/A' });
+Object.assign(CMD_KW, { pdfa: 'pdf/a archive archival iso 19005 long term preservation preflight validate standard' });
+RIB.protect.items.push('|', '@pdfa');
+
+// A small sRGB IEC61966-2.1 ICC v2 profile, built here so nothing is downloaded.
+function pdfaSrgbIcc() {
+  const tags = []; const enc = s => new TextEncoder().encode(s);
+  const u32 = (a, o, v) => { a[o] = v >>> 24 & 255; a[o + 1] = v >>> 16 & 255; a[o + 2] = v >>> 8 & 255; a[o + 3] = v & 255; };
+  const s15 = v => Math.round(v * 65536) | 0;
+  const xyz = (x, y, z) => { const a = new Uint8Array(20); a.set(enc('XYZ '), 0); u32(a, 8, s15(x)); u32(a, 12, s15(y)); u32(a, 16, s15(z)); return a; };
+  const desc = s => { const a = new Uint8Array(12 + s.length + 1 + 8 + 3 + 67); a.set(enc('desc'), 0); u32(a, 8, s.length + 1); a.set(enc(s), 12); return a; };
+  const text = s => { const a = new Uint8Array(8 + s.length + 1); a.set(enc('text'), 0); a.set(enc(s), 8); return a; };
+  const N = 1024; const curv = new Uint8Array(12 + 2 * N); curv.set(enc('curv'), 0); u32(curv, 8, N);
+  for (let i = 0; i < N; i++) { const x = i / (N - 1); const y = x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); const v = Math.round(y * 65535); curv[12 + 2 * i] = v >> 8; curv[13 + 2 * i] = v & 255; }
+  tags.push(['desc', desc('sRGB IEC61966-2.1')], ['cprt', text('No copyright, use freely')], ['wtpt', xyz(0.9642, 1, 0.8249)],
+    ['rXYZ', xyz(0.4361, 0.2225, 0.0139)], ['gXYZ', xyz(0.3851, 0.7169, 0.0971)], ['bXYZ', xyz(0.1431, 0.0606, 0.7141)], ['rTRC', curv], ['gTRC', curv], ['bTRC', curv]);
+  const pad4 = n => (n + 3) & ~3; let off = 128 + 4 + 12 * tags.length; const place = new Map(); const blobs = [];
+  for (const [, data] of tags) if (!place.has(data)) { place.set(data, off); blobs.push([off, data]); off = pad4(off + data.length); }
+  const out = new Uint8Array(off); u32(out, 0, off); out.set(enc('lcms'), 4); u32(out, 8, 0x02100000); out.set(enc('mntrRGB XYZ '), 12);
+  const now = new Date(); [now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()].forEach((v, i) => { out[24 + 2 * i] = v >> 8; out[25 + 2 * i] = v & 255; });
+  out.set(enc('acsp'), 36); out.set(enc('APPL'), 40); u32(out, 64, 0); u32(out, 68, s15(0.9642)); u32(out, 72, s15(1)); u32(out, 76, s15(0.8249)); out.set(enc('lcms'), 80);
+  u32(out, 128, tags.length); tags.forEach(([sig, data], i) => { out.set(enc(sig), 132 + 12 * i); u32(out, 136 + 12 * i, place.get(data)); u32(out, 140 + 12 * i, data.length); });
+  for (const [o, data] of blobs) out.set(data, o);
+  return out;
+}
+
+// ---- walking every resource dictionary a page uses ----
+function pdfaWalk(pdf, page, visit) {
+  const L = PDFLib, N = n => L.PDFName.of(n); const seen = new Set();
+  const res = (R, where) => {
+    R = R instanceof L.PDFRef ? pdf.context.lookup(R) : R; if (!(R instanceof L.PDFDict)) return;
+    const key = R; if (seen.has(key)) return; seen.add(key); visit({ kind: 'res', dict: R, where });
+    const sub = k => { const D = R.lookup(N(k)); return D instanceof L.PDFDict ? D.entries().map(([n, v]) => [n, v, pdf.context.lookup(v)]) : []; };
+    for (const [, ref, F] of sub('Font')) if (F instanceof L.PDFDict) { visit({ kind: 'font', dict: F, ref, where }); const r3 = F.lookup(N('Resources')); if (r3) res(r3, where); }
+    for (const [name, ref, X] of sub('XObject')) { if (!(X instanceof L.PDFRawStream || X instanceof L.PDFStream) || seen.has(X)) continue; seen.add(X); visit({ kind: 'xobject', stream: X, ref, name, parent: R, where }); if (String(X.dict.get(N('Subtype'))) === '/Form') { visit({ kind: 'content', stream: X, where }); const r2 = X.dict.lookup(N('Resources')); if (r2) res(r2, where); } }
+    for (const [, , G] of sub('ExtGState')) if (G instanceof L.PDFDict) { visit({ kind: 'gs', dict: G, where }); const sm = G.lookup(N('SMask')); if (sm instanceof L.PDFDict) { const g = sm.lookup(N('G')); if (g && g.dict) { visit({ kind: 'content', stream: g, where }); const r4 = g.dict.lookup(N('Resources')); if (r4) res(r4, where); } } }
+    for (const [, , Pt] of sub('Pattern')) { const d = Pt && (Pt.dict || Pt); if (d instanceof L.PDFDict) { if (Pt.dict) visit({ kind: 'content', stream: Pt, where }); const r5 = d.lookup(N('Resources')); if (r5) res(r5, where); } }
+    for (const [, , C] of sub('ColorSpace')) visit({ kind: 'cs', cs: C, where });
+  };
+  for (const c of page.node.Contents() ? [page.node.Contents()] : []) {
+    const cs = c instanceof L.PDFArray ? c.asArray().map(r => pdf.context.lookup(r)) : [c];
+    for (const s of cs) if (s) visit({ kind: 'content', stream: s, where: 'page' });
+  }
+  res(page.node.Resources(), 'page');
+  const A = page.node.lookup(N('Annots'));
+  if (A instanceof L.PDFArray) for (const r of A.asArray()) { const a = pdf.context.lookup(r); if (!(a instanceof L.PDFDict)) continue; const AP = a.lookup(N('AP')); if (AP instanceof L.PDFDict) for (const k of ['N', 'R', 'D']) { const v = AP.lookup(N(k)); const ss = v instanceof L.PDFDict && !(v.dict) ? v.values().map(x => pdf.context.lookup(x)) : [v]; for (const s of ss) if (s && s.dict) { visit({ kind: 'content', stream: s, where: 'annot' }); const r6 = s.dict.lookup(N('Resources')); if (r6) res(r6, 'annot'); } } }
+}
+const pdfaDecoded = s => { try { return s instanceof PDFLib.PDFRawStream ? PDFLib.decodePDFRawStream(s).decode() : s.getContents ? s.getContents() : null; } catch { return null; } };
+function pdfaFontEmbedded(pdf, F) {
+  const L = PDFLib, N = n => L.PDFName.of(n); const st = String(F.get(N('Subtype')));
+  if (st === '/Type3') return true;
+  let D = F; if (st === '/Type0') { const ds = F.lookup(N('DescendantFonts')); D = ds instanceof L.PDFArray ? pdf.context.lookup(ds.get(0)) : null; if (!(D instanceof L.PDFDict)) return false; }
+  const fd = D.lookup(N('FontDescriptor')); return fd instanceof L.PDFDict && !!(fd.get(N('FontFile')) || fd.get(N('FontFile2')) || fd.get(N('FontFile3')));
+}
+
+// ---- the conversion ----
+async function pdfaConvert(d, onStep = () => {}) {
+  const L = PDFLib, N = n => L.PDFName.of(n); const rep = { fixed: [], raster: [], removed: [], warn: [] };
+  if (d.encrypted) throw new Error('Unlock the PDF first: PDF/A files cannot be encrypted.');
+  const base = await buildOutput(d);
+  const pdf = await PDFDocument.load(base, { updateMetadata: false, throwOnInvalidObject: false }); const ctx = pdf.context; const cat0 = pdf.catalog;
+  if (ctx.trailerInfo.Encrypt) throw new Error('Unlock the PDF first: PDF/A files cannot be encrypted.');
+  const pages = pdf.getPages(); const bad = new Map(); const addBad = (i, why) => { if (!bad.has(i)) bad.set(i, new Set()); bad.get(i).add(why); };
+  let lzw = 0, tr = 0, interp = 0, ps = 0, alt = 0;
+  // 1. every stream: LZW out, PostScript out
+  for (const [ref, o] of ctx.enumerateIndirectObjects()) {
+    if (!(o instanceof L.PDFRawStream)) continue; const f = o.dict.lookup(N('Filter'));
+    const names = f instanceof L.PDFArray ? f.asArray().map(String) : f ? [String(f)] : [];
+    if (names.includes('/LZWDecode')) { const raw = pdfaDecoded(o); if (raw) { const nd = o.dict.clone(ctx); nd.delete(N('Filter')); nd.delete(N('DecodeParms')); nd.delete(N('Length')); ctx.assign(ref, ctx.flateStream(raw, Object.fromEntries(nd.entries().map(([k, v]) => [k.asString().slice(1), v])))); lzw++; } }
+    if (String(o.dict.get(N('Subtype'))) === '/PS' || o.dict.get(N('PS'))) { o.dict.delete(N('PS')); ps++; }
+  }
+  // 2. per page: fonts, colour, graphics state, images
+  for (let i = 0; i < pages.length; i++) {
+    let rgb = false, cmyk = false;
+    const csOf = c => { c = c instanceof L.PDFRef ? ctx.lookup(c) : c; if (c instanceof L.PDFName) return String(c); if (c instanceof L.PDFArray) { const k = String(c.get(0)); if (k === '/ICCBased') return '/ICC'; if (k === '/Indexed') return csOf(c.get(1)); if (k === '/Separation' || k === '/DeviceN') return csOf(c.get(2)); return k; } return ''; };
+    const note = c => { if (c === '/DeviceCMYK') cmyk = true; if (c === '/DeviceRGB') rgb = true; };
+    pdfaWalk(pdf, pages[i], v => {
+      if (v.kind === 'font' && !pdfaFontEmbedded(pdf, v.dict)) addBad(i, v.where === 'annot' ? 'annotfont' : 'font');
+      if (v.kind === 'gs') { if (v.dict.get(N('TR'))) { v.dict.delete(N('TR')); tr++; } const t2 = v.dict.get(N('TR2')); if (t2 && String(t2) !== '/Default') { v.dict.delete(N('TR2')); tr++; } if (v.dict.get(N('HTP'))) v.dict.delete(N('HTP')); }
+      if (v.kind === 'xobject') {
+        const st = String(v.stream.dict.get(N('Subtype')));
+        if (st === '/Image') { if (v.stream.dict.get(N('Interpolate'))) { v.stream.dict.delete(N('Interpolate')); interp++; } if (v.stream.dict.get(N('Alternates'))) { v.stream.dict.delete(N('Alternates')); alt++; } v.stream.dict.delete(N('OPI')); if (!v.stream.dict.get(N('ImageMask'))) note(csOf(v.stream.dict.get(N('ColorSpace')))); const sm = v.stream.dict.get(N('SMaskInData')); if (sm && sm.asNumber && sm.asNumber() !== 0) v.stream.dict.delete(N('SMaskInData')); }
+        if (st === '/Form') { v.stream.dict.delete(N('OPI')); v.stream.dict.delete(N('PS')); v.stream.dict.delete(N('Subtype2')); }
+        if (st === '/PS') { v.parent.lookup(N('XObject')).delete(v.name); ps++; }
+      }
+      if (v.kind === 'cs') note(csOf(v.cs));
+      if (v.kind === 'content') {
+        const b = pdfaDecoded(v.stream); if (!b) return; const s = b2s(b.length > 4e6 ? b.subarray(0, 4e6) : b);
+        if (/(^|[\s\]])(\/DeviceCMYK\s+(cs|CS)|[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[kK])(?=[\s\[]|$)/m.test(s)) cmyk = true;
+        if (/(^|[\s\]])(\/DeviceRGB\s+(cs|CS)|[\d.]+\s+[\d.]+\s+[\d.]+\s+(rg|RG))(?=[\s\[]|$)/m.test(s)) rgb = true;
+        if (/\/CS\s*\/(CMYK|DeviceCMYK)\b/.test(s)) cmyk = true; // inline images
+      }
+    });
+    if (cmyk) addBad(i, 'cmyk');
+  }
+  // 3. annotations: printable, with appearances, no forbidden kinds or actions
+  const BAD_ANN = new Set(['/Sound', '/Movie', '/Screen', '/3D', '/RichMedia', '/FileAttachment', '/TrapNet']);
+  const BAD_ACT = new Set(['/Launch', '/Sound', '/Movie', '/ResetForm', '/ImportData', '/JavaScript', '/Hide', '/SetOCGState', '/Rendition', '/Trans', '/GoTo3DView']);
+  const actOk = a => !(a instanceof L.PDFDict) || !BAD_ACT.has(String(a.get(N('S'))));
+  let annFixed = 0, annRemoved = 0, actRemoved = 0;
+  for (const p of pages) {
+    p.node.delete(N('AA')); const A = p.node.lookup(N('Annots')); if (!(A instanceof L.PDFArray)) continue;
+    const keep = [];
+    for (const r of A.asArray()) {
+      const a = ctx.lookup(r); if (!(a instanceof L.PDFDict)) continue; const st = String(a.get(N('Subtype')));
+      if (BAD_ANN.has(st)) { annRemoved++; continue; }
+      if (st !== '/Popup') { const F = a.lookup(N('F')); let f = F ? F.asNumber() : 0; const nf = (f | 4) & ~(1 | 2 | 32 | 256); if (nf !== f) { a.set(N('F'), L.PDFNumber.of(nf)); annFixed++; } }
+      a.delete(N('AA')); if (!actOk(a.lookup(N('A')))) { a.delete(N('A')); actRemoved++; }
+      if (a.get(N('CA')) && st === '/Widget') a.delete(N('CA'));
+      if (st !== '/Popup' && st !== '/Link') {
+        const AP = a.lookup(N('AP')); const Rr = a.lookup(N('Rect')); const R = Rr instanceof L.PDFArray ? Rr.asArray().map(n => n.asNumber()) : [0, 0, 0, 0];
+        const w = Math.abs(R[2] - R[0]), h = Math.abs(R[3] - R[1]);
+        if (!(AP instanceof L.PDFDict) || !AP.get(N('N'))) {
+          const ops = st === '/Text' ? `0.98 0.85 0.3 rg 0.6 0.5 0.1 RG 0.5 w 0.5 0.5 ${Math.max(1, w - 1)} ${Math.max(1, h - 1)} re B 0.6 0.5 0.1 RG ${w * .2} ${h * .65} m ${w * .8} ${h * .65} l ${w * .2} ${h * .45} m ${w * .8} ${h * .45} l S` : '';
+          a.set(N('AP'), ctx.obj({ N: ctx.register(ctx.flateStream(ops, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, w, h] })) })); annFixed++;
+        } else { for (const k of ['R', 'D']) AP.delete(N(k)); if (st === '/Widget' && String(a.get(N('FT')) || '') === '/Btn') {} }
+      }
+      keep.push(r);
+    }
+    if (keep.length !== A.size()) p.node.set(N('Annots'), ctx.obj(keep));
+  }
+  // 4. document level: scripts, attachments, actions, optional content, forms
+  cat0.delete(N('AA')); cat0.delete(N('NeedsRendering'));
+  const oa = cat0.lookup(N('OpenAction')); if (oa instanceof L.PDFDict && !actOk(oa)) { cat0.delete(N('OpenAction')); actRemoved++; }
+  const names = cat0.lookup(N('Names'));
+  if (names instanceof L.PDFDict) { if (names.get(N('JavaScript'))) { names.delete(N('JavaScript')); rep.removed.push('scripts'); } if (names.get(N('EmbeddedFiles'))) { names.delete(N('EmbeddedFiles')); rep.removed.push('attached files (PDF/A-2 keeps only PDF/A attachments)'); } }
+  cat0.delete(N('AF'));
+  const af = cat0.lookup(N('AcroForm')); if (af instanceof L.PDFDict) { af.delete(N('NeedAppearances')); af.delete(N('XFA')); }
+  // a converted file is a new file, so earlier digital signatures no longer match it: keep the fields, drop the values
+  let sigs = 0; for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('FT')) || '') === '/Sig' && o.get(N('V'))) { o.delete(N('V')); o.delete(N('Lock')); sigs++; }
+  if (sigs) { cat0.delete(N('Perms')); if (af instanceof L.PDFDict) af.delete(N('SigFlags')); rep.removed.push(`${plural(sigs, 'digital signature')} (they cannot survive conversion; sign the PDF/A copy again with Protect → Digital ID)`); }
+  const walkOutline = it => { let k = 0; while (it instanceof L.PDFDict && k++ < 100000) { if (!actOk(it.lookup(N('A')))) { it.delete(N('A')); actRemoved++; } walkOutline(it.lookup(N('First'))); it = it.lookup(N('Next')); } };
+  const ol = cat0.lookup(N('Outlines')); if (ol instanceof L.PDFDict) walkOutline(ol.lookup(N('First')));
+  const ocp = cat0.lookup(N('OCProperties'));
+  if (ocp instanceof L.PDFDict) { const fix = D => { if (!(D instanceof L.PDFDict)) return; D.delete(N('AS')); if (!D.get(N('Name'))) D.set(N('Name'), L.PDFString.of('Default')); }; fix(ocp.lookup(N('D'))); const cf = ocp.lookup(N('Configs')); if (cf instanceof L.PDFArray) cf.asArray().forEach((c, k) => { const D = ctx.lookup(c); fix(D); if (D instanceof L.PDFDict && !D.get(N('Name'))) D.set(N('Name'), L.PDFString.of('Config ' + (k + 1))); }); }
+  for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/Action' && BAD_ACT.has(String(o.get(N('S'))))) { o.set(N('S'), N('GoTo')); o.set(N('D'), ctx.obj([pages[0].ref, 'Fit'])); o.delete(N('JS')); actRemoved++; }
+  // 5. pages that cannot comply: redraw as an image, keep the text invisible and searchable
+  if (bad.size) {
+    const glyph = ocrFont(pdf); let k = 0;
+    for (const [i, why] of bad) {
+      onStep(`Redrawing page ${i + 1} (${++k} of ${bad.size})…`);
+      await pdfaRasterPage(pdf, d, i, glyph, why.has('annotfont')); rep.raster.push({ page: i + 1, why: [...why] });
+    }
+  }
+  // 6. output intent, metadata, ID
+  const icc = pdfaSrgbIcc();
+  const iccRef = ctx.register(ctx.flateStream(icc, { N: 3 }));
+  cat0.set(N('OutputIntents'), ctx.obj([ctx.obj({ Type: 'OutputIntent', S: 'GTS_PDFA1', OutputConditionIdentifier: L.PDFString.of('sRGB IEC61966-2.1'), Info: L.PDFString.of('sRGB IEC61966-2.1'), RegistryName: L.PDFString.of('http://www.color.org'), DestOutputProfile: iccRef })]));
+  pdfaMetadata(pdf);
+  if (!ctx.trailerInfo.ID) { const h = L.PDFHexString.of([...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('')); ctx.trailerInfo.ID = ctx.obj([h, h]); }
+  if (lzw) rep.fixed.push(`${lzw} LZW-compressed stream${lzw > 1 ? 's' : ''} recompressed`);
+  if (tr || interp || alt || ps) rep.fixed.push('printing extras PDF/A forbids removed (transfer functions, image interpolation or alternates, PostScript)');
+  if (annFixed) rep.fixed.push(`${plural(annFixed, 'annotation')} made printable or given an appearance`);
+  if (annRemoved) rep.removed.push(`${plural(annRemoved, 'annotation')} of a kind PDF/A forbids (sound, video, 3D, attachments)`);
+  if (actRemoved) rep.removed.push(`${plural(actRemoved, 'action')} that run scripts or launch things`);
+  const bytes = await pdf.save({ useObjectStreams: false, updateFieldAppearances: false });
+  return { bytes, rep };
+}
+// Info dictionary and XMP, kept identical; library fields kept and declared.
+function pdfaMetadata(pdf) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context; const cat0 = pdf.catalog;
+  let info = ctx.trailerInfo.Info ? ctx.lookup(ctx.trailerInfo.Info) : null; if (!(info instanceof L.PDFDict)) { info = ctx.obj({}); ctx.trailerInfo.Info = ctx.register(info); }
+  const is = k => { const v = info.lookup(N(k)); return v && v.decodeText ? v.decodeText().trim() : ''; };
+  const x = lxReadXmp(pdf) || {};
+  const pd = s => { const t = sigPdfDate(s); return t && !isNaN(t) ? t : null; };
+  const created = pd(is('CreationDate')) || (x.created ? new Date(x.created) : null) || new Date(); const now = new Date();
+  const iso = t => { const z = -t.getTimezoneOffset(); const p = n => String(Math.floor(Math.abs(n))).padStart(2, '0'); const l = new Date(t.getTime() + z * 60000).toISOString().slice(0, 19); return l + (z === 0 ? 'Z' : (z > 0 ? '+' : '-') + p(z / 60) + ':' + p(z % 60)); };
+  const m = { title: x.title || is('Title'), authors: x.authors && x.authors.length ? x.authors : (is('Author') ? [is('Author')] : []), description: x.description || is('Subject'), tags: x.tags && x.tags.length ? x.tags : is('Keywords').split(/\s*[,;]\s*/).filter(Boolean), publisher: x.publisher, language: x.language, ids: x.ids || {}, created: iso(created), docId: 'uuid:' + crypto.randomUUID(), series: x.series, seriesIndex: x.seriesIndex, titleSort: x.titleSort, authorSort: x.authorSort, rating: x.rating };
+  if (x.isbn && !m.ids.isbn) m.ids.isbn = x.isbn;
+  const cal = !!(m.series || m.titleSort || m.authorSort);
+  let xml = new TextDecoder().decode(xmpPacket(m, cal ? 'calibre' : 'acrobat'));
+  // dates the same in XMP and Info; one author string for Info, as PDF/A compares it with dc:creator
+  xml = xml.replace(/<xmp:ModifyDate>[^<]*<\/xmp:ModifyDate><xmp:MetadataDate>[^<]*<\/xmp:MetadataDate>/, `<xmp:ModifyDate>${iso(now)}</xmp:ModifyDate><xmp:MetadataDate>${iso(now)}</xmp:MetadataDate>`);
+  if (m.authors.length > 1) xml = xml.replace(/<dc:creator><rdf:Seq>[\s\S]*?<\/rdf:Seq><\/dc:creator>/, `<dc:creator><rdf:Seq><rdf:li>${xe(m.authors.join(' & '))}</rdf:li></rdf:Seq></dc:creator>`);
+  const ext = [];
+  const schema = (name, ns, prefix, props) => `<rdf:li rdf:parseType="Resource"><pdfaSchema:schema>${name}</pdfaSchema:schema><pdfaSchema:namespaceURI>${ns}</pdfaSchema:namespaceURI><pdfaSchema:prefix>${prefix}</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq>${props.map(([n, t, d]) => `<rdf:li rdf:parseType="Resource"><pdfaProperty:name>${n}</pdfaProperty:name><pdfaProperty:valueType>${t}</pdfaProperty:valueType><pdfaProperty:category>external</pdfaProperty:category><pdfaProperty:description>${d}</pdfaProperty:description></rdf:li>`).join('')}</rdf:Seq></pdfaSchema:property></rdf:li>`;
+  if (/<prism:/.test(xml)) ext.push(schema('PRISM Basic', XNS.prism, 'prism', [['isbn', 'Text', 'ISBN of the book']]));
+  if (/<calibre:/.test(xml)) {
+    ext.push(schema('calibre metadata', XNS.calibre, 'calibre', [['series', 'Text', 'Series name'], ['title_sort', 'Text', 'Title for sorting'], ['author_sort', 'Text', 'Author for sorting'], ['rating', 'Real', 'Rating'], ['timestamp', 'Date', 'Date added'], ['link_maps', 'Text', 'Author links']]));
+    ext.push(schema('calibre series index', XNS.calibreSI, 'calibreSI', [['series_index', 'Real', 'Number in the series']]));
+  }
+  const pdfaid = `  <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance></rdf:Description>\n` +
+    (ext.length ? `  <rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#"><pdfaExtension:schemas><rdf:Bag>${ext.join('')}</rdf:Bag></pdfaExtension:schemas></rdf:Description>\n` : '');
+  xml = xml.replace(' </rdf:RDF>', pdfaid + ' </rdf:RDF>');
+  const md = ctx.stream(new TextEncoder().encode(xml), { Type: 'Metadata', Subtype: 'XML' });
+  cat0.set(N('Metadata'), ctx.register(md));
+  // Info: only what XMP also says, in the same words
+  for (const k of info.keys()) info.delete(k);
+  const T = s => L.PDFHexString.fromText(s);
+  if (m.title) info.set(N('Title'), T(m.title)); if (m.authors.length) info.set(N('Author'), T(m.authors.join(' & ')));
+  if (m.description) info.set(N('Subject'), T(m.description)); if (m.tags.length) info.set(N('Keywords'), T(m.tags.join(', ')));
+  info.set(N('Creator'), T('Quire PDF Studio')); info.set(N('Producer'), T('Quire PDF Studio'));
+  info.set(N('CreationDate'), L.PDFString.fromDate(created)); info.set(N('ModDate'), L.PDFString.fromDate(now));
+}
+// Draws page i as a 200 dpi image in place (keeping links and other annotations) and puts its text back as invisible text.
+async function pdfaRasterPage(pdf, d, i, glyphFont, withAnnots) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context; const page = pdf.getPage(i);
+  const tmp = await pdfjsLib.getDocument({ data: await pdfaPageBytes(pdf, i), isEvalSupported: false }).promise;
+  try {
+    const pg = await tmp.getPage(1); const view = pg.view; const vp1 = pg.getViewport({ scale: 1, rotation: 0 }); const scale = Math.min(200 / 72, 5000 / Math.max(vp1.width, vp1.height));
+    const vp = pg.getViewport({ scale, rotation: 0 }); const c = el('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height); const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    await pg.render({ canvasContext: g, viewport: vp, annotationMode: withAnnots ? pdfjsLib.AnnotationMode.ENABLE : pdfjsLib.AnnotationMode.DISABLE }).promise;
+    // annotations whose own fonts are not embedded are drawn into the image and removed; links stay
+    if (withAnnots) { const A = page.node.lookup(N('Annots')); if (A instanceof L.PDFArray) page.node.set(N('Annots'), ctx.obj(A.asArray().filter(r => { const a = ctx.lookup(r); return a instanceof L.PDFDict && ['/Link', '/Popup'].includes(String(a.get(N('Subtype')))); }))); }
+    const img = await pdf.embedJpg(await canvasBytes(c, 'image/jpeg', .9)); await pdf.flush();
+    const tc = await pg.getTextContent(); const n = v => +(+v).toFixed(3);
+    let tx = '';
+    for (const it of tc.items) {
+      const t = ocrVisual((it.str || '').trim()); if (!t || !it.width) continue; const [a, b, , dd, e, f] = it.transform;
+      const h = Math.hypot(b, dd) || Math.abs(dd) || 1, len = t.length; const sx = it.width / (len * .5) / h; const cs = a / Math.hypot(a, b), sn = b / Math.hypot(a, b);
+      tx += `${n(cs * h * sx)} ${n(sn * h * sx)} ${n(-sn * h)} ${n(cs * h)} ${n(e)} ${n(f)} Tm <${ocrHex(t)}> Tj\n`;
+    }
+    const ops = `q ${n(view[2] - view[0])} 0 0 ${n(view[3] - view[1])} ${n(view[0])} ${n(view[1])} cm /QImg Do Q\n` + (tx ? `BT 3 Tr /QOcr 1 Tf\n${tx}ET\n` : '');
+    page.node.set(N('Resources'), ctx.obj({ XObject: { QImg: img.ref }, Font: { QOcr: glyphFont } }));
+    page.node.set(N('Contents'), ctx.register(ctx.flateStream(ops)));
+    page.node.delete(N('Group'));
+  } finally { tmp.destroy(); }
+}
+// One page on its own, as it is now in pdf (with its resources), for pdf.js to draw.
+async function pdfaPageBytes(pdf, i) { const one = await PDFDocument.create(); const [p] = await one.copyPages(pdf, [i]); one.addPage(p); return one.save(); }
+
+async function pdfaDialog() {
+  const d = cur(); if (!d) return;
+  if (d.encrypted) { toast('Unlock the PDF first: PDF/A files cannot be encrypted.'); return; }
+  const ok = await modal({ title: 'Save as PDF/A', body: `<p style="margin:0">PDF/A-2b is the ISO standard for keeping documents readable for decades. Libraries, archives, courts and many universities ask for it.</p>
+    <p class="hint">Quire writes your markup into the pages, adds the colour profile and metadata the standard needs, and removes what it forbids (scripts, attached files, encryption). Pages whose fonts are not inside the file are redrawn as images with their text kept searchable. You get a report of every change.</p>`, actions: [{ label: 'Cancel', value: null }, { label: 'Convert and save', primary: true, value: 'ok' }] });
+  if (!ok) return;
+  busy('Converting to PDF/A…');
+  try {
+    const { bytes, rep } = await pdfaConvert(d, m => busy(m)); unbusy();
+    const name = baseName(d).replace(/-pdfa$/, '') + '-pdfa.pdf';
+    const li = a => a.map(x => `<li>${esc(x)}</li>`).join('');
+    const why = { font: 'uses fonts that are not inside the file', annotfont: 'has form fields or comments whose fonts are not inside the file, now part of the page', cmyk: 'uses print (CMYK) colour' };
+    const body = `<p style="margin:0"><b>PDF/A-2b copy ready.</b> Saved as ${esc(name)}.</p>
+      <ul class="small" style="margin:6px 0 0;padding-left:18px">
+      <li>Added: sRGB colour profile, PDF/A metadata (title, authors, dates and any library fields), document ID.</li>
+      ${li(rep.fixed)}
+      ${rep.removed.length ? `<li>Removed: ${esc(rep.removed.join('; '))}.</li>` : ''}
+      ${rep.raster.length ? `<li>Redrawn as an image with searchable text: ${rep.raster.map(r => `page ${r.page} (${r.why.map(w => why[w]).join(', ')})`).join('; ')}.</li>` : '<li>No page had to be redrawn: everything stays as real text and graphics.</li>'}
+      </ul><p class="hint">Quire's conversion is tested with veraPDF, the reference validator. If an archive rejects a file, its validator report says why; send it to me and I can fix the converter.</p>`;
+    await saveFile(name, new Blob([bytes], { type: 'application/pdf' }));
+    const r = await modal({ title: 'PDF/A report', body, actions: [{ label: 'Open the PDF/A copy', value: 'open' }, { label: 'Done', primary: true, value: null }] });
+    if (r === 'open') await openBytes(new Uint8Array(bytes), name);
+  } catch (e) { console.error(e); toast('PDF/A conversion failed: ' + (e.message || e), 7000); } finally { unbusy(); }
+}
 
 /* ================= signature ================= */
 async function signatureDialog() {
