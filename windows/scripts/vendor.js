@@ -69,7 +69,6 @@ const swap = (from, to) => {
   html = html.split(from).join(to);
 };
 swap('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'vendor/pdfjs/pdf.min.js');
-swap('<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js">', '<script src="vendor/pdfjs/pdf.worker.min.js">');
 swap('https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js', 'vendor/pdf-lib/pdf-lib.min.js');
 html = html.replace(/<link rel="preconnect"[^>]*>\s*/g, '');
 html = html.replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com[^>]*>/, '<link rel="stylesheet" href="vendor/fonts/fonts.css">');

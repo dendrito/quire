@@ -12,6 +12,7 @@ Each result is checked with an independent tool, not with Quire itself:
 | excel | every cell of the scanned tables | openpyxl |
 | word | alignment, indents, header and footer, footnote marks, columns, scanned pages | python-docx |
 | redaction | the word is gone from the text and from the file's bytes; the rest stays | poppler, raw bytes |
+| memory | thumbnails drawn only near view and let go far away; undo copies capped; pdf.js in its own thread | the app |
 | editions | Quire Lite and Quire Pro build; Lite uses nothing only Pro defines, shows no Pro buttons, and every ribbon tab loads without errors in both | `tools/build-editions.js --check`, the app |
 
 The test files are made by `fixtures/make.py` (seeded, so the same every time).

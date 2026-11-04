@@ -461,7 +461,6 @@ dialog:has(.olm){width:min(560px,calc(100vw - 32px))}
 <dialog id="dlg"><h2 id="dlgTitle"></h2><div id="dlgBody"></div><div class="dlg-actions" id="dlgActions"></div></dialog>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 'use strict';
@@ -754,8 +753,16 @@ async function reloadDoc(d) {
   }
 }
 function snapshot(d = cur()) {
-  d.undo.push({ bytes: d.bytes, annots: JSON.stringify(d.annots) }); if (d.undo.length > 80) d.undo.shift();
+  d.undo.push({ bytes: d.bytes, annots: JSON.stringify(d.annots) }); undoTrim(d);
   d.redo = []; d.dirty = true; renderTabs();
+}
+// Each page edit keeps a whole copy of the file for undo. On a big scan that adds up fast (ten deletions on a 100 MB book
+// held 1 GB), so the oldest steps are let go once the copies pass UNDO_MAX bytes; the last three steps always stay.
+const UNDO_MAX = 768 * 1048576;
+function undoTrim(d) {
+  while (d.undo.length > 80) d.undo.shift();
+  const size = () => { const seen = new Set(); let n = 0; for (const u of d.undo) if (u.bytes && !seen.has(u.bytes.buffer)) { seen.add(u.bytes.buffer); n += u.bytes.buffer.byteLength; } return n; };
+  while (d.undo.length > 3 && size() > (window.QUIRE_UNDO_MAX || UNDO_MAX)) d.undo.shift();
 }
 async function restoreSnap(d, s) {
   const changed = s.bytes !== d.bytes; d.bytes = s.bytes; d.annots = JSON.parse(s.annots); S.sel = null; d.dirty = true;
@@ -784,7 +791,7 @@ async function editBytes(label, fn, msg, opt = {}) {
       await reloadDoc(d); toast(label); return true;
     }
     d.bytes = await pdf.save();
-    d.undo.push(prev); d.redo = []; d.dirty = true;
+    d.undo.push(prev); undoTrim(d); d.redo = []; d.dirty = true;
     await reloadDoc(d); toast(label); return true;
   } catch (e) { console.error(e); d.annots = JSON.parse(prev.annots); toast(label + ' failed: ' + (e.message || e)); return false; }
   finally { unbusy(); }
@@ -10220,7 +10227,7 @@ function pdfAppendDone(d, base) {
   const prevA = JSON.stringify(d.annots);
   d.undo.push({ bytes: d.bytes.subarray(0, base.length), annots: prevA });
   for (const u of [...d.undo, ...d.redo]) if (u.bytes.buffer === base.buffer && u.bytes.byteOffset === base.byteOffset && u.bytes.length <= base.length) u.bytes = d.bytes.subarray(0, u.bytes.length);
-  if (d.undo.length > 80) d.undo.shift(); d.redo = []; d.dirty = true;
+  undoTrim(d); d.redo = []; d.dirty = true;
 }
 
 // ---- reading single objects without parsing the whole file (for edits on very big files) ----

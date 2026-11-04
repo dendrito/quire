@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition editions)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition editions memory)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync, spawnSync } = require('child_process');
@@ -339,6 +339,24 @@ TESTS.editions = async () => {
     check(`${ed}: no errors while loading and switching tabs`, !p.errs.length, p.errs.slice(0, 3).join(' | '));
     await p.context().close();
   }
+};
+
+// --- memory: thumbnails are drawn only near view and let go far away; undo copies stay under their cap; pdf.js reads in
+// its own thread (not the page's)
+TESTS.memory = async () => {
+  const p = await H.open();
+  const r = await p.evaluate(async () => { const w = ms => new Promise(r => setTimeout(r, ms));
+    const pdf = await PDFDocument.create(); for (let i = 0; i < 300; i++) pdf.addPage([595, 842]).drawText('p' + (i + 1), { x: 60, y: 700, size: 40 });
+    const d = await openBytes(await pdf.save(), 'memory.pdf'); const drawn = () => [...document.querySelectorAll('#thumbs canvas')].map((c, i) => c.width ? i : -1).filter(i => i >= 0);
+    await w(2500); const top = drawn(); const T = document.querySelector('#thumbs'); T.scrollTop = T.scrollHeight; await w(2500); const bottom = drawn();
+    window.QUIRE_UNDO_MAX = d.bytes.length * 2.5; for (let k = 0; k < 6; k++) await editBytes('Rotated', pdf => { pdf.getPage(k).setRotation(degrees(90)); });
+    return { top, bottom, undo: d.undo.length, worker: !!d.pdf.loadingTask._worker._webWorker };
+  });
+  check('thumbnails: only those near view are drawn', r.top.length > 3 && r.top.length < 40 && r.top[0] === 0, `${r.top.length} drawn`);
+  check('thumbnails: scrolled-away ones are let go, the new ones drawn', r.bottom.length < 40 && !r.bottom.includes(0) && r.bottom.includes(299), `${r.bottom.length} drawn, from ${r.bottom[0]}`);
+  check('undo: copies kept under the memory cap (at least 3 steps)', r.undo === 3, `${r.undo} steps`);
+  check('pdf.js reads files in its own thread', r.worker);
+  await p.context().close();
 };
 
 (async () => {
