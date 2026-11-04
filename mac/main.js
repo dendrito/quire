@@ -41,6 +41,21 @@ ipcMain.handle('ask-camera', async () => {
   try { return await systemPreferences.askForMediaAccess('camera'); } catch { return false; }
 });
 
+// Send to Zotero: pass items to the Zotero app on this computer through its connector server (the one the Zotero browser
+// button uses). It runs here, in the main process, so the renderer's offline block stays as it is and Zotero sees a local client.
+ipcMain.handle('zotero-save', async (_event, items) => {
+  const base = 'http://127.0.0.1:23119/connector/';
+  const H = { 'Content-Type': 'application/json', 'X-Zotero-Connector-API-Version': '3' };
+  try {
+    const ping = await fetch(base + 'ping', { method: 'POST', headers: H, body: '{}', signal: AbortSignal.timeout(3000) }).catch(() => null);
+    if (!ping) return { ok: false, error: 'Zotero is not running. Open the Zotero app and try again.' };
+    const sessionID = 'quire-' + Date.now().toString(36);
+    const r = await fetch(base + 'saveItems', { method: 'POST', headers: H, body: JSON.stringify({ sessionID, uri: 'quire://library', items: (items || []).map((it, i) => ({ id: 'q' + i, ...it })) }), signal: AbortSignal.timeout(20000) });
+    if (r.status === 201) return { ok: true };
+    return { ok: false, error: r.status === 500 ? 'Zotero could not save the items. Is a library or collection selected?' : `Zotero answered ${r.status}` };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+
 ipcMain.on('renderer-ready', () => {
   rendererReady = true;
   flush();
