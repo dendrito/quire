@@ -9881,11 +9881,16 @@ TASKS.a11y = function (P, d) {
 const HTR_ORT_VER = '1.20.1';
 const HTR_ORT = VENDOR ? VENDOR + 'onnxruntime/' : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${HTR_ORT_VER}/dist/`;
 // the commit that holds models/htr (a commit, not a branch, so the links never move; jsDelivr serves files up to 20 MB, raw GitHub the rest)
-const HTR_REV = 'dd1484833d06e68855c6c1e1c616663d178a93a4';
+const HTR_REV = '69b4e55a70f9a498eefea2ec561c826a29960adb';
 const HTR_SRC = () => window.QUIRE_HTR ? [window.QUIRE_HTR] : VENDOR ? [VENDOR + 'htr/'] : [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
+// first is the default: on a 17th-century Torre do Tombo Inquisition page TraPrInq made 13% character errors, the others 32-42%
 const HTR_READERS = [
+  { id: 'traprinq', name: 'Portuguese Inquisition records, 16th–19th century', short: 'TraPrInq', mb: 90, langs: 'Portuguese',
+    about: 'Trained by the TraPrInq project (CHAM, Lisbon) on over 6,400 pages of Inquisition trials from Lisbon, Coimbra and Évora. Made for exactly these documents.', doi: '10.5281/zenodo.14538271' },
+  { id: 'geneapt', name: 'Portuguese parish registers, 18th–19th century', short: 'GeneaPT', mb: 90, langs: 'Portuguese',
+    about: 'Trained on baptism, marriage and burial registers from Portuguese parishes. For genealogy.', doi: '10.5281/zenodo.23733764' },
   { id: 'mccatmus', name: 'Early modern hands, 16th–21st century', short: 'McCATMuS', mb: 16, langs: 'Portuguese, Spanish, French, Latin, Italian, English, German, Dutch',
-    about: 'Trained on handwritten, printed and typewritten documents from 1500 to today. The best free choice for Inquisition trials, notarial deeds, letters and registers.', doi: '10.5281/zenodo.13788177' },
+    about: 'Trained on handwritten, printed and typewritten documents from 1500 to today. A good general choice for notarial deeds, letters and registers in many languages.', doi: '10.5281/zenodo.13788177' },
   { id: 'catmus-medieval', name: 'Medieval book hands, 8th–16th century', short: 'CATMuS Medieval', mb: 16, langs: 'Latin, Old French, Castilian, Italian, Catalan, Occitan, Dutch',
     about: 'Caroline, gothic textualis, cursiva, hybrida and humanist scripts from over 200 manuscripts. Abbreviations are kept as written (MUFI characters such as ꝑ ꝗ ꝯ).', doi: '10.5281/zenodo.15030337' },
   { id: 'tridis', name: 'Medieval and early modern documents (charters, registers)', short: 'TRIDIS', mb: 25, langs: 'Latin, French, Castilian, German, Czech',

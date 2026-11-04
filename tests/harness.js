@@ -53,3 +53,13 @@ exports.close = async () => { if (browser) await browser.close(); browser = null
 exports.load = async (p, file) => { const b64 = fs.readFileSync(file).toString('base64'); await p.evaluate(async ([b, n]) => { await openBytes(Uint8Array.from(atob(b), c => c.charCodeAt(0)), n); }, [b64, path.basename(file)]); };
 // bytes from the page (base64 over the bridge)
 exports.bytes = async (p, fn, arg) => Buffer.from(await p.evaluate(async ([src, a]) => { const r = await (0, eval)(src)(a); const u = r instanceof Uint8Array ? r : new Uint8Array(r instanceof Blob ? await r.arrayBuffer() : r); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); }, [fn.toString(), arg]), 'base64');
+// put a big handwriting model in the app's model store in 32 MB pieces (one 90 MB response is too big for the
+// test browser's protocol); the app then finds it there instead of downloading it
+exports.htrPreload = async (p, id) => {
+  const f = path.join(HTR_DIR, id + '.onnx'), CH = 32 << 20; if (!fs.existsSync(f)) return false;
+  if (!p._mpart) { p._mpart = true; await p.route('https://quire.test/mpart/**', r => { const [n, k] = r.request().url().split('/mpart/')[1].split('/'); const b = fs.readFileSync(path.join(HTR_DIR, n)); r.fulfill({ contentType: 'application/octet-stream', body: b.subarray(+k * CH, (+k + 1) * CH) }); }); }
+  const n = Math.ceil(fs.statSync(f).size / CH);
+  await p.evaluate(async ([id, n, js]) => { const bs = []; for (let k = 0; k < n; k++) bs.push(new Uint8Array(await (await fetch(`https://quire.test/mpart/${id}.onnx/${k}`)).arrayBuffer()));
+    const u = new Uint8Array(bs.reduce((a, b) => a + b.length, 0)); let o = 0; for (const b of bs) { u.set(b, o); o += b.length; } await HTR_DB.put(id + '.onnx', u); await HTR_DB.put(id + '.json', js); }, [id, n, fs.readFileSync(path.join(HTR_DIR, id + '.json'), 'utf8')]);
+  return true;
+};

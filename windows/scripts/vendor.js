@@ -33,7 +33,7 @@ const copies = [
   ...['Arimo', 'Tinos', 'Cousine'].flatMap(f => ['400Regular', '400Regular_Italic', '700Bold', '700Bold_Italic'].map(v => [`@expo-google-fonts/${f.toLowerCase()}/${v}/${f}_${v}.ttf`, `fonts-sub/${f}_${v}.ttf`])),
   // handwriting recognition: the ONNX runtime, and kraken's line finder plus the manuscript readers from models/htr
   ...['ort.wasm.min.js', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm'].map(f => [`onnxruntime-web/dist/${f}`, `onnxruntime/${f}`]),
-  ...['blla', 'mccatmus', 'catmus-medieval', 'tridis'].flatMap(m => ['.onnx', '.json'].map(x => [`../../models/htr/${m}${x}`, `htr/${m}${x}`]))
+  ...['blla', 'traprinq', 'geneapt', 'mccatmus', 'catmus-medieval', 'tridis'].flatMap(m => ['.onnx', '.json'].map(x => [`../../models/htr/${m}${x}`, `htr/${m}${x}`]))
 ];
 let fontCss = '';
 for (const [family, pkg, weights] of FONTS) {

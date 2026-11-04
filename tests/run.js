@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync, spawnSync } = require('child_process');
@@ -294,6 +294,24 @@ TESTS.htr = async () => {
       const file = out(f + '-htr.pdf'); fs.writeFileSync(file, await b64(p, async () => { const d = cur(); const r = await htrPage(d, 0, 'catmus-medieval'); await editBytes('t', async pdf => { const font = ocrFont(pdf); ocrLayer(pdf, font, r, false); }); return d.bytes; }));
       const t = pdftotext(file); check(`${f}: text layer searchable`, /poborador/.test(t), t.split('\n')[1] || '');
     }
+  }
+};
+
+// --- Handwriting on Portuguese Inquisition trials: pages from the TraPrInq validation set (CC BY 4.0, committed by the
+// 'Inquisition reader scores' workflow), read with the default reader, TraPrInq, against the project's expert text
+const INQ = path.join(__dirname, 'fixtures', 'real', 'inq'), INQ_MAX = 25;
+TESTS.htr_inquisition = async () => {
+  const pages = fs.existsSync(INQ) ? fs.readdirSync(INQ).filter(f => /\.pdf$/.test(f)).sort() : [];
+  check('Inquisition test pages present', pages.length > 0, 'run the Inquisition reader scores workflow'); if (!pages.length) return;
+  const p = await H.open(); check('TraPrInq reader available', await H.htrPreload(p, 'traprinq'));
+  check('TraPrInq is the default reader', await p.evaluate(() => htrReaders()[0].id === 'traprinq'));
+  for (const f of pages) {
+    await H.load(p, path.join(INQ, f)); const t0 = Date.now();
+    const lines = await p.evaluate(async () => (await htrPage(cur(), 0, 'traprinq')).lines);
+    const sp = s => s.normalize('NFC').replace(/\s+/g, ' ').trim(), T = sp(fs.readFileSync(path.join(INQ, f.replace(/pdf$/, 'txt')), 'utf8')), G = sp(lines.join('\n'));
+    fs.writeFileSync(out(f.replace(/pdf$/, 'htr.txt')), lines.join('\n'));
+    const cer = lev(G, T) / T.length * 100;
+    check(`${f}: character error rate at most ${INQ_MAX}%`, cer <= INQ_MAX, `${cer.toFixed(1)}% in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   }
 };
 
