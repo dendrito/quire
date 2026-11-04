@@ -7,7 +7,7 @@ on:
   push:
     tags: ['v*']
     branches: ['claude/project-thread-vzqdhg']
-    paths: ['mac/**', 'web/**', '.github/workflows/build-mac.yml']
+    paths: ['mac/**', 'web/**', 'models/**', '.github/workflows/build-mac.yml']
 jobs:
   build:
     runs-on: macos-latest

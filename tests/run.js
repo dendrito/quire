@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word redaction)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word redaction htr)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
@@ -146,6 +146,29 @@ TESTS.redaction = async () => {
   check('redacted word gone from the text', !/SECRETNAME/.test(t), t.trim().split('\n')[0]);
   check('redacted word gone from the file bytes', !/SECRETNAME/.test(raw));
   check('words around it kept', /Name:/.test(t) && /Silva/.test(t) && /Keep this line intact please/.test(t));
+};
+
+// --- Handwriting (paleography): medieval Portuguese charters from the iForal ground truth (fetched by the workflow, not
+// stored here: no licence to redistribute). Character error rate against the experts' transcription, abbreviations as
+// written. kraken's own Python pipeline with the same reader scores 25.6% on condado-1491 and 47.6% on abrantes-1217 (Quire: 27.3% and 17.8%).
+const lev = (a, b) => { a = [...a]; b = [...b]; let p = Array.from({ length: b.length + 1 }, (_, j) => j); for (let i = 1; i <= a.length; i++) { const c = [i]; for (let j = 1; j <= b.length; j++) c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); p = c; } return p[b.length]; };
+const HTR_MAX = { 'condado-1491': 31, 'abrantes-1217': 22 };
+TESTS.htr = async () => {
+  for (const [f, max] of Object.entries(HTR_MAX)) {
+    if (!fs.existsSync(fx(f + '.pdf'))) { check(`${f}: manuscript page present`, false, 'run fixtures/page_xml.py (see the workflow)'); continue; }
+    const p = await H.open(); await H.load(p, fx(f + '.pdf')); const t0 = Date.now();
+    const r = await p.evaluate(async () => { const r = await htrPage(cur(), 0, 'catmus-medieval'); return { lines: r.lines, words: r.words.length }; });
+    const sp = s => s.normalize('NFC').replace(/\s+/g, ' ').trim(), T = sp(fs.readFileSync(fx(f + '.txt'), 'utf8')), G = sp(r.lines.join('\n'));
+    fs.writeFileSync(out(f + '.htr.txt'), r.lines.join('\n'));
+    const cer = lev(G, T) / T.length * 100, nl = fs.readFileSync(fx(f + '.txt'), 'utf8').split('\n').length;
+    check(`${f}: lines found`, Math.abs(r.lines.length - nl) <= Math.max(3, nl * .1), `${r.lines.length} of ${nl}`);
+    check(`${f}: character error rate at most ${max}%`, cer <= max, `${cer.toFixed(1)}% in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+    if (f === 'condado-1491') {
+      // the text layer: words land on the page and can be found
+      const file = out(f + '-htr.pdf'); fs.writeFileSync(file, await b64(p, async () => { const d = cur(); const r = await htrPage(d, 0, 'catmus-medieval'); await editBytes('t', async pdf => { const font = ocrFont(pdf); ocrLayer(pdf, font, r, false); }); return d.bytes; }));
+      const t = pdftotext(file); check(`${f}: text layer searchable`, /poborador/.test(t), t.split('\n')[1] || '');
+    }
+  }
 };
 
 (async () => {

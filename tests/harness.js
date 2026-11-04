@@ -13,8 +13,10 @@ const CDN = [
   [/node-forge@[\d.]+\/dist\/forge\.min\.js/, 'node-forge/dist/forge.min.js'],
   [/fontkit@1\.1\.1\/dist\/fontkit\.umd\.min\.js/, '@pdf-lib/fontkit/dist/fontkit.umd.min.js'],
 ];
-const VENDOR = { 'pdfjs/': 'pdfjs-dist/build/', 'pdf-lib/': 'pdf-lib/dist/', 'jszip/': 'jszip/dist/', 'forge/': 'node-forge/dist/', 'fontkit/': '@pdf-lib/fontkit/dist/', 'tesseract/': 'tesseract.js/dist/', 'tesseract-core/': 'tesseract.js-core/' };
-const type = f => /\.js$/.test(f) ? 'application/javascript' : /\.wasm$/.test(f) ? 'application/wasm' : /\.ttf$/.test(f) ? 'font/ttf' : 'application/octet-stream';
+const VENDOR = { 'pdfjs/': 'pdfjs-dist/build/', 'pdf-lib/': 'pdf-lib/dist/', 'jszip/': 'jszip/dist/', 'forge/': 'node-forge/dist/', 'fontkit/': '@pdf-lib/fontkit/dist/', 'tesseract/': 'tesseract.js/dist/', 'tesseract-core/': 'tesseract.js-core/', 'onnxruntime/': 'onnxruntime-web/dist/' };
+// handwriting models: the converted ones in models/htr (or HTR_DIR)
+const HTR_DIR = process.env.HTR_DIR || path.join(ROOT, 'models', 'htr');
+const type = f => /\.js$/.test(f) ? 'application/javascript' : /\.m?js$/.test(f) ? 'application/javascript' : /\.wasm$/.test(f) ? 'application/wasm' : /\.json$/.test(f) ? 'application/json' : /\.ttf$/.test(f) ? 'font/ttf' : 'application/octet-stream';
 
 let browser = null;
 exports.open = async () => {
@@ -32,6 +34,7 @@ exports.open = async () => {
       const rel = u.slice(21).split('?')[0]; let f = null;
       const m = rel.match(/^tessdata\/(\w+)\.traineddata\.gz$/); if (m) f = `@tesseract.js-data/${m[1]}/4.0.0_best_int/${m[1]}.traineddata.gz`;
       const s = rel.match(/^fonts-sub\/(\w+?)_(\w+)\.ttf$/); if (s) f = `@expo-google-fonts/${s[1].toLowerCase()}/${s[2]}/${s[1]}_${s[2]}.ttf`;
+      if (rel.startsWith('htr/')) { const h = path.join(HTR_DIR, rel.slice(4)); return fs.existsSync(h) ? r.fulfill({ contentType: type(h), body: fs.readFileSync(h) }) : r.fulfill({ status: 404, body: '' }); }
       if (!f) for (const [a, b] of Object.entries(VENDOR)) if (rel.startsWith(a)) f = b + rel.slice(a.length);
       if (f && fs.existsSync(NM + f)) return r.fulfill({ contentType: type(f), body: fs.readFileSync(NM + f) });
       return r.fulfill({ status: 404, body: '' });

@@ -1932,9 +1932,10 @@ const TASKS = {
     const O = S.ocr || (S.ocr = Object.assign({ lang: 'eng', also: '', dir: 'h', skip: true }, pref.get('ocr', {})));
     const save = () => pref.set('ocr', O);
     P.innerHTML = `<section class="sec">${head('OCR')}<p class="hint">Recognises text in scanned pages and adds an invisible text layer, so you can search, select and copy. Runs entirely on this device.</p>
+      <div class="field"><label for="oK">Kind of text</label><select id="oK" class="inp"><option value="print">Printed or typed</option><option value="hand"${O.kind === 'hand' ? ' selected' : ''}>Handwriting (manuscripts, 1100 to today)</option></select></div>
       <div id="oLangs"><p class="muted small">Checking languages…</p></div>
       ${scopeHTML(d)}<label class="chk"><input type="checkbox" id="oSkip" ${O.skip ? 'checked' : ''}> Skip pages that already have text</label>
-      <label class="chk"><input type="checkbox" id="oFast" ${O.fast ? 'checked' : ''}> Fast (less accurate: no clean-up, lower resolution)</label>
+      <label class="chk" id="oFastL"${O.kind === 'hand' ? ' hidden' : ''}><input type="checkbox" id="oFast" ${O.fast ? 'checked' : ''}> Fast (less accurate: no clean-up, lower resolution)</label>
       <button class="btn primary" id="oGo">Recognise text</button><div class="prog" hidden id="oPr"><i></i></div><p class="muted small" id="oMsg"></p>
       ${d.ocrNote && d.ocrNote.bytes === d.bytes ? `<div class="hint" style="margin:0">${d.ocrNote.n ? `Read ${plural(d.ocrNote.words, 'word')}. The engine was unsure of ${plural(d.ocrNote.n, 'word')}; they are marked in Proofread OCR text. <button type="button" class="btn sm" id="oProof" style="margin-top:6px">Proofread</button>` : `Read ${plural(d.ocrNote.words, 'word')}, all with good confidence.`}</div>` : ''}</section>`;
     bindClose(P);
@@ -1944,6 +1945,13 @@ const TASKS = {
     const opts = (list, v) => list.map(c => `<option value="${esc(c)}"${c === v ? ' selected' : ''}>${esc(ocrName(c))}</option>`).join('');
     const fill = () => {
       const box = $('#oLangs', P); if (!box) return;
+      if (O.kind === 'hand') {
+        box.innerHTML = htrPanelHTML(O);
+        $('#hR', P).onchange = e => { O.reader = e.target.value; save(); fill(); };
+        $('#hImp', P).onclick = () => $('#hFile', P).click();
+        $('#hFile', P).onchange = async e => { try { const ids = await htrImport([...e.target.files]); if (ids.length) { O.reader = ids[0]; save(); } toast(`Added ${plural(ids.length, 'reader')}`); } catch (er) { toast(String(er.message || er), 6000); } fill(); };
+        return;
+      }
       const inst = ocrInstalled(); if (!inst.includes(O.lang)) O.lang = inst[0] || 'eng'; if (O.also && (!inst.includes(O.also) || O.also === O.lang)) O.also = '';
       const vc = [O.lang, O.also].find(c => c in OCR_VERT && ocrHasFile(c + '_vert'));
       box.innerHTML = `<div class="field"><label for="oL">Language</label><select id="oL" class="inp">${opts(inst, O.lang)}</select></div>
@@ -1956,8 +1964,11 @@ const TASKS = {
       const dd = $('#oD', P); if (dd) dd.onchange = e => { O.dir = e.target.value; save(); };
       $('#oMan', P).onclick = openOcrLangs;
     };
-    ocrLoad().then(fill);
+    $('#oK', P).onchange = e => { O.kind = e.target.value; save(); $('#oFastL', P).hidden = O.kind === 'hand'; (O.kind === 'hand' ? htrLoad() : ocrLoad()).then(fill); };
+    (O.kind === 'hand' ? htrLoad() : ocrLoad()).then(fill);
     $('#oGo', P).onclick = async () => {
+      if (O.kind === 'hand') { await htrLoad(); const msg = m => { const n = $('#oMsg', P); if (n) n.textContent = m; }, bar = $('#oPr', P); bar.hidden = false; $('#oGo', P).disabled = true;
+        const stop = m => { $('#oGo', P).disabled = false; bar.hidden = true; msg(m); }; await htrGo(P, d, O, { msg, bar, stop }); if ($('#oGo', P)) stop($('#oMsg', P) ? $('#oMsg', P).textContent : ''); return; }
       await ocrLoad(); fill();
       const langs = [];
       for (const c of [O.lang, O.also].filter(Boolean)) {
@@ -9607,6 +9618,192 @@ TASKS.a11y = function (P, d) {
   $$('[data-afix]', P).forEach(b => b.onclick = () => { const f = b.dataset.afix; if (f === 'ocr') openTask('ocr'); else if (f === 'bm') openTask('bookmarks'); else if (f === 'alt') a11yAltDialog(d); else run([f]); });
   const all = $('#a11All', P); if (all) all.onclick = () => run(auto.map(c => c.fix));
 };
+
+/* ================= handwriting (paleography) ================= */
+// Reads handwritten manuscripts with kraken's free models, converted to ONNX (tools/htr) and run on this device with
+// onnxruntime-web. kraken's line finder (blla) draws a baseline under every line of writing; each line is cut out along its
+// baseline, straightened, and read by the chosen reader. The words go into the same invisible text layer as OCR.
+const HTR_ORT_VER = '1.20.1';
+const HTR_ORT = VENDOR ? VENDOR + 'onnxruntime/' : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${HTR_ORT_VER}/dist/`;
+const HTR_REV = 'claude/project-thread-vzqdhg';
+const HTR_SRC = () => window.QUIRE_HTR ? [window.QUIRE_HTR] : VENDOR ? [VENDOR + 'htr/'] : [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
+const HTR_READERS = [
+  { id: 'mccatmus', name: 'Early modern hands, 16th–21st century', short: 'McCATMuS', mb: 16, langs: 'Portuguese, Spanish, French, Latin, Italian, English, German, Dutch',
+    about: 'Trained on handwritten, printed and typewritten documents from 1500 to today. The best free choice for Inquisition trials, notarial deeds, letters and registers.', doi: '10.5281/zenodo.13788177' },
+  { id: 'catmus-medieval', name: 'Medieval book hands, 8th–16th century', short: 'CATMuS Medieval', mb: 16, langs: 'Latin, Old French, Castilian, Italian, Catalan, Occitan, Dutch',
+    about: 'Caroline, gothic textualis, cursiva, hybrida and humanist scripts from over 200 manuscripts. Abbreviations are kept as written (MUFI characters such as ꝑ ꝗ ꝯ).', doi: '10.5281/zenodo.15030337' },
+  { id: 'tridis', name: 'Medieval and early modern documents (charters, registers)', short: 'TRIDIS', mb: 25, langs: 'Latin, French, Castilian, German, Czech',
+    about: 'Documentary hands from 1100 to 1600. Expands abbreviations into full words, which makes the text easier to search.', doi: '10.5281/zenodo.10800223' },
+];
+const HTR = { have: null, own: [], sess: new Map(), meta: new Map() };
+const HTR_DB = {
+  db: null,
+  open() { return this.db || (this.db = new Promise((res, rej) => { const r = indexedDB.open('quire-htr', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); },
+  async run(mode, fn) { const db = await this.open(); return new Promise((res, rej) => { const tx = db.transaction('files', mode); const q = fn(tx.objectStore('files')); tx.oncomplete = () => res(q && q.result); tx.onerror = tx.onabort = () => rej(tx.error); }); },
+  keys() { return this.run('readonly', s => s.getAllKeys()); }, get(k) { return this.run('readonly', s => s.get(k)); },
+  put(k, v) { return this.run('readwrite', s => s.put(v, k)); }, del(k) { return this.run('readwrite', s => s.delete(k)); }
+};
+async function htrLoad() {
+  if (!HTR.have) { let ks = []; try { ks = (await HTR_DB.keys()).map(String); } catch (e) { console.warn('handwriting model storage', e); }
+    HTR.have = new Set(ks.filter(k => k.endsWith('.onnx')).map(k => k.slice(0, -5)).filter(k => ks.includes(k + '.json')));
+    HTR.own = []; for (const id of HTR.have) if (id !== 'blla' && !HTR_READERS.some(r => r.id === id)) { try { const m = JSON.parse(await HTR_DB.get(id + '.json')); HTR.own.push({ id, name: m.name || id, short: m.name || id, about: m.about || '', own: true }); } catch {} } }
+  return HTR.have;
+}
+const htrReaders = () => [...HTR_READERS, ...HTR.own];
+// a model file: this device's copy if there is one, else the app's own folder (desktop) or the download sources
+async function htrFile(id, ext, onp) {
+  try { const v = await HTR_DB.get(id + ext); if (v) return v; } catch {}
+  let err;
+  for (const base of HTR_SRC()) {
+    try {
+      const r = await fetch(base + id + ext); if (!r.ok) throw new Error('HTTP ' + r.status);
+      let v;
+      if (ext === '.json') v = await r.text();
+      else { const n = +r.headers.get('content-length') || 0, rd = r.body && r.body.getReader(); if (!rd) v = new Uint8Array(await r.arrayBuffer()); else { const parts = []; let got = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; if (onp && n) onp(got / n); } v = new Uint8Array(got); let o = 0; for (const p of parts) { v.set(p, o); o += p.length; } } }
+      if (!VENDOR) { try { await HTR_DB.put(id + ext, v); } catch (e) { console.warn('could not keep the model on this device', e); } }
+      return v;
+    } catch (e) { err = e; }
+  }
+  throw new Error(`Could not download the ${id} model (${err && err.message || err})`);
+}
+async function htrSession(id, onp) {
+  if (HTR.sess.has(id)) return HTR.sess.get(id);
+  if (!window.ort) { await loadScript(HTR_ORT + 'ort.wasm.min.js'); }
+  ort.env.wasm.wasmPaths = HTR_ORT; ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  const meta = JSON.parse(await htrFile(id, '.json')); const bytes = await htrFile(id, '.onnx', onp);
+  const s = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+  if (meta.c2l) { meta.l2c = new Map(); meta.lens = new Set(); for (const [ch, ls] of Object.entries(meta.c2l)) { meta.l2c.set(ls.join(','), ch); meta.lens.add(ls.length); } meta.lens = [...meta.lens].sort((a, b) => b - a); }
+  const v = { s, meta }; HTR.sess.set(id, v); if (HTR.have) HTR.have.add(id); return v;
+}
+// Import a reader converted with tools/htr/convert.py (an .onnx file and its .json), for hands the bundled readers miss.
+async function htrImport(files) {
+  const by = {}; for (const f of files) { const m = f.name.match(/^(.*)\.(onnx|json)$/i); if (m) (by[m[1]] = by[m[1]] || {})[m[2].toLowerCase()] = f; }
+  const ids = [];
+  for (const [base, p] of Object.entries(by)) {
+    if (!p.onnx || !p.json) throw new Error(`${base}: choose both ${base}.onnx and ${base}.json`);
+    const meta = JSON.parse(await p.json.text()); if (meta.kind !== 'recognition' || !meta.c2l) throw new Error(`${base}.json is not a reader made by convert.py`);
+    const id = base.toLowerCase().replace(/[^a-z0-9-]+/g, '-'); await HTR_DB.put(id + '.json', JSON.stringify({ ...meta, name: meta.name || base })); await HTR_DB.put(id + '.onnx', new Uint8Array(await p.onnx.arrayBuffer())); ids.push(id);
+  }
+  HTR.have = null; HTR.sess.clear(); await htrLoad(); return ids;
+}
+// how far above and below the baseline a line is cut, as a share of the gap to the next line
+const HTR_K = { top: .8, bot: .35, thr: .2, sep: .35, mean: .3 };
+const htrSig = x => 1 / (1 + Math.exp(-x));
+// Baselines from the line finder's heat map, read column by column: in each column the ridges of the baseline map are line
+// candidates, and each is linked to the line it continues (within a cell and a half up or down, at most three columns back).
+// The line finder also marks where lines start and end; a line is cut there, so lines on either side of a column gap
+// stay apart even when the baseline map runs across it. Coordinates are in heat-map cells.
+function htrBaselines(heat, H4, W4, ch, aux = [0, 1]) {
+  const N = H4 * W4, P = new Float32Array(N), Sg = new Float32Array(N), Eg = new Float32Array(N);
+  for (let k = 0; k < N; k++) { P[k] = htrSig(heat[ch * N + k]); Sg[k] = htrSig(heat[aux[0] * N + k]); Eg[k] = htrSig(heat[aux[1] * N + k]); }
+  const near = (A, x, y) => { let m = 0; for (let dy = -2; dy <= 2; dy++) { const yy = Math.round(y) + dy; if (yy >= 0 && yy < H4 && x >= 0 && x < W4) m = Math.max(m, A[yy * W4 + x]); } return m; };
+  const thr = HTR_K.thr, sep = HTR_K.sep, open = [], done = [];
+  for (let x = 0; x < W4; x++) {
+    for (let k = open.length - 1; k >= 0; k--) if (open[k].lx < x - 3) done.push(...open.splice(k, 1));
+    const ys = []; for (let y = 1; y < H4 - 1; y++) { const v = P[y * W4 + x]; if (v >= thr && v >= P[(y - 1) * W4 + x] && v > P[(y + 1) * W4 + x]) ys.push(y); }
+    const used = new Set();
+    for (const y of ys) {
+      // sub-cell position of the ridge
+      const a = P[(y - 1) * W4 + x], b = P[y * W4 + x], c = P[(y + 1) * W4 + x], den = a - 2 * b + c, yf = y + (den < -1e-3 ? Math.max(-.5, Math.min(.5, .5 * (a - c) / den)) : 0);
+      let best = null, bd = 1.6; for (const t of open) { if (used.has(t)) continue; const dd = Math.abs(t.ly - yf); if (dd < bd) { bd = dd; best = t; } }
+      if (best && best.pts.length > 4 && (near(Sg, x, yf) > sep && near(Sg, x, yf) > near(Sg, best.lx, best.ly) + .05 || best.cut)) { done.push(best); open.splice(open.indexOf(best), 1); best = null; }
+      if (!best) { best = { pts: [], s: 0 }; open.push(best); }
+      best.pts.push([x, yf]); best.s += b; best.lx = x; best.ly = yf; used.add(best);
+      if (best.pts.length > 4 && near(Eg, x, yf) > sep && near(Eg, x + 1, yf) < near(Eg, x, yf)) best.cut = true;
+    }
+  }
+  done.push(...open);
+  const out = done.filter(t => t.pts.length >= 6 && t.s / t.pts.length > HTR_K.mean).map(t => ({ x0: t.pts[0][0], x1: t.pts[t.pts.length - 1][0], pts: t.pts }));
+  const yAt = (c, x) => { const p = c.pts; if (x <= p[0][0]) return p[0][1]; if (x >= p[p.length - 1][0]) return p[p.length - 1][1]; let lo = 0, hi = p.length - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (p[m][0] <= x) lo = m; else hi = m; } const t = (x - p[lo][0]) / ((p[hi][0] - p[lo][0]) || 1); return p[lo][1] * (1 - t) + p[hi][1] * t; };
+  for (const b of out) { const p = b.pts, sm = p.map((q, k) => { let s = 0, n = 0; for (let d = -3; d <= 3; d++) if (p[k + d]) { s += p[k + d][1]; n++; } return [q[0], s / n]; }); b.pts = sm; b.y = yAt(b, (b.x0 + b.x1) / 2); b.yAt = x => yAt(b, x); }
+  return out;
+}
+// Reading order: lines that share a column top to bottom, columns left to right.
+function htrOrder(lines) {
+  const cols = []; for (const l of [...lines].sort((a, b) => a.x0 - b.x0)) { const c = cols.find(c => l.x0 < c.x1 - (c.x1 - c.x0) * .2 && l.x1 > c.x0 + (c.x1 - c.x0) * .2); if (c) { c.l.push(l); c.x0 = Math.min(c.x0, l.x0); c.x1 = Math.max(c.x1, l.x1); } else cols.push({ x0: l.x0, x1: l.x1, l: [l] }); }
+  cols.sort((a, b) => a.x0 - b.x0); return cols.flatMap(c => c.l.sort((a, b) => a.y - b.y));
+}
+function htrDecode(meta, probs, C, T) {
+  const lab = [], conf = [], at = []; let prev = 0, run = null;
+  for (let t = 0; t < T; t++) { let m = 0, mv = -1; for (let c = 0; c < C; c++) { const v = probs[c * T + t]; if (v > mv) { mv = v; m = c; } }
+    if (m !== prev) { if (m) { run = { t0: t, t1: t, p: mv }; lab.push(m); conf.push(run); } else run = null; } else if (m && run) { run.t1 = t; run.p = Math.max(run.p, mv); } prev = m; }
+  const chars = []; let k = 0;
+  while (k < lab.length) { let hit = false; for (const n of meta.lens) { if (k + n > lab.length) continue; const ch = meta.l2c.get(lab.slice(k, k + n).join(',')); if (ch != null) { const p = conf.slice(k, k + n); for (const c of ch) chars.push({ c, t0: p[0].t0, t1: p[n - 1].t1, p: p.reduce((s, x) => s + x.p, 0) / n }); k += n; hit = true; break; } } if (!hit) k++; }
+  return chars;
+}
+// Reads one page. Returns { i, vp, words: [{ text, confidence, q }], lines: [text] } like OCR, with q the word's baseline
+// quad in PDF points so the text layer follows sloping and curved lines.
+async function htrPage(d, i, readerId, msg) {
+  const seg = await htrSession('blla'), rd = await htrSession(readerId), SM = seg.meta, RM = rd.meta;
+  const pg = d.info[i].page, v1 = pg.getViewport({ scale: 1 });
+  const scale = Math.min(4.2, 2600 / Math.max(v1.height, 1), 4000 / Math.max(v1.width, 1));
+  const { c, vp } = await renderToCanvas(d, i, scale); const W = c.width, H = c.height;
+  const img = c.getContext('2d').getImageData(0, 0, W, H).data, gray = new Uint8ClampedArray(W * H);
+  for (let k = 0, j = 0; k < gray.length; k++, j += 4) gray[k] = (img[j] * 299 + img[j + 1] * 587 + img[j + 2] * 114) / 1000;
+  // 1. find the lines
+  const sh = SM.height || 1800, sw = Math.max(32, Math.round(W * sh / H)); const sc = el('canvas'); sc.width = sw; sc.height = sh;
+  const sx = sc.getContext('2d'); sx.imageSmoothingQuality = 'high'; sx.drawImage(c, 0, 0, sw, sh); const sd = sx.getImageData(0, 0, sw, sh).data;
+  const chn = SM.channels || 3, inp = new Float32Array(chn * sh * sw);
+  for (let k = 0; k < sh * sw; k++) for (let q = 0; q < chn; q++) inp[q * sh * sw + k] = 1 - sd[k * 4 + (chn === 1 ? 0 : q)] / 255;
+  const so = await seg.s.run({ [seg.s.inputNames[0]]: new ort.Tensor('float32', inp, [1, chn, sh, sw]) }); const ht = so[seg.s.outputNames[0]];
+  const [, , H4, W4] = ht.dims, bl = ((SM.class_mapping || {}).baselines || { default: 2 }), ch = Object.values(bl)[0];
+  const fx = W / W4, fy = H / H4;
+  const ax = (SM.class_mapping || {}).aux || {}; let lines = htrBaselines(ht.data, H4, W4, ch, [ax._start_separator ?? 0, ax._end_separator ?? 1]).filter(b => (b.x1 - b.x0) * fx > H * .012);
+  if (!lines.length) return { i, vp, words: [], lines: [] };
+  // line height from the gap to the neighbouring lines
+  const gaps = []; for (const l of lines) { let up = Infinity, dn = Infinity; for (const o of lines) { if (o === l || o.x1 < l.x0 || o.x0 > l.x1) continue; const x = (Math.max(l.x0, o.x0) + Math.min(l.x1, o.x1)) / 2, dy = l.yAt(x) - o.yAt(x); if (dy > 1 && dy < up) up = dy; if (dy < -1 && -dy < dn) dn = -dy; } l.up = up; l.dn = dn; if (up < Infinity) gaps.push(up); }
+  gaps.sort((a, b) => a - b); const med = (gaps[gaps.length >> 1] || 12) * fy;
+  lines = htrOrder(lines);
+  const words = [], text = [], mh = RM.height, pad = RM.pad ?? 16;
+  for (let n = 0; n < lines.length; n++) {
+    const l = lines[n]; if (msg) msg(n, lines.length);
+    const up = Math.min(isFinite(l.up) ? l.up * fy : med, med * 1.4), dn = Math.min(isFinite(l.dn) ? l.dn * fy : med, med * 1.4);
+    const top = Math.round(up * HTR_K.top), bot = Math.round(dn * HTR_K.bot), hs = top + bot; if (hs < 6) continue;
+    const mx = Math.round(hs * .25), xa = Math.max(0, Math.round(l.x0 * fx) - mx), xb = Math.min(W - 1, Math.round((l.x1 + 1) * fx) + mx), ws = xb - xa + 1;
+    const yb = x => l.yAt(x / fx) * fy + fy / 2;
+    // 2. cut the line out along its baseline, straightened
+    const strip = new ImageData(ws, hs), S = strip.data;
+    for (let x = 0; x < ws; x++) { const y0 = yb(xa + x) - top; for (let y = 0; y < hs; y++) { const yy = Math.round(y0 + y), g = yy < 0 || yy >= H ? 255 : gray[yy * W + xa + x], k = (y * ws + x) * 4; S[k] = S[k + 1] = S[k + 2] = g; S[k + 3] = 255; } }
+    const k1 = el('canvas'); k1.width = ws; k1.height = hs; k1.getContext('2d').putImageData(strip, 0, 0);
+    const lw = Math.max(8, Math.round(ws * mh / hs)), k2 = el('canvas'); k2.width = lw; k2.height = mh; const x2 = k2.getContext('2d'); x2.imageSmoothingQuality = 'high'; x2.drawImage(k1, 0, 0, lw, mh);
+    const ld = x2.getImageData(0, 0, lw, mh).data, IW = lw + pad * 2, rc = RM.channels || 1, li = new Float32Array(rc * mh * IW);
+    for (let y = 0; y < mh; y++) for (let x = 0; x < lw; x++) { const v = 1 - ld[(y * lw + x) * 4] / 255; for (let q = 0; q < rc; q++) li[q * mh * IW + y * IW + x + pad] = v; }
+    // 3. read it
+    const ro = await rd.s.run({ [rd.s.inputNames[0]]: new ort.Tensor('float32', li, [1, rc, mh, IW]) }); const pr = ro[rd.s.outputNames[0]]; const [, C, T] = pr.dims;
+    const chars = htrDecode(RM, pr.data, C, T); const s = chars.map(x => x.c).join('').replace(/\s+/g, ' ').trim().normalize('NFC'); if (!s) continue; text.push(s);
+    const toX = t => xa + Math.max(0, Math.min(ws - 1, ((t + .5) * IW / T - pad) * hs / mh));
+    let w = null; const flush = () => { if (!w) return; const x0 = toX(w.t0) - 1, x1 = toX(w.t1 + 1) + 1, h = top * .75; const o = vp.convertToPdfPoint(x0, yb(x0)), e = vp.convertToPdfPoint(x1, yb(x1)), u = vp.convertToPdfPoint(x0, yb(x0) - h); words.push({ text: w.t.normalize('NFC'), confidence: Math.round(w.p / w.n * 100), q: [o, e, u] }); w = null; };
+    for (const x of chars) { if (/\s/.test(x.c)) { flush(); continue; } if (!w) w = { t: '', t0: x.t0, t1: x.t1, p: 0, n: 0 }; w.t += x.c; w.t1 = x.t1; w.p += x.p; w.n++; }
+    flush();
+  }
+  return { i, vp, words, lines: text };
+}
+function htrPanelHTML(O) {
+  const rs = htrReaders(); if (!rs.some(r => r.id === O.reader)) O.reader = rs[0].id; const r = rs.find(x => x.id === O.reader);
+  const have = HTR.have && HTR.have.has(r.id) || !!VENDOR;
+  return `<div class="field"><label for="hR">Reader</label><select id="hR" class="inp">${rs.map(x => `<option value="${esc(x.id)}"${x.id === O.reader ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+    <p class="hint" style="margin:0">${esc(r.about)}${r.langs ? ` <span class="muted">Languages: ${esc(r.langs)}.</span>` : ''}${r.doi ? ` <a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">${esc(r.short)}</a>, free (CC BY).` : ''}</p>
+    <p class="muted small" style="margin:.3em 0">${have ? 'Ready on this device.' : `Downloads about ${r.mb || 16} MB the first time, plus 5 MB for the line finder, then works offline.`} Tested on medieval Portuguese charters: 73–82% of characters right, more on clearer and later hands. Check names and numbers.</p>
+    <button type="button" class="btn sm" id="hImp">${svg('plus')}Add a reader file…</button><input type="file" id="hFile" accept=".onnx,.json" multiple hidden>`;
+}
+async function htrGo(P, d, O, ui) {
+  const { msg, bar, stop } = ui; let idx = scopeIdx(P);
+  if (O.skip) { const keep = []; for (const i of idx) { const tc = await pageText(d, i); if (tc.items.map(t => t.str).join('').replace(/\s/g, '').length < 20) keep.push(i); } if (!keep.length) { stop('Those pages already have text. Untick "Skip pages that already have text" to read them again.'); return; } idx = keep; }
+  const results = [];
+  try {
+    msg('Loading the line finder…'); await htrSession('blla', f => msg(`Downloading the line finder… ${Math.round(f * 100)}%`));
+    const r = htrReaders().find(x => x.id === O.reader); msg(`Loading ${r ? r.short : 'the reader'}…`); await htrSession(O.reader, f => msg(`Downloading ${r ? r.short : 'the reader'}… ${Math.round(f * 100)}%`));
+    let done = 0;
+    for (const i of idx) {
+      const res = await htrPage(d, i, O.reader, (n, of) => { msg(`Page ${i + 1}: line ${n + 1} of ${of}…`); bar.firstChild.style.width = ((done + n / of) / idx.length * 100) + '%'; });
+      results.push(res); done++; bar.firstChild.style.width = (done / idx.length * 100) + '%';
+    }
+  } catch (e) { console.error(e); stop('Handwriting recognition failed: ' + (e && e.message || e)); return; }
+  const n = results.reduce((s, r) => s + r.words.length, 0);
+  if (!n) { stop('No writing was found on those pages.'); return; }
+  const ok = await editBytes(`Handwriting read on ${plural(results.filter(r => r.words.length).length, 'page')}`, async pdf => { const font = ocrFont(pdf); for (const r of results) ocrLayer(pdf, font, r, false); }, 'Adding text layer…');
+  if (ok !== false) { const doubt = results.flatMap(r => r.words.filter(ocrUnsure).map(() => r.i)); d.ocrNote = { bytes: d.bytes, n: doubt.length, page: doubt.length ? Math.min(...doubt) : null, words: n }; d.htrText = results.map(r => ({ i: r.i, lines: r.lines })); if (S.task === 'ocr') renderPanel(); }
+}
 
 /* ================= signature ================= */
 async function signatureDialog() {
