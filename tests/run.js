@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare redaction htr)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile redaction htr)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
@@ -204,6 +204,15 @@ TESTS.protect = async () => {
   check('AES-256 encryption, as Acrobat writes it', /AES-256/.test(info), (info.match(/Encrypted:.*/) || [''])[0]);
   check('opens with the password', /Library Society/.test(execFileSync('pdftotext', ['-upw', 'abc123', file, '-']).toString()));
   let refused = false; try { execFileSync('pdftotext', [file, '-'], { stdio: 'ignore' }); } catch { refused = true; } check('refused without it', refused);
+};
+// --- Large files are given to the viewer in pieces: forced on for a small file, it must open, read and render the same
+TESTS.bigfile = async () => {
+  const p = await H.open(); await H.load(p, fx('report.pdf'));
+  const r = await p.evaluate(async () => { const a = cur(); window.QUIRE_BIG_FILE = 1; const d = await openBytes(a.bytes.slice(), 'big.pdf'); window.QUIRE_BIG_FILE = 0;
+    const t = await (await d.info[d.info.length - 1].page.getTextContent()).items.map(x => x.str).join(' ');
+    const c = document.createElement('canvas'); const vp = d.info[0].page.getViewport({ scale: 1 }); c.width = vp.width; c.height = vp.height; await d.info[0].page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    return { pages: d.info.length, want: a.info.length, text: /committee/.test(t), out: (await buildOutput(d)).length === a.bytes.length }; });
+  check('opens in pieces with every page, its text and drawing', r.pages === r.want && r.text && r.out, JSON.stringify(r));
 };
 TESTS.compare = async () => {
   const p = await H.open(); await H.load(p, fx('report.pdf'));

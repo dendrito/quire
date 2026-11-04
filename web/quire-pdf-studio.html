@@ -678,9 +678,18 @@ async function openBytes(bytes, name, extra = {}) {
   if (d.encrypted) toast('This PDF is password-protected. You can read and mark it up, but page tools need an unlocked copy.', 6000);
   return d;
 }
+// Large files: the viewer's reader (pdf.js, in its own thread) is given the file a few megabytes at a time as pages need
+// them, instead of a second full copy. Small files are handed over whole, which is quicker.
+const BIG_FILE = 48e6;
+function pdfSource(bytes) {
+  if (bytes.length < (window.QUIRE_BIG_FILE || BIG_FILE)) return { data: bytes.slice(), isEvalSupported: false };
+  const t = new pdfjsLib.PDFDataRangeTransport(bytes.length, bytes.slice(0, 1 << 16));
+  t.requestDataRange = (b, e) => setTimeout(() => t.onDataRange(b, bytes.slice(b, e)));
+  return { range: t, length: bytes.length, rangeChunkSize: 1 << 22, disableAutoFetch: true, disableStream: true, isEvalSupported: false };
+}
 async function loadPdf(d, first) {
   if (d.pdf) { try { d.pdf.destroy(); } catch {} }
-  const task = pdfjsLib.getDocument({ data: d.bytes.slice(), isEvalSupported: false });
+  const task = pdfjsLib.getDocument(pdfSource(d.bytes));
   task.onPassword = (cb, reason) => {
     askPassword(reason === 2).then(pw => { if (pw == null) { task.destroy(); } else { d.password = pw; cb(pw); } });
   };
@@ -692,11 +701,13 @@ async function loadPdf(d, first) {
       if (att && att['quire-source.pdf'] && att['quire-annotations.json']) {
         const j = JSON.parse(new TextDecoder().decode(att['quire-annotations.json'].content));
         d.bytes = new Uint8Array(att['quire-source.pdf'].content);
-        d.pdf.destroy(); d.pdf = await pdfjsLib.getDocument({ data: d.bytes.slice(), isEvalSupported: false }).promise;
+        d.pdf.destroy(); d.pdf = await pdfjsLib.getDocument(pdfSource(d.bytes)).promise;
         d.annots = j.annots || []; d.restored = true;
       }
     } catch {}
-    try { await PDFDocument.load(d.bytes, LOAD); } catch (e) { if (/encrypt/i.test(e.message)) d.encrypted = true; }
+    // encrypted files have an /Encrypt dictionary, and its /P (permissions) is required; the reader already has it, so the
+    // whole file is not parsed a second time just to find out
+    try { d.encrypted = (await d.pdf.getPermissions()) != null; } catch {}
   }
   d.info = []; d.text = []; d.cropAuto = null;
   for (let i = 1; i <= d.pdf.numPages; i++) {
@@ -1161,9 +1172,9 @@ async function exportAnnot(pdf, page, d, i, a, F, imgs) {
 }
 async function buildOutput(d, { editable = false } = {}) {
   if (ED.pending) await ED.pending;
-  const pdf = await PDFDocument.load(d.bytes, LOAD);
   const anyAnn = d.annots.some(p => p.length);
   if (!anyAnn) return d.bytes;
+  const pdf = await PDFDocument.load(d.bytes, LOAD);
   const F = { reg: await pdf.embedFont(StandardFonts.Helvetica), bold: await pdf.embedFont(StandardFonts.HelveticaBold) };
   for (let i = 0; i < d.info.length; i++) { const red = d.annots[i].filter(a => a.type === 'redact'); if (red.length) { if (pref.get('redactRaster', false)) await rasterReplace(pdf, d, i, 2.5, .92, red); else await rxPage(pdf, d, i, red, (d.rxRep = d.rxRep || {})); } }
   if (d.annots.some(p => p.some(a => a.type === 'redact'))) rxGC(pdf);
@@ -4028,7 +4039,7 @@ function cmpHunks(A, B, ops) {
 }
 async function runCompare(d) {
   const other = await pdfjsLib.getDocument({ data: CMP.src.slice(0) }).promise;
-  const mine = await pdfjsLib.getDocument({ data: d.bytes.slice(0) }).promise;
+  const mine = await pdfjsLib.getDocument(pdfSource(d.bytes)).promise;
   try {
     if (CMP.mode === 'text') {
       $('#busyMsg').textContent = 'Reading both documents…';
