@@ -16,6 +16,12 @@ READERS = [
     dict(id='tridis', zenodo='10800223', name='Medieval and early modern documents, charters and registers (TRIDIS)',
          langs='Latin, French, Spanish, German, Czech', era='1100–1600',
          about='Trained on documentary manuscripts (charters, registers, accounts) and expands abbreviations into full words.'),
+    dict(id='traprinq', zenodo='14538271', name='Portuguese Inquisition records, 16th–19th century (TraPrInq)',
+         langs='Portuguese', era='1500–1900',
+         about='Trained on over 6,400 pages of Portuguese Inquisition trials (Lisbon, Coimbra, Évora) transcribed by the TraPrInq project. Made for Inquisition records.'),
+    dict(id='geneapt', zenodo='23733764', name='Portuguese parish registers, 18th–19th century (GeneaPT)',
+         langs='Portuguese', era='1700–1900',
+         about='Trained on baptism, marriage and burial registers from Portuguese parishes. Made for genealogy.'),
 ]
 
 

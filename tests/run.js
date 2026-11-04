@@ -1,9 +1,9 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile redaction htr)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
-const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
+const fs = require('fs'), path = require('path'), { execFileSync, spawnSync } = require('child_process');
 const H = require('./harness.js');
 const FX = path.join(__dirname, 'fixtures'), OUT = path.join(__dirname, 'out'); fs.mkdirSync(OUT, { recursive: true });
 const fx = n => path.join(FX, n), out = n => path.join(OUT, n);
@@ -213,6 +213,30 @@ TESTS.bigfile = async () => {
     const c = document.createElement('canvas'); const vp = d.info[0].page.getViewport({ scale: 1 }); c.width = vp.width; c.height = vp.height; await d.info[0].page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
     return { pages: d.info.length, want: a.info.length, text: /committee/.test(t), out: (await buildOutput(d)).length === a.bytes.length }; });
   check('opens in pieces with every page, its text and drawing', r.pages === r.want && r.text && r.out, JSON.stringify(r));
+};
+// --- Page edits on a big file are appended (incremental update): the old bytes stay as they are, poppler and qpdf
+// read the result, and undo goes back to the earlier revision without a copy. Classic xref table and xref stream.
+TESTS.bigfile_edit = async () => {
+  const p = await H.open(); await H.load(p, fx('report.pdf'));
+  for (const kind of ['table', 'stream']) {
+    const r = await p.evaluate(async kind => {
+      const a = S.docs.find(x => /report/.test(x.name)); const src = kind === 'table' ? a.bytes.slice() : await (await PDFDocument.load(a.bytes)).save({ useObjectStreams: true });
+      window.QUIRE_BIG_FILE = 1; window.__dbg = src; const d = await openBytes(src, kind + '.pdf'); activate(S.docs.indexOf(d));
+      const n0 = d.info.length; d.sel = new Set([0]); await rotatePages(90); d.sel = new Set([1]); await duplicatePages(); await movePage(0, 3);
+      const after = d.bytes; const same = after.length > src.length && src.every((v, i) => after[i] === v);
+      const pages = d.info.length; let undone = true; for (let k = 0; k < 3; k++) { await undo(); undone = undone && d.bytes.buffer === after.buffer; } undone = undone && d.info.length === n0 && d.bytes.length === src.length;
+      window.QUIRE_BIG_FILE = 0; return { same, pages, n0, undone, grew: after.length - src.length, b64: btoa(Array.from(after, c => String.fromCharCode(c)).join('')) };
+    }, kind);
+    const file = out(`incremental-${kind}.pdf`); fs.writeFileSync(file, Buffer.from(r.b64, 'base64'));
+    let q = ''; try { q = execFileSync('python3', ['-c', 'import sys;from pyhanko.pdf_utils.reader import PdfFileReader as R;r=R(open(sys.argv[1],"rb"),strict=True);print("ok",len(r.root["/Pages"]["/Kids"]),r.xrefs.total_revisions)', file], { stdio: ['ignore', 'pipe', 'pipe'] }).toString(); } catch (e) { q = String(e.stderr || e).slice(-300); }
+    const perr = spawnSync('pdfinfo', [file]).stderr.toString();
+    const info = execFileSync('pdfinfo', ['-f', '1', '-l', '9', file]).toString(); const rots = [...info.matchAll(/Page\s+(\d+) rot:\s+(\d+)/g)].map(m => +m[2]);
+    check(`${kind}: earlier bytes untouched, ${r.grew} bytes appended`, r.same && r.grew < 20000, String(r.grew));
+    check(`${kind}: pyHanko (strict) and poppler read it with no errors`, /^ok/.test(q) && !perr.trim(), q.trim() + ' ' + perr.slice(0, 200));
+    check(`${kind}: one page more, rotated page moved to third place`, r.pages === r.n0 + 1 && rots[2] === 90 && rots.filter(x => x).length === 1, `${r.pages} pages, rot ${rots}`);
+    check(`${kind}: text still there`, /committee/.test(execFileSync('pdftotext', [file, '-']).toString()));
+    check(`${kind}: undo shares the same memory`, r.undone);
+  }
 };
 TESTS.compare = async () => {
   const p = await H.open(); await H.load(p, fx('report.pdf'));

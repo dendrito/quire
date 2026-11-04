@@ -23,4 +23,4 @@ jobs:
           git add models/htr
           git diff --cached --quiet && echo "no change" && exit 0
           git commit -m "Manuscript models converted from Zenodo (tools/htr/build.py)"
-          git push
+          for i in 1 2 3 4; do git pull --rebase -q && git push && break; sleep $((i*5)); done
