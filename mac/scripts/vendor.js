@@ -22,6 +22,7 @@ const copies = [
   ['pdf-lib/dist/pdf-lib.min.js', 'pdf-lib/pdf-lib.min.js'],
   ['jszip/dist/jszip.min.js', 'jszip/jszip.min.js'],
   ['@pdf-lib/fontkit/dist/fontkit.umd.min.js', 'fontkit/fontkit.umd.min.js'],
+  ['node-forge/dist/forge.min.js', 'forge/forge.min.js'],
   ['tesseract.js/dist/tesseract.min.js', 'tesseract/tesseract.min.js'],
   ['tesseract.js/dist/worker.min.js', 'tesseract/worker.min.js'],
   ...['', '-lstm', '-simd', '-simd-lstm'].map(v => [`tesseract.js-core/tesseract-core${v}.wasm.js`, `tesseract-core/tesseract-core${v}.wasm.js`]),

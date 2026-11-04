@@ -7068,6 +7068,417 @@ async function lbZoteroKey() {
   const k = r === 'ok' ? ($('#zkIn').value || '').trim() : null; if (k) { pref.set('zoteroKey', k); pref.set('zoteroUser', ''); } return k;
 }
 
+/* ================= certificate signatures: sign with a digital ID (.p12/.pfx or a new one), verify signatures ================= */
+// A real PDF signature (adbe.pkcs7.detached, what Acrobat, PDF-XChange and Foxit write and check), not a picture.
+// The signature is added as an incremental update, so the bytes that were there before, including earlier
+// signatures, are left untouched. node-forge reads .p12 files and builds the PKCS#7; checking uses Web Crypto.
+const FORGE_URL = VENDOR ? VENDOR + 'forge/forge.min.js' : 'https://cdn.jsdelivr.net/npm/node-forge@1.4.0/dist/forge.min.js';
+const sigForge = async () => { if (!window.forge) await loadScript(FORGE_URL); return window.forge; };
+const SIG_LEN = 16384; // bytes reserved for the PKCS#7 blob
+Object.assign(IC, {
+  certsign: '<path d="M4 19c2-3 3.5-3 5 0s3 3 5 0"/><path d="M14 4l4 4-7 7H7v-4z"/><circle cx="19" cy="17" r="2.5"/>',
+  sigs: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/>'
+});
+Object.assign(ACTS, { certsign: ['Sign with a digital ID', 'certsign', () => sigDialog()], sigs: ['Signatures: check who signed', 'sigs', () => openTask('sigs')] });
+Object.assign(RLBL, { certsign: 'Digital ID', sigs: 'Signatures' });
+Object.assign(CMD_KW, { certsign: 'digital signature certificate p12 pfx pkcs sign document id esign certify', sigs: 'verify signatures validate certificate who signed signed version' });
+const b2s = u => { let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return s; };
+const s2b = s => { const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 255; return u; };
+const b64u = u => btoa(b2s(u)); const u64 = s => s2b(atob(s));
+
+// ---- digital IDs: kept in this browser as password-protected .p12 files ----
+const sigIds = () => pref.get('sigIds', []);
+async function sigOpenId(der, pw) {
+  const f = await sigForge(); let p12;
+  try { p12 = f.pkcs12.pkcs12FromAsn1(f.asn1.fromDer(b2s(der)), false, pw); }
+  catch (e) { if (/mac|password|decrypt|invalid/i.test(String(e.message || e))) throw new Error('The password is not right for this digital ID.'); throw new Error('This file could not be read as a digital ID (.p12 or .pfx): ' + (e.message || e)); }
+  const bags = t => p12.getBags({ bagType: t })[t] || [];
+  const keys = [...bags(f.pki.oids.pkcs8ShroudedKeyBag), ...bags(f.pki.oids.keyBag)].map(b => b.key).filter(Boolean);
+  const certs = bags(f.pki.oids.certBag).map(b => b.cert).filter(Boolean);
+  if (!keys.length) throw new Error('This digital ID has no private key, so it cannot sign. Export it again with the private key included.');
+  if (!certs.length) throw new Error('This digital ID has no certificate. Note: only RSA keys are supported.');
+  const key = keys[0]; const cert = certs.find(c => c.publicKey && c.publicKey.n && c.publicKey.n.equals(key.n)) || certs[0];
+  return { key, cert, chain: certs.filter(c => c !== cert) };
+}
+async function sigNewId({ name, email, org, pw, years = 5 }) {
+  const f = await sigForge();
+  const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
+  const key = f.pki.privateKeyFromAsn1(f.asn1.fromDer(b2s(new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey)))));
+  const cert = f.pki.createCertificate(); cert.publicKey = f.pki.setRsaPublicKey(key.n, key.e);
+  cert.serialNumber = '01' + [...crypto.getRandomValues(new Uint8Array(15))].map(b => b.toString(16).padStart(2, '0')).join('');
+  cert.validity.notBefore = new Date(Date.now() - 60000); cert.validity.notAfter = new Date(); cert.validity.notAfter.setFullYear(cert.validity.notAfter.getFullYear() + years);
+  // forge UTF-8-encodes UTF8String values itself when it writes them
+  const U = f.asn1.Type.UTF8, attrs = [{ name: 'commonName', value: name, valueTagClass: U }];
+  if (org) attrs.push({ name: 'organizationName', value: org, valueTagClass: U });
+  if (email) attrs.push({ name: 'emailAddress', value: email, valueTagClass: f.asn1.Type.IA5STRING });
+  cert.setSubject(attrs); cert.setIssuer(attrs);
+  cert.setExtensions([{ name: 'basicConstraints', cA: false }, { name: 'keyUsage', digitalSignature: true, nonRepudiation: true }, { name: 'extKeyUsage', emailProtection: true }, { name: 'subjectKeyIdentifier' }]);
+  cert.sign(key, f.md.sha256.create());
+  const der = s2b(f.asn1.toDer(f.pkcs12.toPkcs12Asn1(key, [cert], pw, { algorithm: '3des', friendlyName: name })).getBytes());
+  return { der, id: { key, cert, chain: [] } };
+}
+function sigCertName(f, c) { const g = n => { const a = c.subject.getField(n); if (!a) return ''; if (a.valueTagClass === f.asn1.Type.UTF8) { try { return f.util.decodeUtf8(a.value); } catch {} } return a.value; }; return { cn: g('CN') || g('O') || 'Unknown', email: g('E'), org: g('O') }; }
+
+// ---- where the signature goes: an empty signature field, a signature you placed, a corner, or invisible ----
+async function sigPlaces(d) {
+  const out = []; const L = PDFLib;
+  try {
+    const pdf = await PDFDocument.load(d.bytes, { ignoreEncryption: true, updateMetadata: false });
+    const pageOf = new Map(pdf.getPages().map((p, i) => [p.ref.toString(), i]));
+    const walk = (ref, name, inh) => {
+      const o = pdf.context.lookup(ref); if (!(o instanceof L.PDFDict)) return;
+      const t = o.lookup(L.PDFName.of('T')); const nm = t ? (name ? name + '.' : '') + t.decodeText() : name;
+      const ft = o.lookup(L.PDFName.of('FT')) || inh; const kids = o.lookup(L.PDFName.of('Kids'));
+      if (kids instanceof L.PDFArray) { for (let k = 0; k < kids.size(); k++) walk(kids.get(k), nm, ft); return; }
+      if (String(ft) !== '/Sig' || o.get(L.PDFName.of('V'))) return;
+      const P = o.get(L.PDFName.of('P')); let pi = P ? pageOf.get(P.toString()) : undefined;
+      if (pi === undefined) pdf.getPages().forEach((p, i) => { const A = p.node.lookup(L.PDFName.of('Annots')); if (A instanceof L.PDFArray && A.asArray().some(r => r.toString() === ref.toString())) pi = i; });
+      const R = o.lookup(L.PDFName.of('Rect')); const rect = R instanceof L.PDFArray ? R.asArray().map(n => n.asNumber()) : null;
+      if (pi !== undefined && rect) out.push({ kind: 'field', label: `Signature field “${nm}” on page ${pi + 1}`, page: pi, rect, field: ref.toString() });
+    };
+    const af = pdf.catalog.lookup(L.PDFName.of('AcroForm')); const F = af instanceof L.PDFDict ? af.lookup(L.PDFName.of('Fields')) : null;
+    if (F instanceof L.PDFArray) for (let k = 0; k < F.size(); k++) walk(F.get(k), '', null);
+  } catch (e) { console.warn(e); }
+  d.annots.forEach((A, i) => A.forEach((a, k) => { if (a.type === 'sign') out.push({ kind: 'mark', label: `The signature you placed on page ${i + 1}`, page: i, rect: [Math.min(a.x1, a.x2), Math.min(a.y1, a.y2), Math.max(a.x1, a.x2), Math.max(a.y1, a.y2)], mark: [i, k], src: a.src }); }));
+  return out;
+}
+function sigCorner(d, i, where) {
+  const [x0, y0, x1, y1] = d.info[i].page.view; const rot = ((d.info[i].rot % 360) + 360) % 360; const W = 200, H = 64, m = 36;
+  // corners as the reader sees the page, turned back into the page's own coordinates
+  const vw = rot % 180 ? y1 - y0 : x1 - x0, vh = rot % 180 ? x1 - x0 : y1 - y0;
+  const vx = where.includes('right') ? vw - m - W : m, vy = where.includes('bottom') ? vh - m - H : m;
+  const vp = d.info[i].vp1; const a = vp.convertToPdfPoint(vx, vy), b = vp.convertToPdfPoint(vx + W, vy + H);
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+}
+
+// ---- the dialog ----
+async function sigDialog() {
+  const d = cur(); if (!d) return;
+  if (d.encrypted) { toast('Unlock this PDF first (Protect → Unlock). Signing a password-protected file is not supported yet.', 6000); return; }
+  closeTextEditor(true);
+  const places = await sigPlaces(d); const ids = sigIds(); const last = pref.get('sigLast', {});
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+  body.innerHTML = `
+    <div class="field"><label for="sgId">Digital ID</label><select id="sgId" class="inp">${ids.map((x, k) => `<option value="${k}"${last.id === x.fp ? ' selected' : ''}>${esc(x.name)}${x.email ? ' · ' + esc(x.email) : ''}${x.self ? ' (self-signed)' : ''}</option>`).join('')}<option value="file">Use a .p12 or .pfx file…</option><option value="new">Create a new self-signed ID…</option></select></div>
+    <div id="sgNew" hidden style="display:flex;flex-direction:column;gap:8px">
+      <div class="grid2"><div class="field"><label for="sgNm">Name</label><input id="sgNm" class="inp" value="${esc(S.author === 'Me' ? '' : S.author)}"></div><div class="field"><label for="sgEm">Email</label><input id="sgEm" class="inp" type="email"></div></div>
+      <div class="field"><label for="sgOrg">Organisation (optional)</label><input id="sgOrg" class="inp"></div>
+      <p class="hint" style="margin:0">A self-signed ID proves the file has not changed since you signed it. Others see your name but “identity not verified” until they choose to trust your certificate. For a signature that is trusted everywhere, buy an ID from a certificate authority or use your national ID card's .p12/.pfx, and choose “Use a .p12 or .pfx file”.</p></div>
+    <div class="field"><label for="sgPw">Password of the digital ID</label><input id="sgPw" class="inp" type="password" autocomplete="current-password"></div>
+    <div class="field"><label for="sgWhere">Where</label><select id="sgWhere" class="inp">${places.map((p, k) => `<option value="p${k}">${esc(p.label)}</option>`).join('')}
+      <option value="bottom-right">Bottom right of page ${d.cur + 1}</option><option value="bottom-left">Bottom left of page ${d.cur + 1}</option><option value="top-right">Top right of page ${d.cur + 1}</option><option value="top-left">Top left of page ${d.cur + 1}</option><option value="none">Invisible (listed in the signatures panel only)</option></select></div>
+    <div class="grid2"><div class="field"><label for="sgWhy">Reason</label><input id="sgWhy" class="inp" list="sgWhyL" value="${esc(last.reason || '')}" placeholder="e.g. I approve this document"><datalist id="sgWhyL"><option>I am the author of this document<option>I approve this document<option>I have reviewed this document<option>I agree to the terms</datalist></div>
+      <div class="field"><label for="sgLoc">Location</label><input id="sgLoc" class="inp" value="${esc(last.location || '')}"></div></div>
+    <label class="chk"><input type="checkbox" id="sgImg" ${S.sig ? 'checked' : 'disabled'}> Show my handwritten signature in the box${S.sig ? '' : ' (make one first with Markup → Sign)'}</label>
+    <label class="chk"><input type="checkbox" id="sgLock"> Lock the document after signing (certify: no further changes allowed)</label>
+    <p class="hint" style="margin:0">Unsaved changes and markup are written into the file first. The signed file is saved straight away; any later change in any app shows as “changed after signing”.</p>`;
+  const idSel = $('#sgId', body);
+  const sync = () => { $('#sgNew', body).hidden = idSel.value !== 'new'; $('label[for=sgPw]', body).textContent = idSel.value === 'new' ? 'Choose a password to protect the new ID' : 'Password of the digital ID'; };
+  idSel.onchange = sync; sync();
+  if (!ids.length) idSel.value = 'new', sync();
+  const okBtn = async () => {
+    const pw = $('#sgPw', body).value;
+    if (idSel.value === 'new' && !$('#sgNm', body).value.trim()) { toast('Type your name for the new ID'); return false; }
+    if (idSel.value === 'new' && pw.length < 4) { toast('Choose a password of at least 4 characters'); return false; }
+    return true;
+  };
+  let file = null;
+  const r = await modal({ title: 'Sign with a digital ID', body, actions: [{ label: 'Cancel', value: null }, { label: 'Sign and save', primary: true, value: 'ok' }] });
+  if (!r || !(await okBtn())) return;
+  const pw = $('#sgPw', body).value; const where = $('#sgWhere', body).value;
+  const opts = { reason: $('#sgWhy', body).value.trim(), location: $('#sgLoc', body).value.trim(), image: $('#sgImg', body).checked ? S.sig : null, certify: $('#sgLock', body).checked };
+  let id, entry;
+  try {
+    busy('Opening your digital ID…');
+    if (idSel.value === 'new') {
+      busy('Creating your digital ID…');
+      const n = await sigNewId({ name: $('#sgNm', body).value.trim(), email: $('#sgEm', body).value.trim(), org: $('#sgOrg', body).value.trim(), pw });
+      id = n.id; entry = { name: $('#sgNm', body).value.trim(), email: $('#sgEm', body).value.trim(), p12: b64u(n.der), self: true, fp: id.cert.serialNumber };
+      const all = sigIds(); all.push(entry); pref.set('sigIds', all);
+      unbusy(); await saveFile(entry.name.replace(/[\\/:*?"<>|]+/g, '') + ' digital ID.p12', new Blob([n.der], { type: 'application/x-pkcs12' }));
+      toast('Your new digital ID was saved as a .p12 file. Keep it and its password safe: it is how you sign on other devices.', 6000);
+    } else if (idSel.value === 'file') {
+      unbusy(); const inp = el('input'); inp.type = 'file'; inp.accept = '.p12,.pfx,application/x-pkcs12'; const fl = await new Promise(res => { inp.onchange = () => res(inp.files[0]); inp.click(); }); if (!fl) return;
+      busy('Opening your digital ID…'); const der = new Uint8Array(await fl.arrayBuffer()); id = await sigOpenId(der, pw);
+      const f = await sigForge(); const nm = sigCertName(f, id.cert);
+      entry = { name: nm.cn, email: nm.email, p12: b64u(der), self: id.cert.isIssuer(id.cert), fp: id.cert.serialNumber };
+      const all = sigIds().filter(x => x.fp !== entry.fp); all.push(entry); pref.set('sigIds', all);
+    } else {
+      entry = ids[+idSel.value]; id = await sigOpenId(u64(entry.p12), pw);
+    }
+    pref.set('sigLast', { id: entry.fp, reason: opts.reason, location: opts.location });
+    let place;
+    if (where[0] === 'p') place = places[+where.slice(1)];
+    else if (where === 'none') place = { kind: 'none', page: d.cur, rect: [0, 0, 0, 0] };
+    else place = { kind: 'corner', page: d.cur, rect: sigCorner(d, d.cur, where) };
+    if (place.kind === 'mark' && !opts.image && place.src) opts.image = { src: place.src };
+    busy('Signing…');
+    const out = await sigSign(d, id, place, opts);
+    unbusy();
+    snapshot(d); d.bytes = out; d.annots = d.annots.map(() => []); d.dirty = false;
+    await reloadDoc(d); renderRibbon();
+    const name = baseName(d).replace(/-signed$/, '') + '-signed.pdf';
+    await saveFile(name, new Blob([out], { type: 'application/pdf' })); d.name = name; renderTabs();
+    openTask('sigs');
+  } catch (e) { console.error(e); unbusy(); toast('Could not sign: ' + (e.message || e), 7000); } finally { unbusy(); }
+}
+
+// ---- signing: an incremental update with a /Sig field, then the PKCS#7 written into the reserved space ----
+async function sigSign(d, id, place, opts = {}) {
+  const L = PDFLib; const f = await sigForge();
+  if (place.kind === 'mark') { const [i, k] = place.mark; d.annots[i] = d.annots[i].filter((_, j) => j !== k); }
+  const base = new Uint8Array(await buildOutput(d));
+  const tail = sigTrailer(base);
+  const pdf = await PDFDocument.load(base, { updateMetadata: false, throwOnInvalidObject: false });
+  const ctx = pdf.context; ctx.largestObjectNumber = Math.max(ctx.largestObjectNumber, tail.size - 1);
+  const before = ctx.largestObjectNumber; const changed = new Map(); const mark = r => changed.set(r.toString(), r);
+  const N = n => L.PDFName.of(n); const T = s => L.PDFHexString.fromText(s);
+  const nm = sigCertName(f, id.cert); const now = new Date();
+  const ph = '0'.repeat(SIG_LEN * 2); const star = N('**********');
+  const sd = { Type: 'Sig', Filter: 'Adobe.PPKLite', SubFilter: 'adbe.pkcs7.detached', ByteRange: [0, star, star, star], Contents: L.PDFHexString.of(ph), M: L.PDFString.fromDate(now), Name: T(nm.cn) };
+  if (opts.reason) sd.Reason = T(opts.reason); if (opts.location) sd.Location = T(opts.location); if (nm.email) sd.ContactInfo = T(nm.email);
+  if (opts.certify) sd.Reference = [{ Type: 'SigRef', TransformMethod: 'DocMDP', TransformParams: { Type: 'TransformParams', P: 1, V: '1.2' } }];
+  const sigRef = ctx.register(ctx.obj(sd));
+  const page = pdf.getPages()[place.page]; const rect = place.rect.map(v => Math.round(v * 100) / 100);
+  // appearance
+  const w = rect[2] - rect[0], h = rect[3] - rect[1]; let ap = null;
+  if (w > 1 && h > 1) {
+    const rot = ((d.info[place.page].rot % 360) + 360) % 360; const vw = rot % 180 ? h : w, vh = rot % 180 ? w : h;
+    const font = await pdf.embedFont(StandardFonts.Helvetica); const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
+    let img = null, iw = 0; if (opts.image && opts.image.src) { img = await pdf.embedPng(dataUrlBytes(opts.image.src)); }
+    await pdf.flush();
+    const pad = Math.min(4, vh * .06); let ops = '';
+    if (img) { const ar = img.width / img.height; let ih = vh - 2 * pad, iw2 = ih * ar; const maxW = place.kind === 'mark' ? vw - 2 * pad : vw * .45; if (iw2 > maxW) { iw2 = maxW; ih = iw2 / ar; } iw = iw2 + pad; ops += `q ${iw2.toFixed(2)} 0 0 ${ih.toFixed(2)} ${pad.toFixed(2)} ${((vh - ih) / 2).toFixed(2)} cm /Im1 Do Q\n`; }
+    if (place.kind !== 'mark' || !img) {
+      const tz = now.getTimezoneOffset(), z = (tz > 0 ? '-' : '+') + String(Math.floor(Math.abs(tz) / 60)).padStart(2, '0') + ':' + String(Math.abs(tz) % 60).padStart(2, '0');
+      const dt = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${now.toTimeString().slice(0, 8)} ${z}`;
+      const lines = [[fontB, 'Digitally signed by ' + nm.cn], [font, 'Date: ' + dt]]; if (opts.reason) lines.push([font, 'Reason: ' + opts.reason]); if (opts.location) lines.push([font, 'Location: ' + opts.location]);
+      const tw = vw - iw - 2 * pad; let size = Math.min(10, (vh - 2 * pad) / (lines.length * 1.2));
+      for (const [fn, s] of lines) size = Math.min(size, tw / Math.max(1, fn.widthOfTextAtSize(safe(fn, s), 1)));
+      size = Math.max(3, size); let y = vh - pad - size;
+      for (const [fn, s] of lines) { ops += `BT /${fn === font ? 'F1' : 'F2'} ${size.toFixed(2)} Tf 0.1 0.1 0.35 rg ${(iw + pad).toFixed(2)} ${y.toFixed(2)} Td ${fn.encodeText(safe(fn, s)).toString()} Tj ET\n`; y -= size * 1.2; }
+    }
+    const mtx = rot === 90 ? [0, 1, -1, 0, vh, 0] : rot === 180 ? [-1, 0, 0, -1, vw, vh] : rot === 270 ? [0, -1, 1, 0, 0, vw] : [1, 0, 0, 1, 0, 0];
+    const res = { Font: { F1: font.ref, F2: fontB.ref } }; if (img) res.XObject = { Im1: img.ref };
+    ap = ctx.register(ctx.flateStream(ops, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, vw, vh], Matrix: mtx, Resources: res }));
+  }
+  // field and widget
+  let fieldRef;
+  if (place.kind === 'field') {
+    fieldRef = [...ctx.enumerateIndirectObjects()].find(([r]) => r.toString() === place.field)[0];
+    const fd = ctx.lookup(fieldRef, L.PDFDict); fd.set(N('V'), sigRef); if (ap) fd.set(N('AP'), ctx.obj({ N: ap })); fd.set(N('F'), L.PDFNumber.of(132)); mark(fieldRef);
+  } else {
+    let n = 1; const used = new Set(); const af0 = pdf.catalog.lookup(N('AcroForm')); const F0 = af0 instanceof L.PDFDict ? af0.lookup(N('Fields')) : null;
+    if (F0 instanceof L.PDFArray) F0.asArray().forEach(r => { const o = ctx.lookup(r); const t = o instanceof L.PDFDict && o.lookup(N('T')); if (t) used.add(t.decodeText()); });
+    while (used.has('Signature' + n)) n++;
+    const wd = { Type: 'Annot', Subtype: 'Widget', FT: 'Sig', T: T('Signature' + n), V: sigRef, F: w > 1 ? 132 : 134, Rect: rect, P: page.ref };
+    if (ap) wd.AP = { N: ap };
+    fieldRef = ctx.register(ctx.obj(wd));
+    const A = page.node.get(N('Annots'));
+    if (A instanceof L.PDFRef) { ctx.lookup(A, L.PDFArray).push(fieldRef); mark(A); }
+    else if (A instanceof L.PDFArray) { A.push(fieldRef); mark(page.ref); }
+    else { page.node.set(N('Annots'), ctx.obj([fieldRef])); mark(page.ref); }
+  }
+  // AcroForm: SigFlags 3, field listed
+  const rootRef = ctx.trailerInfo.Root; const cat0 = pdf.catalog; let af = cat0.get(N('AcroForm')); let afDict;
+  if (af instanceof L.PDFRef) { afDict = ctx.lookup(af, L.PDFDict); mark(af); }
+  else if (af instanceof L.PDFDict) { afDict = af; mark(rootRef); }
+  else { afDict = ctx.obj({ Fields: [] }); cat0.set(N('AcroForm'), ctx.register(afDict)); mark(rootRef); }
+  afDict.set(N('SigFlags'), L.PDFNumber.of(3));
+  const Fs = afDict.get(N('Fields'));
+  if (place.kind !== 'field') {
+    if (Fs instanceof L.PDFRef) { ctx.lookup(Fs, L.PDFArray).push(fieldRef); mark(Fs); }
+    else if (Fs instanceof L.PDFArray) Fs.push(fieldRef);
+    else afDict.set(N('Fields'), ctx.obj([fieldRef]));
+  }
+  if (opts.certify) { cat0.set(N('Perms'), ctx.obj({ DocMDP: sigRef })); mark(rootRef); }
+  // write the update
+  const objs = [...ctx.enumerateIndirectObjects()].filter(([r]) => r.objectNumber > before || changed.has(r.toString())).sort((a, b) => a[0].objectNumber - b[0].objectNumber);
+  const enc = new TextEncoder(); const chunks = []; let off = base.length;
+  const push = u => { chunks.push(u); off += u.length; };
+  if (base[base.length - 1] !== 10 && base[base.length - 1] !== 13) push(enc.encode('\n'));
+  const xref = [];
+  for (const [r, o] of objs) {
+    xref.push([r.objectNumber, off, r.generationNumber]);
+    const b = new Uint8Array(o.sizeInBytes()); o.copyBytesInto(b, 0);
+    push(enc.encode(`${r.objectNumber} ${r.generationNumber} obj\n`)); push(b); push(enc.encode('\nendobj\n'));
+  }
+  const tr = { Root: rootRef }; if (ctx.trailerInfo.Info) tr.Info = ctx.trailerInfo.Info; if (ctx.trailerInfo.ID) tr.ID = ctx.trailerInfo.ID;
+  const sections = es => { const out = []; for (const e of es) { const s = out[out.length - 1]; if (s && s[0] + s[1].length === e[0]) s[1].push(e); else out.push([e[0], [e]]); } return out; };
+  if (!tail.stream) {
+    const size = Math.max(tail.size, ctx.largestObjectNumber + 1);
+    let x = 'xref\n'; for (const [first, es] of sections(xref)) { x += `${first} ${es.length}\n`; for (const e of es) x += `${String(e[1]).padStart(10, '0')} ${String(e[2]).padStart(5, '0')} n\r\n`; }
+    const td = ctx.obj({ ...tr, Size: size, Prev: tail.startxref });
+    const at = off; push(enc.encode(x + 'trailer\n' + td.toString() + '\nstartxref\n' + at + '\n%%EOF\n'));
+  } else {
+    const xn = ctx.largestObjectNumber + 1; const at = off; xref.push([xn, at, 0]); xref.sort((a, b) => a[0] - b[0]);
+    const secs = sections(xref); const rows = new Uint8Array(xref.length * 7); let p = 0;
+    for (const [, es] of secs) for (const e of es) { rows[p++] = 1; rows[p++] = e[1] >>> 24 & 255; rows[p++] = e[1] >>> 16 & 255; rows[p++] = e[1] >>> 8 & 255; rows[p++] = e[1] & 255; rows[p++] = e[2] >>> 8 & 255; rows[p++] = e[2] & 255; }
+    const xd = ctx.obj({ ...tr, Type: 'XRef', Size: Math.max(tail.size, xn + 1), Prev: tail.startxref, W: [1, 4, 2], Index: secs.flatMap(([first, es]) => [first, es.length]), Length: rows.length });
+    push(enc.encode(`${xn} 0 obj\n${xd.toString()}\nstream\n`)); push(rows); push(enc.encode('\nendstream\nendobj\nstartxref\n' + at + '\n%%EOF\n'));
+  }
+  const out = new Uint8Array(off); out.set(base, 0); let q = base.length; for (const c of chunks) { out.set(c, q); q += c.length; }
+  // byte range and signature
+  const inc = b2s(out.subarray(base.length)); const ci = inc.indexOf('<' + ph + '>'); if (ci < 0) throw new Error('Could not find the space reserved for the signature.');
+  const start = base.length + ci, end = start + ph.length + 2;
+  const m = /\/ByteRange\s*\[\s*0\s+\/\*{10}\s+\/\*{10}\s+\/\*{10}\s*\]/.exec(inc); if (!m) throw new Error('Could not find the byte range.');
+  let br = `/ByteRange [0 ${start} ${end} ${out.length - end}]`; if (br.length > m[0].length) throw new Error('Byte range too long.'); br = br.slice(0, -1).padEnd(m[0].length - 1, ' ') + ']';
+  out.set(s2b(br), base.length + m.index);
+  const signed = new Uint8Array(start + out.length - end); signed.set(out.subarray(0, start), 0); signed.set(out.subarray(end), start);
+  const p7 = f.pkcs7.createSignedData(); p7.content = f.util.createBuffer(b2s(signed));
+  p7.addCertificate(id.cert); for (const c of id.chain || []) p7.addCertificate(c);
+  p7.addSigner({ key: id.key, certificate: id.cert, digestAlgorithm: f.pki.oids.sha256, authenticatedAttributes: [{ type: f.pki.oids.contentType, value: f.pki.oids.data }, { type: f.pki.oids.messageDigest }, { type: f.pki.oids.signingTime, value: now }] });
+  p7.sign({ detached: true });
+  // forge rebuilds the signer's issuer name from parsed fields and can re-encode non-ASCII names; use the
+  // certificate's own bytes so readers can match the signer to its certificate.
+  const asn = p7.toAsn1(); const tbs = id.cert.tbsCertificate || f.pki.getTBSCertificate(id.cert);
+  const iss = tbs.value[tbs.value[0].tagClass === f.asn1.Class.CONTEXT_SPECIFIC ? 3 : 2];
+  for (const si of asn.value[1].value[0].value.slice(-1)[0].value) si.value[1].value[0] = iss;
+  const der = f.asn1.toDer(asn).getBytes(); if (der.length > SIG_LEN) throw new Error('The certificate chain is too large for the space reserved.');
+  let hex = ''; for (let i = 0; i < der.length; i++) hex += der.charCodeAt(i).toString(16).padStart(2, '0');
+  out.set(s2b(hex), start + 1);
+  return out;
+}
+// The last cross-reference section: where it starts, whether it is a stream, and the file's /Size.
+function sigTrailer(b) {
+  const s = b2s(b.subarray(Math.max(0, b.length - 2048))); const k = s.lastIndexOf('startxref'); if (k < 0) throw new Error('This PDF has no startxref; save it once from Quire and try again.');
+  const startxref = parseInt(s.slice(k + 9).trim(), 10); const at = b2s(b.subarray(startxref, Math.min(b.length, startxref + 4096)));
+  const stream = !/^\s*xref/.test(at);
+  let txt = at; if (!stream) { const t = b2s(b.subarray(startxref, Math.min(b.length, startxref + (1 << 22)))); const ti = t.indexOf('trailer'); txt = ti >= 0 ? t.slice(ti, ti + 4096) : ''; }
+  const sz = /\/Size\s+(\d+)/.exec(txt); return { startxref, stream, size: sz ? +sz[1] : 0 };
+}
+
+// ---- checking signatures ----
+const SIG_HASH = { '1.3.14.3.2.26': 'SHA-1', '2.16.840.1.101.3.4.2.1': 'SHA-256', '2.16.840.1.101.3.4.2.2': 'SHA-384', '2.16.840.1.101.3.4.2.3': 'SHA-512' };
+async function sigList(bytes) {
+  const L = PDFLib; const f = await sigForge(); const out = [];
+  const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false });
+  const pages = pdf.getPages(); const pageOf = new Map(pages.map((p, i) => [p.ref.toString(), i]));
+  const seen = new Set();
+  const walk = (ref, name, inh) => {
+    const o = ref instanceof L.PDFRef ? pdf.context.lookup(ref) : ref; if (!(o instanceof L.PDFDict)) return;
+    const t = o.lookup(L.PDFName.of('T')); const nm = t ? (name ? name + '.' : '') + t.decodeText() : name;
+    const ft = o.lookup(L.PDFName.of('FT')) || inh; const kids = o.lookup(L.PDFName.of('Kids'));
+    if (kids instanceof L.PDFArray && !o.get(L.PDFName.of('V'))) { for (let k = 0; k < kids.size(); k++) walk(kids.get(k), nm, ft); return; }
+    if (String(ft) !== '/Sig') return; const V = o.lookup(L.PDFName.of('V')); if (!(V instanceof L.PDFDict)) return;
+    const vk = o.get(L.PDFName.of('V')).toString(); if (seen.has(vk)) return; seen.add(vk);
+    const P = o.get(L.PDFName.of('P')); let page = P ? pageOf.get(P.toString()) : undefined;
+    if (page === undefined && ref instanceof L.PDFRef) pages.forEach((p, i) => { const A = p.node.lookup(L.PDFName.of('Annots')); if (A instanceof L.PDFArray && A.asArray().some(r => r.toString() === ref.toString())) page = i; });
+    const R = o.lookup(L.PDFName.of('Rect')); const rect = R instanceof L.PDFArray ? R.asArray().map(n => n.asNumber ? n.asNumber() : 0) : null;
+    const str = k => { const v = V.lookup(L.PDFName.of(k)); return v && v.decodeText ? v.decodeText() : ''; };
+    const br = V.lookup(L.PDFName.of('ByteRange')); const C = V.lookup(L.PDFName.of('Contents'));
+    out.push({ field: nm, page, rect, byteRange: br instanceof L.PDFArray ? br.asArray().map(n => n.asNumber()) : null, contents: C ? (C instanceof L.PDFHexString ? C.asBytes() : s2b(C.asString())) : null, subFilter: String(V.lookup(L.PDFName.of('SubFilter')) || '').slice(1), name: str('Name'), reason: str('Reason'), location: str('Location'), M: str('M'), certify: !!V.lookup(L.PDFName.of('Reference')) });
+  };
+  const af = pdf.catalog.lookup(L.PDFName.of('AcroForm')); const F = af instanceof L.PDFDict ? af.lookup(L.PDFName.of('Fields')) : null;
+  if (F instanceof L.PDFArray) for (let k = 0; k < F.size(); k++) walk(F.get(k), '', null);
+  for (const s of out) Object.assign(s, await sigCheck(f, bytes, s));
+  return out.sort((a, b) => (a.byteRange ? a.byteRange[2] + a.byteRange[3] : 0) - (b.byteRange ? b.byteRange[2] + b.byteRange[3] : 0));
+}
+function sigNameOf(f, node) { try { const a = f.pki.RDNAttributesAsArray(node); const g = sn => { const x = a.find(y => y.shortName === sn || y.name === sn); return x ? (x.valueTagClass === f.asn1.Type.UTF8 ? (() => { try { return f.util.decodeUtf8(x.value); } catch { return x.value; } })() : x.value) : ''; }; return { cn: g('CN'), o: g('O'), e: g('E') || g('emailAddress'), c: g('C'), text: a.map(x => (x.shortName || x.name) + '=' + x.value).join(', ') }; } catch { return { cn: '', text: '' }; } }
+function sigCertInfo(f, node) {
+  // tbsCertificate: [version] serial sigAlg issuer validity subject spki
+  const tbs = node.value[0].value; let i = tbs[0].tagClass === f.asn1.Class.CONTEXT_SPECIFIC ? 1 : 0;
+  const serial = f.util.bytesToHex(tbs[i].value); const issuer = sigNameOf(f, tbs[i + 2]); const val = tbs[i + 3].value; const subject = sigNameOf(f, tbs[i + 4]);
+  const tm = n => n.type === f.asn1.Type.UTCTIME ? f.asn1.utcTimeToDate(n.value) : f.asn1.generalizedTimeToDate(n.value);
+  const spki = s2b(f.asn1.toDer(tbs[i + 5]).getBytes()); const keyAlg = f.asn1.derToOid(tbs[i + 5].value[0].value[0].value);
+  const curve = tbs[i + 5].value[0].value[1] && tbs[i + 5].value[0].value[1].type === f.asn1.Type.OID ? f.asn1.derToOid(tbs[i + 5].value[0].value[1].value) : '';
+  return { serial, issuer, subject, notBefore: tm(val[0]), notAfter: tm(val[1]), spki, keyAlg, curve, self: issuer.text === subject.text, der: s2b(f.asn1.toDer(node).getBytes()) };
+}
+async function sigCheck(f, bytes, s) {
+  const r = { ok: false, intact: false, whole: false, problems: [] };
+  try {
+    const br = s.byteRange; if (!br || br.length !== 4 || !s.contents) { r.problems.push('The signature is incomplete.'); return r; }
+    r.whole = br[2] + br[3] === bytes.length; r.signedLen = br[2] + br[3];
+    if (br[0] !== 0 || br[2] + br[3] > bytes.length) { r.problems.push('The signed byte range does not match the file.'); return r; }
+    const asn = f.asn1.fromDer(b2s(s.contents), { strict: false, parseAllBytes: false });
+    const sd = asn.value[1].value[0].value; // ContentInfo -> [0] -> SignedData
+    let k = 3; const certs = []; while (sd[k] && sd[k].tagClass === f.asn1.Class.CONTEXT_SPECIFIC) { if (sd[k].type === 0) for (const cn of sd[k].value) { try { certs.push(sigCertInfo(f, cn)); } catch {} } k++; }
+    const si = sd[sd.length - 1].value[0].value;
+    const sidSerial = f.util.bytesToHex(si[1].value[1].value); const digOid = f.asn1.derToOid(si[2].value[0].value);
+    let j = 3, attrs = null; if (si[3].tagClass === f.asn1.Class.CONTEXT_SPECIFIC && si[3].type === 0) { attrs = si[3]; j = 4; }
+    const sigAlg = f.asn1.derToOid(si[j].value[0].value); const sigVal = s2b(si[j + 1].value);
+    const cert = certs.find(x => x.serial.replace(/^0+/, '') === sidSerial.replace(/^0+/, '')) || certs[0];
+    r.cert = cert; r.certs = certs; const hash = SIG_HASH[digOid]; if (!hash) { r.problems.push('Unsupported digest algorithm ' + digOid + '.'); return r; }
+    const data = new Uint8Array(br[1] + br[3]); data.set(bytes.subarray(0, br[1]), 0); data.set(bytes.subarray(br[2], br[2] + br[3]), br[1]);
+    const dg = new Uint8Array(await crypto.subtle.digest(hash, data));
+    let signedBytes = data, md = null;
+    if (attrs) {
+      for (const a of attrs.value) { const oid = f.asn1.derToOid(a.value[0].value); if (oid === '1.2.840.113549.1.9.4') md = s2b(a.value[1].value[0].value); if (oid === '1.2.840.113549.1.9.5') { const t = a.value[1].value[0]; r.time = t.type === f.asn1.Type.UTCTIME ? f.asn1.utcTimeToDate(t.value) : f.asn1.generalizedTimeToDate(t.value); } }
+      r.intact = !!md && md.length === dg.length && md.every((x, i) => x === dg[i]);
+      const der = s2b(f.asn1.toDer(attrs).getBytes()); der[0] = 0x31; signedBytes = der;
+    }
+    if (!cert) { r.problems.push('The signer\'s certificate is not in the signature.'); return r; }
+    const ok = await sigVerifyRaw(cert, sigAlg, hash, signedBytes, sigVal);
+    if (!attrs) r.intact = ok;
+    r.ok = ok && r.intact;
+    if (!r.intact) r.problems.push('The document has been changed since it was signed, or the signature is damaged.');
+    else if (!ok) r.problems.push('The signature does not match the signer\'s certificate.');
+    const when = r.time || (s.M ? sigPdfDate(s.M) : null) || new Date();
+    if (cert.notBefore > when || cert.notAfter < when) r.problems.push('The certificate was not valid when the document was signed.');
+  } catch (e) { console.warn(e); r.problems.push('The signature could not be read (' + (e.message || e) + ').'); }
+  return r;
+}
+async function sigVerifyRaw(cert, sigAlg, hash, data, sig) {
+  const rsa = cert.keyAlg === '1.2.840.113549.1.1.1'; const pss = sigAlg === '1.2.840.113549.1.1.10';
+  try {
+    if (rsa || pss) {
+      const alg = pss ? { name: 'RSA-PSS', hash } : { name: 'RSASSA-PKCS1-v1_5', hash };
+      const key = await crypto.subtle.importKey('spki', cert.spki, alg, false, ['verify']);
+      return await crypto.subtle.verify(pss ? { name: 'RSA-PSS', saltLength: { 'SHA-1': 20, 'SHA-256': 32, 'SHA-384': 48, 'SHA-512': 64 }[hash] } : alg, key, sig, data);
+    }
+    if (cert.keyAlg === '1.2.840.10045.2.1') {
+      const crv = { '1.2.840.10045.3.1.7': 'P-256', '1.3.132.0.34': 'P-384', '1.3.132.0.35': 'P-521' }[cert.curve]; if (!crv) return false;
+      const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'ECDSA', namedCurve: crv }, false, ['verify']);
+      const n = { 'P-256': 32, 'P-384': 48, 'P-521': 66 }[crv]; const f = window.forge; const seq = f.asn1.fromDer(b2s(sig));
+      const fix = v => { let b = s2b(v); while (b.length > n && b[0] === 0) b = b.subarray(1); const o = new Uint8Array(n); o.set(b, n - b.length); return o; };
+      const raw = new Uint8Array(2 * n); raw.set(fix(seq.value[0].value), 0); raw.set(fix(seq.value[1].value), n);
+      return await crypto.subtle.verify({ name: 'ECDSA', hash }, key, raw, data);
+    }
+  } catch (e) { console.warn(e); }
+  return false;
+}
+function sigPdfDate(s) { const m = /D:(\d{4})(\d\d)?(\d\d)?(\d\d)?(\d\d)?(\d\d)?([Z+-])?(\d\d)?'?(\d\d)?/.exec(s || ''); if (!m) return null; const z = m[7] === '+' || m[7] === '-' ? (m[7] === '+' ? -1 : 1) * ((+m[8] || 0) * 60 + (+m[9] || 0)) : 0; return new Date(Date.UTC(+m[1], (+m[2] || 1) - 1, +m[3] || 1, +m[4] || 0, +m[5] || 0, +m[6] || 0) + z * 60000); }
+const SG = { list: null, doc: null, bytes: null };
+TASKS.sigs = function (P, d) {
+  if (SG.doc !== d || SG.bytes !== d.bytes) { SG.doc = d; SG.bytes = d.bytes; SG.list = null; P.innerHTML = `<section class="sec">${head('Signatures')}<p class="muted">Checking signatures…</p></section>`; bindClose(P);
+    sigList(d.bytes).then(l => { SG.list = l; if (S.task === 'sigs' && cur() === d) TASKS.sigs(P, d); }).catch(e => { SG.list = []; SG.err = e.message || String(e); if (S.task === 'sigs') TASKS.sigs(P, d); }); return; }
+  if (!SG.list) return;
+  const L = SG.list; const fmt = t => t ? t.toLocaleString() : '';
+  const verdict = s => !s.ok ? ['bad', 'Invalid'] : s.problems.length ? ['warn', 'Valid, with warnings'] : s.cert && s.cert.self ? ['warn', 'Valid, identity not verified'] : ['ok', 'Valid, signer not on a trusted list'];
+  P.innerHTML = `<section class="sec">${head('Signatures')}
+    ${L.length ? `<p class="hint" style="margin:0">${L.every(s => s.ok) ? 'Every signature is intact: the signed parts of this file have not changed.' : 'At least one signature has a problem.'}${d.dirty || d.annots.some(a => a.length) ? ' You have unsaved changes; saving will add them after the signatures.' : ''}</p>` : `<p class="muted">This PDF has no digital signatures.${SG.err ? ' (' + esc(SG.err) + ')' : ''}</p>`}
+    <ol class="sig-list" style="margin:0;list-style:none;padding:0;display:flex;flex-direction:column;gap:10px">${L.map((s, k) => { const [cls, txt] = verdict(s); const c = s.cert; return `<li class="sig-${cls}" style="border:1px solid var(--line,#ddd);border-radius:10px;padding:10px;border-left:4px solid ${cls === 'ok' ? '#2e8b57' : cls === 'warn' ? '#d4a017' : '#c33'}">
+      <b>${esc((c && (c.subject.cn || c.subject.o)) || s.name || 'Unknown signer')}</b> <span class="muted small">${esc(txt)}</span>${s.certify ? ' <span class="small">· certified</span>' : ''}
+      <div class="small muted">${s.time || s.M ? 'Signed ' + esc(fmt(s.time || sigPdfDate(s.M))) : ''}${s.reason ? ' · ' + esc(s.reason) : ''}${s.location ? ' · ' + esc(s.location) : ''}</div>
+      <div class="small">${s.intact ? (s.whole ? 'No changes since this signature.' : 'The file was changed after this signature (a later revision). The signed version is intact.') : ''}</div>
+      ${s.problems.map(p => `<div class="small" style="color:#c33">${esc(p)}</div>`).join('')}
+      <div class="row" style="margin-top:6px">${s.page !== undefined ? `<button class="btn sm" data-sgo="${k}">Page ${s.page + 1}</button>` : ''}<button class="btn sm" data-scert="${k}">Certificate</button>${!s.whole && s.intact ? `<button class="btn sm" data-sver="${k}">Open signed version</button>` : ''}</div></li>`; }).join('')}</ol>
+    <div class="row"><button class="btn sm primary" id="sgSign">${svg('certsign')}Sign with a digital ID</button>${sigIds().length ? `<button class="btn sm" id="sgIds">Your digital IDs (${sigIds().length})</button>` : ''}</div>
+    <p class="hint" style="margin:0">Quire checks that each signature matches its certificate and that the signed bytes have not changed. It does not keep a list of trusted certificate authorities or check revocation, so “identity” means the name inside the certificate.</p></section>`;
+  bindClose(P);
+  $$('[data-sgo]', P).forEach(b => b.onclick = () => gotoPage(L[+b.dataset.sgo].page));
+  $$('[data-sver]', P).forEach(b => b.onclick = async () => { const s = L[+b.dataset.sver]; await openBytes(d.bytes.slice(0, s.byteRange[2] + s.byteRange[3]), baseName(d) + ' (as signed by ' + (s.cert ? s.cert.subject.cn : 'signer') + ').pdf'); });
+  $$('[data-scert]', P).forEach(b => b.onclick = () => sigCertDialog(L[+b.dataset.scert]));
+  $('#sgSign', P).onclick = () => sigDialog();
+  const ib = $('#sgIds', P); if (ib) ib.onclick = sigIdsDialog;
+};
+function sigCertDialog(s) {
+  const c = s.cert; if (!c) { toast('No certificate in this signature'); return; }
+  const row = (k, v) => v ? `<tr><th style="text-align:left;padding:3px 10px 3px 0;vertical-align:top">${k}</th><td>${esc(v)}</td></tr>` : '';
+  const body = `<table class="small" style="border-collapse:collapse">${row('Name', c.subject.cn)}${row('Organisation', c.subject.o)}${row('Email', c.subject.e)}${row('Country', c.subject.c)}${row('Issued by', c.self ? 'Itself (self-signed)' : c.issuer.text)}${row('Valid from', c.notBefore.toLocaleString())}${row('Valid until', c.notAfter.toLocaleString())}${row('Serial number', c.serial)}${row('Key', c.keyAlg === '1.2.840.113549.1.1.1' ? 'RSA' : c.keyAlg === '1.2.840.10045.2.1' ? 'Elliptic curve' : c.keyAlg)}${row('Chain', s.certs.length + ' certificate' + (s.certs.length === 1 ? '' : 's') + ' in the signature')}</table>`;
+  modal({ title: 'Certificate', body, actions: [{ label: 'Save certificate (.cer)', value: 'save' }, { label: 'Close', primary: true, value: null }] }).then(v => { if (v === 'save') saveFile((c.subject.cn || 'certificate') + '.cer', new Blob([c.der], { type: 'application/pkix-cert' })); });
+}
+async function sigIdsDialog() {
+  const ids = sigIds(); const body = el('div');
+  body.innerHTML = `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px">${ids.map((x, k) => `<li class="row"><span style="flex:1">${esc(x.name)}${x.email ? ' · ' + esc(x.email) : ''}${x.self ? ' <span class="muted small">self-signed</span>' : ''}</span><button class="btn sm" data-ex="${k}">Save .p12</button><button class="btn sm danger-o" data-rm="${k}">Remove</button></li>`).join('')}</ul><p class="hint">Digital IDs are kept in this browser, protected by their own password. Removing one here does not delete copies you saved.</p>`;
+  body.onclick = e => { const b = e.target.closest('button'); if (!b) return; const k = +(b.dataset.ex ?? b.dataset.rm); if (b.dataset.ex) saveFile(ids[k].name + '.p12', new Blob([u64(ids[k].p12)], { type: 'application/x-pkcs12' })); else { ids.splice(k, 1); pref.set('sigIds', ids); b.closest('li').remove(); } };
+  await modal({ title: 'Your digital IDs', body, actions: [{ label: 'Close', primary: true, value: null }] });
+  if (S.task === 'sigs') renderPanel();
+}
+// One ribbon tab for everything about trust: signatures, passwords, hidden data, redaction.
+RIB.protect = { label: 'Protect', items: ['@certsign', '@sigs', '|', '@protect', '@unlock', '@sanitize', '|', '@redactApply'] };
+RIB.tools.items = RIB.tools.items.filter(x => !['@protect', '@unlock', '@sanitize', '@redactApply'].includes(x)).filter((x, i, a) => !(x === '|' && (i === 0 || a[i - 1] === '|' || i === a.length - 1)));
+
 /* ================= signature ================= */
 async function signatureDialog() {
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
