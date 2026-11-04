@@ -9096,7 +9096,7 @@ function cvParas(block, body, page) {
     });
     p.text = p.runs.map(r => r.join + r.text).join('').replace(/\s+/g, ' ').trim();
     p.rtl = (p.text.match(new RegExp(CV_RTL.source, 'g')) || []).length > p.text.length * .3;
-    const col = page && right - left < (page.right - page.left) * .7 && (left > page.left + body * 6 || right < page.right - body * 6); /* a column: indents count from the column, not the page */
+    const col = page && segs.length >= 3 && right - left < (page.right - page.left) * .7 && (left > page.left + body * 6 || right < page.right - body * 6); /* a column: indents count from the column, not the page */
     const mid = s => (s.x0 + s.x1) / 2, PL = page && !col ? page.left : left, PR = page && !col ? page.right : right;
     p.center = (Math.abs(mid(p.segs[0]) - (left + right) / 2) < body && p.segs.every(s => s.x0 > left + body * 2)) || (p.segs.length <= 3 && p.segs.every(s => Math.abs(mid(s) - (PL + PR) / 2) < body * 1.2 && s.x0 > PL + body * 3));
     // layout as on the page, as ABBYY's "editable copy" keeps it: alignment, indents, space before, line spacing

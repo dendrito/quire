@@ -1,0 +1,9 @@
+node_modules/
+out/
+fixtures/*.pdf
+fixtures/*.json
+fixtures/*.txt
+!fixtures/pt.txt
+verapdf/lib/
+verapdf/vera
+__pycache__/

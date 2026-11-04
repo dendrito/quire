@@ -1,0 +1,60 @@
+# Runs Quire's automatic tests on every change to the app or the tests, and on demand from the Actions tab.
+# Each test drives the real app in headless Chromium and checks the result with independent tools:
+# veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx and openpyxl (Word, Excel).
+# The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact.
+name: Tests
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    paths: ['web/**', 'mac/src/**', 'windows/src/**', 'tests/**', '.github/workflows/tests.yml']
+jobs:
+  copies:
+    name: App copies in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mac and Windows apps carry the same web app
+        run: |
+          cmp web/quire-pdf-studio.html mac/src/quire.html
+          cmp web/quire-pdf-studio.html windows/src/quire.html
+  test:
+    name: Signatures, PDF/A, PDF/UA, OCR, Excel, Word, redaction
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: System tools (poppler, Liberation fonts for the test scans)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils fonts-liberation
+      - name: Python packages
+        run: pip install -q reportlab pillow numpy python-docx openpyxl
+      - name: veraPDF
+        run: |
+          mvn -q -f verapdf/pom.xml dependency:copy-dependencies -DoutputDirectory=lib
+          printf '#!/bin/sh\nexec java -cp "%s/verapdf/lib/*" org.verapdf.apps.GreenfieldCliWrapper "$@"\n' "$PWD" > verapdf/vera && chmod +x verapdf/vera
+      - name: Node packages and Chromium
+        run: npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: Test files
+        run: python3 fixtures/make.py
+      - name: Run the tests
+        run: node run.js
+        env:
+          VERAPDF: ${{ github.workspace }}/tests/verapdf/vera
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-output
+          path: tests/out/
