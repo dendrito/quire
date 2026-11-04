@@ -1585,11 +1585,13 @@ async function openOcrLangs() {
 // script (Hebrew, Arabic, CJK, Cyrillic…) can be searched, selected and copied while the scan underneath stays as it is.
 // This is the same approach Tesseract's own PDF output uses.
 const GLYPHLESS_TTF = 'AAEAAAAKAIAAAwAgT1MvMkT/RUAAAAEoAAAAYGNtYXAADABzAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZC02fFQAAACsAAAANmhoZWED6QH2AAAA5AAAACRobXR4AfQAAAAAAYgAAAAGbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lGZ8ZNAAAAdAAAABycG9zdABOAAAAAAJEAAAAJgABAAAAAQAAgXrill8PPPUAAwPoAAAAAOcQHboAAAAA5xAdugAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAPoAAAAAAH0AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwH0AZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAPz8/PwAAACAAIAPoAAAAAAPoAAAAAAAAAAAAAAAAAAAAAAAgAAAB9AAAAAAAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAAAIP//AAAAIP///+EAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQANAAAAAQAAAAAAAgAHAA0AAwABBAkAAQAaABQAAwABBAkAAgAOAC5HbHlwaExlc3NGb250UmVndWxhcgBHAGwAeQBwAGgATABlAHMAcwBGAG8AbgB0AFIAZQBnAHUAbABhAHIAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAABKAAA=';
+// ToUnicode: each code is its own UTF-16 unit. Written as 256 ranges of 256, since a range may only vary in its last byte.
+const OCR_UCS_RANGES = (() => { let o = ''; for (let b = 0; b < 256; b += 100) { const n = Math.min(100, 256 - b); o += `${n} beginbfrange\n`; for (let k = b; k < b + n; k++) { const h = k.toString(16).padStart(2, '0'); o += `<${h}00> <${h}ff> <${h}00>\n`; } o += 'endbfrange\n'; } return o; })();
 function ocrFont(pdf) {
   const L = PDFLib, ctx = pdf.context;
   const ttf = Uint8Array.from(atob(GLYPHLESS_TTF), ch => ch.charCodeAt(0));
   const map = new Uint8Array(131072); for (let k = 1; k < map.length; k += 2) map[k] = 1; // every CID shows glyph 1 (empty)
-  const cmap = '/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n1 beginbfrange\n<0000> <FFFF> <0000>\nendbfrange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n';
+  const cmap = ('/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n' + OCR_UCS_RANGES + 'endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n');
   const ff = ctx.register(ctx.flateStream(ttf, { Length1: ttf.length }));
   const desc = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: 'GlyphLessFont', Flags: 5, FontBBox: [0, 0, 500, 1000], ItalicAngle: 0, Ascent: 1000, Descent: 0, CapHeight: 1000, StemV: 80, FontFile2: ff }));
   const cid = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'GlyphLessFont', CIDSystemInfo: { Registry: L.PDFString.of('Adobe'), Ordering: L.PDFString.of('Identity'), Supplement: 0 }, FontDescriptor: desc, DW: 500, CIDToGIDMap: ctx.register(ctx.flateStream(map)) }));
@@ -8675,6 +8677,186 @@ async function rxImage(pdf, page, ob, boxes) {
     XO.set(N(ob.name), nref);
   } finally { tmp.destroy(); }
 }
+
+/* ================= accessibility: check and fix (like Acrobat's Accessibility Checker) ================= */
+// Checks what screen readers and the PDF/UA rules need, and fixes what can be fixed automatically: title shown in the
+// title bar, document language, tags (a structure tree: headings, paragraphs, figures, links, form fields, with
+// headers, footers and decoration marked as artifacts), tab order, link and field descriptions, picture descriptions.
+Object.assign(IC, { a11y: '<circle cx="12" cy="4.5" r="1.8"/><path d="M5 8.5l7 1.5 7-1.5M12 10v4.5M12 14.5l-3.5 6M12 14.5l3.5 6"/>' });
+Object.assign(ACTS, { a11y: ['Accessibility check', 'a11y', () => openTask('a11y')] });
+Object.assign(RLBL, { a11y: 'Accessible' });
+Object.assign(CMD_KW, { a11y: 'accessibility accessible screen reader tags tagged pdf/ua alt text alternate language title reading order wcag blind' });
+RIB.protect.items.push('@a11y');
+
+const A11Y_STOP = { pt: ' de que não os uma para com das dos não pelo pela como mais foi ao às são está ', es: ' de que el los las una para con por del como más pero sus está fue ', en: ' the and of to in that is for with was as on are this be by ', fr: ' le les des une est que pour dans qui sur pas par avec sont ', de: ' der die und das ist nicht ein eine mit sich auf für den dem ', it: ' il che di della per non una sono con gli nel alla del le ', nl: ' de het een van en dat niet zijn op voor met is ook ', la: ' et in est non ad cum quod ut sed qui quae per ' };
+function a11yLang(text) {
+  const t = text.slice(0, 20000); const n = s => (t.match(s) || []).length;
+  const scripts = [['he', /[֐-׿]/g], ['ar', /[؀-ۿ]/g], ['ru', /[Ѐ-ӿ]/g], ['el', /[Ͱ-Ͽ]/g], ['ja', /[぀-ヿ]/g], ['zh', /[一-鿿]/g], ['ko', /[가-힯]/g]];
+  const letters = n(/\p{L}/gu) || 1; for (const [l, re] of scripts) if (n(re) > letters * .3) return l === 'zh' && n(/[぀-ヿ]/g) > 20 ? 'ja' : l;
+  const words = (' ' + t.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ') + ' '); let best = ['', 0];
+  for (const [l, sw] of Object.entries(A11Y_STOP)) { let s = 0; for (const w of sw.trim().split(' ')) { const re = new RegExp(' ' + w + ' ', 'g'); s += (words.match(re) || []).length; } if (s > best[1]) best = [l, s]; }
+  return best[1] > 5 ? best[0] : '';
+}
+// ---- the scan ----
+async function a11yScan(d) {
+  const L = PDFLib, N = n => L.PDFName.of(n);
+  const pdf = await PDFDocument.load(d.bytes, { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false }); const cat0 = pdf.catalog; const ctx = pdf.context;
+  const info = ctx.trailerInfo.Info ? ctx.lookup(ctx.trailerInfo.Info) : null; let title = info instanceof L.PDFDict && info.lookup(N('Title')) ? info.lookup(N('Title')).decodeText().trim() : ''; if (/^(\(?anonymous\)?|untitled|sem t[ií]tulo|sin t[ií]tulo|document\d*|microsoft word - .*|.*\.(docx?|odt|pdf|indd|tex))$/i.test(title)) title = '';
+  const vp = cat0.lookup(N('ViewerPreferences')); const showTitle = vp instanceof L.PDFDict && String(vp.get(N('DisplayDocTitle'))) === 'true';
+  const lang = cat0.lookup(N('Lang')); const langS = lang ? lang.decodeText() : '';
+  const mi = cat0.lookup(N('MarkInfo')); const tagged = !!cat0.get(N('StructTreeRoot')) && mi instanceof L.PDFDict && String(mi.get(N('Marked'))) === 'true';
+  const ol = cat0.lookup(N('Outlines')); const hasBm = ol instanceof L.PDFDict && !!ol.get(N('First'));
+  let enc = null; if (ctx.trailerInfo.Encrypt) { const E = ctx.lookup(ctx.trailerInfo.Encrypt); const P = E instanceof L.PDFDict && E.lookup(N('P')); enc = P ? !(P.asNumber() & (1 << 9)) : false; }
+  let links = 0, linksNoDesc = 0, fields = 0, fieldsNoTip = 0, tabs = 0, annPages = 0;
+  for (const p of pdf.getPages()) { const A = p.node.lookup(N('Annots')); if (!(A instanceof L.PDFArray) || !A.size()) continue; annPages++; if (String(p.node.get(N('Tabs'))) === '/S') tabs++;
+    for (const r of A.asArray()) { const a = ctx.lookup(r); if (!(a instanceof L.PDFDict)) continue; const st = String(a.get(N('Subtype'))); if (st === '/Link') { links++; if (!a.get(N('Contents'))) linksNoDesc++; } if (st === '/Widget') { fields++; const f = a.get(N('TU')) || (a.lookup(N('Parent')) instanceof L.PDFDict && a.lookup(N('Parent')).get(N('TU'))); if (!f) fieldsNoTip++; } } }
+  // figures without alt text (only once tagged)
+  let figs = 0, figsNoAlt = 0;
+  if (tagged) for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/StructElem' && String(o.get(N('S'))) === '/Figure') { figs++; if (!o.get(N('Alt')) && !o.get(N('ActualText'))) figsNoAlt++; }
+  // text: image-only pages, unreadable characters, language guess
+  let noText = 0, bad = 0, sample = '';
+  for (let i = 0; i < d.info.length; i++) { const tc = await pageText(d, i); const s = tc.items.map(it => it.str).join(' '); if (!s.trim()) noText++; if (/[�-]/.test(s)) bad++; if (sample.length < 20000) sample += s + ' '; }
+  const guess = a11yLang(sample);
+  const noEmb = new Set(); for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/Font' && !/CIDFontType/.test(String(o.get(N('Subtype'))))) { try { if (!pdfaFontEmbedded(pdf, o)) noEmb.add(String(o.get(N('BaseFont')) || '?').replace(/^\/([A-Z]{6}\+)?/, '')); } catch {} }
+  const C = [];
+  const add = (id, label, state, detail, fix) => C.push({ id, label, state, detail, fix });
+  add('title', 'Document title shown in the title bar', title && showTitle ? 'pass' : 'fail', title ? (showTitle ? esc(title) : `“${esc(title)}”, but readers show the file name instead`) : 'No title', 'title');
+  add('lang', 'Language of the text', langS ? 'pass' : 'fail', langS ? langS : (guess ? `Not set. It looks like ${a11yLangName(guess)}.` : 'Not set'), 'lang');
+  add('tags', 'Tagged PDF (structure for screen readers)', tagged ? 'pass' : 'fail', tagged ? 'The file has tags.' : 'No tags: screen readers guess the reading order and cannot find headings.', tagged ? null : 'tags');
+  add('text', 'Real text, not only pictures of text', noText ? 'fail' : 'pass', noText ? `${plural(noText, 'page')} without text. Run OCR on scans.` : 'Every page has text.', noText ? 'ocr' : null);
+  add('fonts', 'Fonts are inside the file', noEmb.size ? 'warn' : 'pass', noEmb.size ? `Not inside: ${esc([...noEmb].slice(0, 6).join(', '))}${noEmb.size > 6 ? '…' : ''}. Readers use a look-alike font, and PDF/UA does not allow this. Export again from the original program with fonts embedded.` : 'Yes');
+  add('chars', 'Characters can be read as letters', bad ? 'warn' : 'pass', bad ? `${plural(bad, 'page')} with characters that cannot be turned into letters (fonts without a Unicode map). Copying or reading aloud may give wrong letters.` : 'Yes');
+  if (tagged) add('alt', 'Pictures have descriptions (alt text)', figsNoAlt ? 'fail' : 'pass', figs ? (figsNoAlt ? `${figsNoAlt} of ${figs} pictures need a description.` : (figs > 1 ? `All ${figs} pictures are described.` : 'The picture is described.')) : 'No pictures tagged.', figsNoAlt ? 'alt' : null);
+  add('bm', 'Bookmarks in long documents', d.info.length <= 20 || hasBm ? 'pass' : 'fail', d.info.length <= 20 ? 'Short document: not needed.' : hasBm ? 'Yes' : `${d.info.length} pages and no bookmarks.`, d.info.length > 20 && !hasBm ? 'bm' : null);
+  if (annPages) add('tabs', 'Tab order follows the structure', tabs === annPages ? 'pass' : 'fail', tabs === annPages ? 'Yes' : `${plural(annPages - tabs, 'page')} to fix`, tabs === annPages ? null : 'tabs');
+  if (links) add('links', 'Links have descriptions', linksNoDesc ? 'fail' : 'pass', linksNoDesc ? `${linksNoDesc} of ${links} links` : `All ${links}`, linksNoDesc ? 'links' : null);
+  if (fields) add('fields', 'Form fields have tooltips', fieldsNoTip ? 'fail' : 'pass', fieldsNoTip ? `${fieldsNoTip} of ${fields} fields` : `All ${fields}`, fieldsNoTip ? 'fields' : null);
+  add('sec', 'Security lets screen readers read the text', enc ? 'fail' : 'pass', enc ? 'The password settings block screen readers. Unlock and protect again.' : 'Yes');
+  add('order', 'Reading order', 'manual', 'Check that the order makes sense: Read aloud follows it.');
+  add('contrast', 'Colour contrast', 'manual', 'Check that text stands out from its background.');
+  return { checks: C, guess, title, tagged };
+}
+const a11yLangName = c => { try { return new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' }).of(c); } catch { return c; } };
+
+// ---- fixes ----
+async function a11yFix(d, ids, opts = {}) {
+  const L = PDFLib, N = n => L.PDFName.of(n); const did = [];
+  const r = await editBytes('Accessibility fixes', async pdf => {
+    const ctx = pdf.context, cat0 = pdf.catalog;
+    if (ids.includes('title')) {
+      let info = ctx.trailerInfo.Info ? ctx.lookup(ctx.trailerInfo.Info) : null; if (!(info instanceof L.PDFDict)) { info = ctx.obj({}); ctx.trailerInfo.Info = ctx.register(info); }
+      const t = (opts.title || (info.lookup(N('Title')) && info.lookup(N('Title')).decodeText()) || baseName(d)).trim(); info.set(N('Title'), L.PDFHexString.fromText(t));
+      let vp = cat0.lookup(N('ViewerPreferences')); if (!(vp instanceof L.PDFDict)) { vp = ctx.obj({}); cat0.set(N('ViewerPreferences'), vp); } vp.set(N('DisplayDocTitle'), L.PDFBool.True);
+      // the title also goes in the XMP metadata (PDF/UA reads it there); other XMP is kept as it is
+      const md = cat0.lookup(N('Metadata')); let x = null; try { x = md ? new TextDecoder().decode(pdfaDecoded(md)) : null; } catch {}
+      if (x && /<\/rdf:RDF>/.test(x)) x = /<dc:title>/.test(x) ? x.replace(/<dc:title>[\s\S]*?<\/dc:title>/, `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${xe(t)}</rdf:li></rdf:Alt></dc:title>`) : x.replace(/<\/rdf:RDF>/, `<rdf:Description rdf:about="" xmlns:dc="${XNS.dc}"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">${xe(t)}</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF>`);
+      else { const r0 = lxReadXmp(pdf) || {}; x = new TextDecoder().decode(xmpPacket({ ...r0, title: t, authors: r0.authors || [], tags: r0.tags || [], ids: r0.ids || {} }, 'acrobat')); }
+      cat0.set(N('Metadata'), ctx.register(ctx.stream(new TextEncoder().encode(x), { Type: 'Metadata', Subtype: 'XML' })));
+      did.push('title');
+    }
+    if (ids.includes('lang') && (opts.lang || opts.guess)) { cat0.set(N('Lang'), L.PDFString.of(opts.lang || opts.guess)); did.push('language'); }
+    if (ids.includes('tabs') || ids.includes('tags')) for (const p of pdf.getPages()) if (p.node.get(N('Annots'))) p.node.set(N('Tabs'), N('S'));
+    if (ids.includes('links')) for (const p of pdf.getPages()) { const A = p.node.lookup(N('Annots')); if (A instanceof L.PDFArray) for (const ref of A.asArray()) { const a = ctx.lookup(ref); if (!(a instanceof L.PDFDict) || String(a.get(N('Subtype'))) !== '/Link' || a.get(N('Contents'))) continue; const act = a.lookup(N('A')); const uri = act instanceof L.PDFDict && act.lookup(N('URI')); let desc = 'Link'; if (uri) desc = 'Link to ' + (uri.decodeText ? uri.decodeText() : String(uri)).replace(/^mailto:/, 'email ').replace(/^https?:\/\//, ''); else { const dst = act instanceof L.PDFDict ? act.lookup(N('D')) : a.lookup(N('Dest')); if (dst instanceof L.PDFArray) { const pi = pdf.getPages().findIndex(pp => pp.ref.toString() === String(dst.get(0))); if (pi >= 0) desc = 'Go to page ' + (pi + 1); } } a.set(N('Contents'), L.PDFHexString.fromText(desc)); } }
+    if (ids.includes('fields')) for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && o.get(N('FT')) && !o.get(N('TU'))) { const t = o.lookup(N('T')); if (t) o.set(N('TU'), L.PDFHexString.fromText(t.decodeText().replace(/[_.]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim())); }
+    if (ids.includes('tags') && !cat0.get(N('StructTreeRoot'))) { const n = await a11yTag(pdf, d); did.push(`tags (${n.paras} paragraphs, ${n.heads} headings, ${n.figs} pictures, ${n.links} links, ${n.fields} fields)`); }
+  }, 'Fixing accessibility…');
+  return r === false ? null : did;
+}
+// Builds a structure tree from the page content: each paragraph found by the Edit engine becomes P or H1–H3 (by size),
+// big pictures become Figure, everything else (drawings, small images, background scans under OCR text) an Artifact.
+async function a11yTag(pdf, d) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context, cat0 = pdf.catalog; const pages = pdf.getPages();
+  const docRef = ctx.nextRef(); const kids = []; const nums = []; let key = 0; const cnt = { paras: 0, heads: 0, figs: 0, links: 0, fields: 0 };
+  const models = []; const sizes = [];
+  for (let i = 0; i < pages.length; i++) { let m = null; try { m = ceModel(pdf, i); } catch (e) { console.warn('tag', e); } models.push(m); if (m) for (const p of m.paras) if (!p.inv) for (let k = 0; k < Math.min(50, p.text.length); k++) sizes.push(Math.round(p.fs * 2) / 2); }
+  const body = median(sizes) || 10;
+  for (let i = 0; i < pages.length; i++) {
+    const m = models[i]; const page = pages[i]; const pageRef = page.ref; const mcidElems = []; const reps = []; let mcid = 0; const pageKids = [];
+    if (m) {
+      const pw = page.getWidth() * page.getHeight(); const hasText = m.paras.some(p => p.text.trim());
+      const used = new Set();
+      const paras = m.paras.filter(p => p.text.trim()).sort((a, b) => Math.min(...a.runs.map(r => r.op)) - Math.min(...b.runs.map(r => r.op)));
+      for (const p of paras) {
+        const lvl = p.inv ? 0 : p.fs >= body * 1.6 ? 1 : p.fs >= body * 1.3 ? 2 : p.fs >= body * 1.12 && p.lines.length <= 2 && p.runs.every(r => r.f && /bold|black|heavy|semi/i.test(r.f.clean || '')) ? 3 : 0;
+        const S = lvl ? 'H' + lvl : 'P'; lvl ? cnt.heads++ : cnt.paras++;
+        const eref = ctx.nextRef(); const ks = [];
+        for (const r of p.runs) { if (used.has(r.op)) continue; used.add(r.op); const o = m.ops[r.op]; reps.push({ s: o.s, e: o.e, t: `/${S} <</MCID ${mcid}>> BDC ${ceStr(m.raw.subarray(o.s, o.e))} EMC` }); ks.push(mcid); mcidElems[mcid++] = eref; }
+        if (!ks.length) continue;
+        ctx.assign(eref, ctx.obj({ Type: 'StructElem', S, P: docRef, Pg: pageRef, K: ks.length === 1 ? ks[0] : ks })); pageKids.push(eref);
+      }
+      // any text show not in a paragraph (empty or tiny): artifact
+      for (const r of m.runs) if (!used.has(r.op)) { used.add(r.op); const o = m.ops[r.op]; reps.push({ s: o.s, e: o.e, t: `/Artifact BMC ${ceStr(m.raw.subarray(o.s, o.e))} EMC` }); }
+      for (const ob of m.objs) {
+        const s = m.ops[ob.a].s, e = m.ops[ob.b].e; const src = ceStr(m.raw.subarray(s, e)); const area = (ob.box[2] - ob.box[0]) * (ob.box[3] - ob.box[1]);
+        const fig = (ob.kind === 'img' || ob.kind === 'inl') && area > pw * .01 && !(hasText && area > pw * .6);
+        if (fig) { const eref = ctx.nextRef(); reps.push({ s, e, t: `/Figure <</MCID ${mcid}>> BDC ${src} EMC` }); ctx.assign(eref, ctx.obj({ Type: 'StructElem', S: 'Figure', P: docRef, Pg: pageRef, K: mcid, A: { O: 'Layout', BBox: ob.box.map(v => Math.round(v * 100) / 100) } })); mcidElems[mcid++] = eref; pageKids.push(eref); cnt.figs++; }
+        else if (ob.kind === 'form' && /\b(Tj|TJ)\b/.test(b2s(pdfaDecoded(page.node.Resources().lookup(N('XObject')).lookup(N(ob.name))) || new Uint8Array(0)))) { const eref = ctx.nextRef(); reps.push({ s, e, t: `/P <</MCID ${mcid}>> BDC ${src} EMC` }); ctx.assign(eref, ctx.obj({ Type: 'StructElem', S: 'P', P: docRef, Pg: pageRef, K: mcid })); mcidElems[mcid++] = eref; pageKids.push(eref); cnt.paras++; }
+        else reps.push({ s, e, t: `/Artifact BMC ${src} EMC` });
+      }
+      for (const o of m.ops) if (o.op === 'sh') reps.push({ s: o.s, e: o.e, t: `/Artifact BMC ${ceStr(m.raw.subarray(o.s, o.e))} EMC` });
+      if (reps.length) ceWrite(pdf, m, reps, '');
+    }
+    if (mcid) { page.node.set(N('StructParents'), L.PDFNumber.of(key)); nums.push(key++, ctx.obj(mcidElems)); }
+    // links and form fields: tagged through object references
+    const A = page.node.lookup(N('Annots'));
+    if (A instanceof L.PDFArray) for (const ar of A.asArray()) {
+      const a = ctx.lookup(ar); if (!(a instanceof L.PDFDict)) continue; const st = String(a.get(N('Subtype'))); if (st === '/Popup') continue;
+      const S = st === '/Link' ? 'Link' : st === '/Widget' ? 'Form' : 'Annot'; const eref = ctx.nextRef();
+      ctx.assign(eref, ctx.obj({ Type: 'StructElem', S, P: docRef, Pg: pageRef, K: [ctx.obj({ Type: 'OBJR', Obj: ar, Pg: pageRef })] }));
+      a.set(N('StructParent'), L.PDFNumber.of(key)); nums.push(key++, eref); pageKids.push(eref); if (S === 'Link') cnt.links++; if (S === 'Form') cnt.fields++;
+    }
+    if (A instanceof L.PDFArray && A.size()) page.node.set(N('Tabs'), N('S'));
+    kids.push(...pageKids);
+  }
+  const rootRef = ctx.nextRef();
+  ctx.assign(docRef, ctx.obj({ Type: 'StructElem', S: 'Document', P: rootRef, K: kids }));
+  ctx.assign(rootRef, ctx.obj({ Type: 'StructTreeRoot', K: docRef, ParentTree: ctx.register(ctx.obj({ Nums: nums })), ParentTreeNextKey: key }));
+  cat0.set(N('StructTreeRoot'), rootRef); cat0.set(N('MarkInfo'), ctx.obj({ Marked: true }));
+  return cnt;
+}
+// Picture descriptions: each Figure shown with a box to type what it shows (or mark it as decoration).
+async function a11yAltDialog(d) {
+  const L = PDFLib, N = n => L.PDFName.of(n);
+  const pdf = await PDFDocument.load(d.bytes, LOAD); const ctx = pdf.context; const pageOf = new Map(pdf.getPages().map((p, i) => [p.ref.toString(), i]));
+  const figs = []; for (const [ref, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/StructElem' && String(o.get(N('S'))) === '/Figure') { const A = o.lookup(N('A')); const bb = A instanceof L.PDFDict && A.lookup(N('BBox')); figs.push({ ref, page: pageOf.get(String(o.get(N('Pg')))), box: bb instanceof L.PDFArray ? bb.asArray().map(n => n.asNumber()) : null, alt: o.lookup(N('Alt')) ? o.lookup(N('Alt')).decodeText() : '' }); }
+  if (!figs.length) { toast('No tagged pictures. Add tags first.'); return; }
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow:auto';
+  body.innerHTML = figs.map((f, k) => `<div class="row" style="align-items:flex-start;gap:10px"><canvas data-fc="${k}" style="width:120px;border:1px solid var(--line,#ddd);border-radius:6px;flex:none"></canvas><div style="flex:1;display:flex;flex-direction:column;gap:6px"><span class="muted small">Page ${(f.page ?? 0) + 1}</span><textarea class="inp" rows="2" data-fa="${k}" placeholder="What does this picture show?">${esc(f.alt)}</textarea><label class="chk small"><input type="checkbox" data-fd="${k}"> Decoration only (screen readers skip it)</label></div></div>`).join('');
+  setTimeout(async () => { for (const [k, f] of figs.entries()) { if (f.page == null || !f.box) continue; try { const { c, vp } = await renderToCanvas(d, f.page, 1.5); const a = vp.convertToViewportPoint(f.box[0], f.box[3]), b = vp.convertToViewportPoint(f.box[2], f.box[1]); const x = Math.max(0, Math.min(a[0], b[0])), y = Math.max(0, Math.min(a[1], b[1])), w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]); const t = $(`[data-fc="${k}"]`, body); if (!t || w < 2 || h < 2) continue; t.width = w; t.height = h; t.getContext('2d').drawImage(c, x, y, w, h, 0, 0, w, h); } catch {} } }, 30);
+  const ok = await modal({ title: 'Describe pictures', body, actions: [{ label: 'Cancel', value: null }, { label: 'Save descriptions', primary: true, value: 'ok' }] });
+  if (!ok) return;
+  const vals = figs.map((f, k) => ({ alt: $(`[data-fa="${k}"]`, body).value.trim(), deco: $(`[data-fd="${k}"]`, body).checked }));
+  await editBytes('Picture descriptions', async p2 => { const c2 = p2.context; figs.forEach((f, k) => { const o = c2.lookup(f.ref); if (!(o instanceof L.PDFDict)) return; const v = vals[k]; if (v.deco) { o.set(N('S'), N('Artifact')); o.delete(N('Alt')); } else if (v.alt) o.set(N('Alt'), L.PDFHexString.fromText(v.alt)); }); });
+  if (S.task === 'a11y') { A11.res = null; renderPanel(); }
+}
+const A11 = { res: null, doc: null, bytes: null };
+TASKS.a11y = function (P, d) {
+  if (A11.doc !== d || A11.bytes !== d.bytes || !A11.res) {
+    A11.doc = d; A11.bytes = d.bytes; P.innerHTML = `<section class="sec">${head('Accessibility')}<p class="muted">Checking…</p></section>`; bindClose(P);
+    a11yScan(d).then(r => { A11.res = r; if (S.task === 'a11y' && cur() === d) TASKS.a11y(P, d); }).catch(e => { P.querySelector('.muted').textContent = 'Could not check: ' + e.message; }); return;
+  }
+  const R = A11.res; const icon = s => s === 'pass' ? '<span style="color:#2e8b57">✓</span>' : s === 'fail' ? '<span style="color:#c33">✕</span>' : s === 'warn' ? '<span style="color:#d4a017">!</span>' : '<span class="muted">?</span>';
+  const auto = R.checks.filter(c => c.state === 'fail' && ['title', 'lang', 'tags', 'tabs', 'links', 'fields'].includes(c.fix));
+  const fixBtn = c => !c.fix || c.state === 'pass' ? '' : `<button class="btn sm" data-afix="${c.fix}">${{ title: 'Set title', lang: 'Set language', tags: 'Add tags', ocr: 'Run OCR', alt: 'Describe pictures', bm: 'Bookmarks', tabs: 'Fix', links: 'Describe links', fields: 'Add tooltips' }[c.fix]}</button>`;
+  P.innerHTML = `<section class="sec">${head('Accessibility')}
+    <p class="hint" style="margin:0">${R.checks.filter(c => c.state === 'fail').length ? `${plural(R.checks.filter(c => c.state === 'fail').length, 'problem')} found.` : 'No problems found by the automatic checks.'} The same checks Acrobat's Accessibility Checker makes, in plain words.</p>
+    <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px">${R.checks.map(c => `<li style="display:flex;gap:8px;align-items:flex-start"><b style="width:14px;flex:none;text-align:center">${icon(c.state)}</b><div style="flex:1"><div>${esc(c.label)}</div><div class="small muted">${c.detail}</div></div>${fixBtn(c)}</li>`).join('')}</ul>
+    ${auto.length ? `<div class="row"><button class="btn sm primary" id="a11All">Fix ${auto.length > 1 ? 'all ' + auto.length : 'it'} automatically</button></div>` : ''}
+    <p class="hint" style="margin:0">Tags are added from the layout Quire sees. Check the result with Read aloud, and describe every picture. Save afterwards to keep the changes.</p></section>`;
+  bindClose(P);
+  const run = async ids => { let title = R.title, lang = R.guess;
+    if (ids.includes('title') || ids.includes('lang')) {
+      const b = el('div', 'col'); b.style.cssText = 'display:flex;flex-direction:column;gap:10px;min-width:320px';
+      b.innerHTML = (ids.includes('title') ? `<label class="small">Title, as screen readers announce it<input class="inp" id="a11T" style="width:100%" value="${esc(R.title || baseName(d))}"></label>` : '') +
+        (ids.includes('lang') ? `<label class="small">Language of the text (a code such as pt-BR, en, es, he)<input class="inp" id="a11L" style="width:100%" value="${esc(R.guess || '')}"></label>` : '');
+      const ok = await modal({ title: 'Accessibility', body: b, actions: [{ label: 'Cancel', value: null }, { label: 'Fix', primary: true, value: 'ok' }] }); if (!ok) return;
+      if ($('#a11T', b)) title = $('#a11T', b).value.trim() || baseName(d);
+      if ($('#a11L', b)) { lang = $('#a11L', b).value.trim(); if (!lang) ids = ids.filter(x => x !== 'lang'); }
+    }
+    const did = await a11yFix(d, ids, { title, lang }); if (did) toast(did.length ? 'Fixed: ' + did.join(', ') : 'Done'); A11.res = null; renderPanel(); };
+  $$('[data-afix]', P).forEach(b => b.onclick = () => { const f = b.dataset.afix; if (f === 'ocr') openTask('ocr'); else if (f === 'bm') openTask('bookmarks'); else if (f === 'alt') a11yAltDialog(d); else run([f]); });
+  const all = $('#a11All', P); if (all) all.onclick = () => run(auto.map(c => c.fix));
+};
 
 /* ================= signature ================= */
 async function signatureDialog() {
