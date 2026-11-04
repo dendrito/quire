@@ -1,0 +1,25 @@
+# Looks at the Portuguese Inquisition ground truth on Zenodo (TraPrInq) before we train on it: licence, files, sizes.
+name: Inquisition ground truth probe
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/htr-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          for q in ['13986218', '14538271']:
+              d = json.load(urllib.request.urlopen('https://zenodo.org/api/records/' + q))
+              m = d['metadata']
+              print('==', q, m['title'], '|', m.get('license'), '|', m.get('publication_date'), '| doi', d.get('doi'))
+              print('creators', [c['name'] for c in m.get('creators', [])])
+              print((m.get('description') or '')[:1500])
+              for f in d.get('files', []): print('  file', f['key'], f['size'], f['links']['self'])
+          for s in ['TraPrInq', 'Inquisição HTR', 'Portuguese handwriting ground truth']:
+              r = json.load(urllib.request.urlopen('https://zenodo.org/api/records?size=10&q=' + urllib.parse.quote(s)))
+              for h in r['hits']['hits']:
+                  m = h['metadata']; print('search', s, '|', h['id'], m['title'], '|', m.get('license'), '|', [ (f['key'], f['size']) for f in h.get('files', [])][:6])
+          PY
