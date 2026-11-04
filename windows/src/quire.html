@@ -144,6 +144,11 @@ dialog:has(.imgdlg){width:min(780px,calc(100vw - 32px));max-height:calc(100vh - 
 .imgdlg-r canvas{box-shadow:0 1px 4px rgba(0,0,0,.15)}
 .btn.sm{height:28px;padding:0 9px;font-size:12px}
 @media (max-width:760px){.imgdlg{grid-template-columns:1fr}.imgdlg-r{order:-1}}
+.cmb{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:44vh;overflow:auto}
+.cmb li{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:9px;background:var(--hover);cursor:grab}
+.cmb-n{font:500 11px var(--f-mono);color:var(--faint);width:18px;text-align:right;flex:none}
+.cmb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.cmb-r{width:78px!important;flex:none;padding:5px 7px!important;background:var(--solid)!important}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -1111,11 +1116,6 @@ async function splitDoc() {
     for (let s = 0; s < N; s += per) { const nd = await PDFDocument.create(); const ids = []; for (let k = s; k < Math.min(N, s + per); k++) ids.push(k); (await nd.copyPages(src, ids)).forEach(p => nd.addPage(p)); zip.file(`${baseName(d)}-part-${String(++part).padStart(2, '0')}.pdf`, await nd.save()); }
     const blob = await zip.generateAsync({ type: 'blob' }); unbusy(); await saveFile(`${baseName(d)}-split.zip`, blob);
   } catch (e) { toast('Split failed: ' + e.message); } finally { unbusy(); }
-}
-async function combineFiles(files) {
-  files = files || await pickFile('#mergeIn'); if (!files || !files.length) return; busy('Combining ' + files.length + ' files…');
-  try { const nd = await PDFDocument.create(); for (const f of files) { const src = await PDFDocument.load(new Uint8Array(await f.arrayBuffer()), LOAD); (await nd.copyPages(src, src.getPageIndices())).forEach(p => nd.addPage(p)); } unbusy(); const d = await openBytes(await nd.save(), 'Combined.pdf'); if (d) { d.dirty = true; renderTabs(); } }
-  catch (e) { toast('Combine failed: ' + e.message); } finally { unbusy(); }
 }
 async function addFormField(i, a) {
   const kind = S.tool;
@@ -2653,6 +2653,353 @@ async function overlayPages() {
       }
     }
   }, 'Overlaying…');
+}
+
+/* ================= compression and combine ================= */
+// Compression ideas from current optimisers: each image gets the codec that suits it (JPEG tuned by SSIM for photos,
+// lossless palette for charts and screenshots, 1-bit for black-and-white scans), repeated fonts and images are stored
+// once, unused objects are dropped, and scans can be split into a sharp text mask over a small background (MRC).
+const deflateBytes = async u8 => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+function unpredict(raw, W, nc, pred) {
+  if (pred < 10) return pred > 1 ? null : raw; const bpr = W * nc, out = new Uint8Array(bpr * Math.floor(raw.length / (bpr + 1))); let prev = new Uint8Array(bpr);
+  for (let r = 0, o = 0, i = 0; i + bpr < raw.length + 1 && o < out.length; r++) {
+    const t = raw[i++]; const row = out.subarray(o, o + bpr);
+    for (let x = 0; x < bpr; x++) { const v = raw[i + x], a = x >= nc ? row[x - nc] : 0, b = prev[x], c = x >= nc ? prev[x - nc] : 0;
+      row[x] = t === 0 ? v : t === 1 ? v + a : t === 2 ? v + b : t === 3 ? v + ((a + b) >> 1) : (() => { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); return v + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); })(); }
+    prev = row; i += bpr; o += bpr;
+  }
+  return out;
+}
+function lumaOf(c, max = 400) {
+  const k = Math.min(1, max / Math.max(c.width, c.height)); const s = cnv(c.width * k, c.height * k); const x = s.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, s.width, s.height);
+  const P = x.getImageData(0, 0, s.width, s.height).data; const Y = new Float32Array(s.width * s.height); for (let i = 0; i < Y.length; i++) Y[i] = P[i * 4] * .299 + P[i * 4 + 1] * .587 + P[i * 4 + 2] * .114;
+  return { Y, w: s.width, h: s.height };
+}
+// Mean SSIM over 8×8 blocks of the luma channel.
+function ssim(A, B, w, h) {
+  const C1 = 6.5025, C2 = 58.5225; let sum = 0, n = 0;
+  for (let by = 0; by + 8 <= h; by += 8) for (let bx = 0; bx + 8 <= w; bx += 8) {
+    let ma = 0, mb = 0; for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const j = (by + y) * w + bx + x; ma += A[j]; mb += B[j]; } ma /= 64; mb /= 64;
+    let va = 0, vb = 0, cv = 0; for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const j = (by + y) * w + bx + x, da = A[j] - ma, db = B[j] - mb; va += da * da; vb += db * db; cv += da * db; } va /= 63; vb /= 63; cv /= 63;
+    sum += ((2 * ma * mb + C1) * (2 * cv + C2)) / ((ma * ma + mb * mb + C1) * (va + vb + C2)); n++;
+  }
+  return n ? sum / n : 1;
+}
+// The smallest JPEG whose SSIM against the source stays at or above the target.
+async function jpegTuned(c, target) {
+  const ref = lumaOf(c); let lo = .3, hi = .95, best = null;
+  const test = async q => { const bytes = await canvasBytes(c, 'image/jpeg', q); const bm = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' })); const t = cnv(bm.width, bm.height); t.getContext('2d').drawImage(bm, 0, 0); bm.close && bm.close(); const got = lumaOf(t); return { bytes, s: ssim(ref.Y, got.Y, ref.w, ref.h), q }; };
+  for (let k = 0; k < 6; k++) { const q = (lo + hi) / 2; const r = await test(q); if (r.s >= target) { best = r; hi = q; } else lo = q; }
+  return best || await test(.95);
+}
+function imgStats(c) {
+  const k = Math.min(1, 500 / Math.max(c.width, c.height)); const s = cnv(c.width * k, c.height * k); const x = s.getContext('2d'); x.drawImage(c, 0, 0, s.width, s.height);
+  const P = x.getImageData(0, 0, s.width, s.height).data; let chroma = 0, ext = 0; const n = P.length / 4;
+  for (let i = 0; i < P.length; i += 4) { const r = P[i], g = P[i + 1], b = P[i + 2]; chroma = Math.max(chroma, Math.max(r, g, b) - Math.min(r, g, b)); const y = r * .299 + g * .587 + b * .114; if (y < 90 || y > 175) ext++; }
+  // exact colour count on the full image, stopping at 257
+  const F = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; const set = new Set(); for (let i = 0; i < F.length && set.size <= 256; i += 4) set.add((F[i] << 16) | (F[i + 1] << 8) | F[i + 2]);
+  return { grey: chroma < 18, bilevel: ext / n > .97 && chroma < 40, colours: set.size };
+}
+function otsu(Y) { const hst = new Float64Array(256); for (const v of Y) hst[v | 0]++; const tot = Y.length; let sum = 0; for (let t = 0; t < 256; t++) sum += t * hst[t]; let sB = 0, wB = 0, best = 0, th = 128; for (let t = 0; t < 256; t++) { wB += hst[t]; if (!wB) continue; const wF = tot - wB; if (!wF) break; sB += t * hst[t]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) ** 2; if (v > best) { best = v; th = t; } } return th; }
+// 1 bit per pixel, 1 = white (DeviceGray), rows padded to bytes.
+function packBits(c, test) {
+  const W = c.width, H = c.height, P = c.getContext('2d').getImageData(0, 0, W, H).data, bpr = (W + 7) >> 3, out = new Uint8Array(bpr * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const j = (y * W + x) * 4; if (!test(P[j] * .299 + P[j + 1] * .587 + P[j + 2] * .114, j, x, y)) out[y * bpr + (x >> 3)] |= 0x80 >> (x & 7); }
+  return out;
+}
+async function encodeIndexed(c) {
+  const W = c.width, H = c.height, P = c.getContext('2d').getImageData(0, 0, W, H).data; const map = new Map(), pal = [], idx = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) { const k = (P[i * 4] << 16) | (P[i * 4 + 1] << 8) | P[i * 4 + 2]; let v = map.get(k); if (v === undefined) { v = pal.length; map.set(k, v); pal.push(k); } idx[i] = v; }
+  const hex = pal.map(k => k.toString(16).padStart(6, '0')).join('');
+  return { bytes: await deflateBytes(idx), cs: [PDFLib.PDFName.of('Indexed'), PDFLib.PDFName.of('DeviceRGB'), pal.length - 1, PDFLib.PDFHexString.of(hex)], bpc: 8, filter: 'FlateDecode', w: W, h: H };
+}
+const SSIM_T = { .5: .955, .7: .975, .85: .988 };
+async function recompressImages(pdf, { dpi = 150, q = .7, grey = false, progress } = {}) {
+  const L = PDFLib; const N = L.PDFName.of; const ctx = pdf.context;
+  const longest = Math.max(...pdf.getPages().map(p => { const s = p.getSize(); return Math.max(s.width, s.height); })); const maxPx = Math.round(longest / 72 * dpi);
+  const name = (dict, k) => { const v = dict.lookup(N(k)); return v instanceof L.PDFName ? v.decodeText() : v instanceof L.PDFArray && v.size() === 1 && v.lookup(0) instanceof L.PDFName ? v.lookup(0).decodeText() : v ? '?' : ''; };
+  let done = 0, saved = 0, seen = 0; const kinds = { photo: 0, bw: 0, palette: 0 };
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    if (!(obj instanceof L.PDFRawStream)) continue; const D = obj.dict;
+    if (name(D, 'Subtype') !== 'Image') continue; seen++;
+    const W = D.lookup(N('Width'))?.asNumber?.(), H = D.lookup(N('Height'))?.asNumber?.(); const bpc = D.lookup(N('BitsPerComponent'))?.asNumber?.() ?? 8;
+    const filt = name(D, 'Filter'), cs = name(D, 'ColorSpace');
+    if (!W || !H || bpc !== 8 || D.get(N('ImageMask')) || D.get(N('Mask')) || D.get(N('Decode')) || !['DeviceRGB', 'DeviceGray'].includes(cs) || !['DCTDecode', 'FlateDecode'].includes(filt)) continue;
+    if (W * H < 40000) continue;
+    if (progress) progress(++done);
+    let c; const nc = cs === 'DeviceRGB' ? 3 : 1;
+    try {
+      if (filt === 'DCTDecode') { const bm = await createImageBitmap(new Blob([obj.contents], { type: 'image/jpeg' })); c = cnv(bm.width, bm.height); c.getContext('2d').drawImage(bm, 0, 0); bm.close && bm.close(); }
+      else {
+        let raw = L.decodePDFRawStream(obj).decode(); const dp = D.lookup(N('DecodeParms')); const pr = dp instanceof L.PDFDict && dp.lookup(N('Predictor')); if (pr) raw = unpredict(raw, W, nc, pr.asNumber()); if (!raw || raw.length < W * H * nc) continue;
+        c = cnv(W, H); const x = c.getContext('2d'); const id = x.createImageData(W, H); const P = id.data;
+        for (let i = 0, j = 0; i < W * H; i++, j += nc) { const r = raw[j]; P[i * 4] = r; P[i * 4 + 1] = nc === 3 ? raw[j + 1] : r; P[i * 4 + 2] = nc === 3 ? raw[j + 2] : r; P[i * 4 + 3] = 255; }
+        x.putImageData(id, 0, 0);
+      }
+    } catch (e) { continue; }
+    const st = imgStats(c); const isGrey = grey || st.grey || cs === 'DeviceGray';
+    const scaleTo = (cap, smooth = true) => { const k = Math.min(1, cap / Math.max(c.width, c.height)); if (k > .98) return c; const o = cnv(c.width * k, c.height * k); const x = o.getContext('2d'); x.imageSmoothingEnabled = smooth; x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, o.width, o.height); return o; };
+    const cands = [];
+    if (st.bilevel) { // black and white scans: 1 bit per pixel, kept sharper (twice the target resolution, up to 600 dpi)
+      const o = scaleTo(Math.min(maxPx * 2, Math.round(longest / 72 * 600))); const Y = lumaOf(o, 1e9).Y; const th = otsu(Y);
+      cands.push({ kind: 'bw', bytes: await deflateBytes(packBits(o, v => v < th)), cs: 'DeviceGray', bpc: 1, filter: 'FlateDecode', w: o.width, h: o.height });
+    }
+    if (st.colours <= 256 && !st.bilevel) cands.push({ kind: 'palette', ...(await encodeIndexed(c)) });
+    { let o = scaleTo(maxPx); if (isGrey) { const x = o.getContext('2d'); const id = x.getImageData(0, 0, o.width, o.height); const P = id.data; for (let i = 0; i < P.length; i += 4) { const v = P[i] * .299 + P[i + 1] * .587 + P[i + 2] * .114; P[i] = P[i + 1] = P[i + 2] = v; } x.putImageData(id, 0, 0); }
+      const r = await jpegTuned(o, SSIM_T[q] || .975); cands.push({ kind: 'photo', bytes: r.bytes, cs: 'DeviceRGB', bpc: 8, filter: 'DCTDecode', w: o.width, h: o.height, lossy: true }); }
+    // lossless and 1-bit results win unless the JPEG is much smaller
+    cands.sort((a, b) => a.bytes.length * (a.lossy ? 1.3 : 1) - b.bytes.length * (b.lossy ? 1.3 : 1)); const best = cands[0];
+    if (best.bytes.length > obj.contents.length * .9) continue;
+    const ns = ctx.stream(best.bytes, { Type: 'XObject', Subtype: 'Image', Width: best.w, Height: best.h, BitsPerComponent: best.bpc, Filter: best.filter });
+    ns.dict.set(N('ColorSpace'), typeof best.cs === 'string' ? N(best.cs) : ctx.obj(best.cs));
+    for (const kk of ['Interpolate', 'Intent', 'OC', 'Metadata', 'Name', 'SMask']) { const v = D.get(N(kk)); if (v) ns.dict.set(N(kk), v); }
+    saved += obj.contents.length - best.bytes.length; kinds[best.kind]++; ctx.assign(ref, ns);
+  }
+  return { seen, saved, kinds };
+}
+// Walk every value under an object and call f on each indirect reference. f may return a replacement.
+function walkRefs(obj, f, seen = new Set()) {
+  const L = PDFLib; if (!obj || seen.has(obj)) return; seen.add(obj);
+  const dict = obj instanceof L.PDFDict ? obj : obj.dict instanceof L.PDFDict ? obj.dict : null;
+  if (dict) { for (const [k, v] of dict.entries()) { if (v instanceof L.PDFRef) { const r = f(v); if (r && r !== v) dict.set(k, r); } else walkRefs(v, f, seen); } return; }
+  if (obj instanceof L.PDFArray) for (let i = 0; i < obj.size(); i++) { const v = obj.get(i); if (v instanceof L.PDFRef) { const r = f(v); if (r && r !== v) obj.set(i, r); } else walkRefs(v, f, seen); }
+}
+// Store identical fonts, images and other streams once; then drop objects nothing points at.
+function dedupeObjects(pdf) {
+  const L = PDFLib; const ctx = pdf.context; const N = L.PDFName.of; let removed = 0;
+  const fnv = u8 => { let h = 2166136261; for (let i = 0; i < u8.length; i++) { h ^= u8[i]; h = Math.imul(h, 16777619); } return h >>> 0; };
+  const OK = new Set(['Font', 'FontDescriptor', 'ExtGState', 'Encoding']);
+  for (let pass = 0; pass < 4; pass++) {
+    const groups = new Map(), map = new Map();
+    for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+      let key;
+      if (obj instanceof L.PDFRawStream) { const t = obj.dict.lookup(N('Type')); if (t instanceof L.PDFName && /XRef|ObjStm/.test(t.decodeText())) continue; key = 's' + obj.contents.length + ':' + fnv(obj.contents) + obj.dict.toString(); }
+      else if (obj instanceof L.PDFDict) { const t = obj.lookup(N('Type')); if (!(t instanceof L.PDFName && OK.has(t.decodeText()))) continue; key = 'd' + obj.toString(); }
+      else continue;
+      const g = groups.get(key); if (!g) { groups.set(key, ref); continue; }
+      const a = ctx.lookup(g); if (obj instanceof L.PDFRawStream && (a.contents.length !== obj.contents.length || a.contents.some((v, i) => v !== obj.contents[i]))) continue;
+      map.set(ref.toString(), g);
+    }
+    if (!map.size) break;
+    const sub = r => map.get(r.toString());
+    for (const [, obj] of ctx.enumerateIndirectObjects()) walkRefs(obj, sub);
+    for (const k of Object.keys(ctx.trailerInfo)) { const v = ctx.trailerInfo[k]; if (v instanceof L.PDFRef && map.has(v.toString())) ctx.trailerInfo[k] = map.get(v.toString()); }
+    for (const [ref] of ctx.enumerateIndirectObjects()) if (map.has(ref.toString())) { ctx.delete(ref); removed++; }
+  }
+  // unreachable objects
+  const live = new Set(); const stack = [];
+  for (const k of ['Root', 'Info', 'Encrypt']) { const v = ctx.trailerInfo[k]; if (v instanceof L.PDFRef) stack.push(v); }
+  while (stack.length) { const r = stack.pop(); const s = r.toString(); if (live.has(s)) continue; live.add(s); const o = ctx.lookup(r); if (o) walkRefs(o, x => { if (!live.has(x.toString())) stack.push(x); }); }
+  for (const [ref] of ctx.enumerateIndirectObjects()) if (!live.has(ref.toString())) { ctx.delete(ref); removed++; }
+  return removed;
+}
+// Remove data no reader shows: page thumbnails and private editing data (Illustrator and Photoshop PieceInfo).
+function stripHidden(pdf) {
+  const N = PDFLib.PDFName.of; let n = 0;
+  for (const p of pdf.getPages()) for (const k of ['Thumb', 'PieceInfo']) if (p.node.get(N(k))) { p.node.delete(N(k)); n++; }
+  for (const k of ['PieceInfo']) if (pdf.catalog.get(N(k))) { pdf.catalog.delete(N(k)); n++; }
+  return n;
+}
+// MRC: a 1-bit text mask at full resolution, the ink colour as a tiny image underneath it, and the paper as a small JPEG.
+function sauvolaMask(Y, W, H, win, k = .34) {
+  const I = new Float64Array((W + 1) * (H + 1)), I2 = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let s = 0, s2 = 0; for (let x = 0; x < W; x++) { const v = Y[y * W + x]; s += v; s2 += v * v; const j = (y + 1) * (W + 1) + x + 1; I[j] = I[j - W - 1] + s; I2[j] = I2[j - W - 1] + s2; } }
+  const m = new Uint8Array(W * H); const r = win >> 1;
+  for (let y = 0; y < H; y++) { const y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1); for (let x = 0; x < W; x++) { const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1); const a = y0 * (W + 1), b = y1 * (W + 1), n = (y1 - y0) * (x1 - x0);
+    const s = I[b + x1] - I[b + x0] - I[a + x1] + I[a + x0], s2 = I2[b + x1] - I2[b + x0] - I2[a + x1] + I2[a + x0]; const mu = s / n, sd = Math.sqrt(Math.max(0, s2 / n - mu * mu)); const v = Y[y * W + x];
+    if (v < mu * (1 + k * (sd / 128 - 1)) && v < 215) m[y * W + x] = 1; } }
+  return m;
+}
+// Average the pixels where keep[i] is true into cells of size f, then fill the empty cells from their neighbours.
+function cellAverage(P, W, H, keep, f) {
+  const w = Math.max(1, Math.ceil(W / f)), h = Math.max(1, Math.ceil(H / f)); const acc = new Float64Array(w * h * 3), cnt = new Uint32Array(w * h);
+  for (let y = 0; y < H; y++) { const cy = (y / f) | 0; for (let x = 0; x < W; x++) { const i = y * W + x; if (!keep(i)) continue; const c = cy * w + ((x / f) | 0); acc[c * 3] += P[i * 4]; acc[c * 3 + 1] += P[i * 4 + 1]; acc[c * 3 + 2] += P[i * 4 + 2]; cnt[c]++; } }
+  const out = new Float32Array(w * h * 3), has = new Uint8Array(w * h); for (let c = 0; c < w * h; c++) if (cnt[c]) { for (let k = 0; k < 3; k++) out[c * 3 + k] = acc[c * 3 + k] / cnt[c]; has[c] = 1; }
+  for (let it = 0, left = 1; left && it < w + h; it++) { left = 0; const nh = has.slice(); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = y * w + x; if (has[c]) continue; let n = 0; const s = [0, 0, 0]; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const X = x + dx, Yy = y + dy; if (X < 0 || Yy < 0 || X >= w || Yy >= h) continue; const q = Yy * w + X; if (has[q]) { n++; for (let k = 0; k < 3; k++) s[k] += out[q * 3 + k]; } } if (n) { for (let k = 0; k < 3; k++) out[c * 3 + k] = s[k] / n; nh[c] = 1; } else left = 1; } has.set(nh); }
+  const c = cnv(w, h); const x = c.getContext('2d'); const id = x.createImageData(w, h); for (let i = 0; i < w * h; i++) { id.data[i * 4] = out[i * 3]; id.data[i * 4 + 1] = out[i * 3 + 1]; id.data[i * 4 + 2] = out[i * 3 + 2]; id.data[i * 4 + 3] = 255; } x.putImageData(id, 0, 0);
+  return c;
+}
+async function mrcPage(nd, srcCanvas, view, rot, { fg = 300, bg = 100, q = .6 }, base) {
+  const L = PDFLib; const ctx = nd.context; const N = L.PDFName.of; const W = srcCanvas.width, H = srcCanvas.height;
+  const P = srcCanvas.getContext('2d').getImageData(0, 0, W, H).data; const Y = new Float32Array(W * H); for (let i = 0; i < Y.length; i++) Y[i] = P[i * 4] * .299 + P[i * 4 + 1] * .587 + P[i * 4 + 2] * .114;
+  const mask = sauvolaMask(Y, W, H, Math.max(15, Math.round(fg / 10) | 1)); let ink = 0; for (const v of mask) ink += v;
+  const w = view[2] - view[0], h = view[3] - view[1]; const page = nd.addPage([w, h]); page.setMediaBox(view[0], view[1], w, h); page.setRotation(degrees(rot)); page.node.normalize();
+  const img = (bytes, dict) => ctx.register(ctx.stream(bytes, Object.assign({ Type: 'XObject', Subtype: 'Image' }, dict)));
+  const ops = [];
+  const draw = name => ops.push(L.pushGraphicsState(), L.concatTransformationMatrix(w, 0, 0, h, view[0], view[1]), L.drawObject(name), L.popGraphicsState());
+  if (ink / mask.length > .3) { // mostly picture: one JPEG is better
+    const f = fg / (bg * 1.5); const c = cnv(W / f, H / f); const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(srcCanvas, 0, 0, c.width, c.height);
+    draw(page.node.newXObject('Im', img(await canvasBytes(c, 'image/jpeg', q + .1), { Width: c.width, Height: c.height, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' })));
+  } else {
+    const back = cellAverage(P, W, H, i => !mask[i], fg / bg); const fore = cellAverage(P, W, H, i => mask[i], fg / 25);
+    // background has text removed, so it compresses to almost nothing
+    draw(page.node.newXObject('Im', img(await canvasBytes(back, 'image/jpeg', q), { Width: back.width, Height: back.height, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' })));
+    if (ink) {
+      const bpr = (W + 7) >> 3, bits = new Uint8Array(bpr * H); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (!mask[y * W + x]) bits[y * bpr + (x >> 3)] |= 0x80 >> (x & 7);
+      const mref = img(await deflateBytes(bits), { Width: W, Height: H, ImageMask: true, BitsPerComponent: 1, Filter: 'FlateDecode' });
+      const fref = img(await canvasBytes(fore, 'image/jpeg', .75), { Width: fore.width, Height: fore.height, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode', Mask: mref });
+      draw(page.node.newXObject('Im', fref));
+    }
+  }
+  page.node.addContentStream(ctx.register(ctx.contentStream(ops)));
+  return ink / mask.length;
+}
+TASKS.compress = function (P, d) {
+  const C = Object.assign({ dpi: 150, q: .7, grey: false, dedupe: true, strip: true, rmode: 'mrc', rdpi: 300 }, pref.get('compress', {}));
+  const opt = (v, l, c) => `<option value="${v}"${String(c) === String(v) ? ' selected' : ''}>${l}</option>`;
+  P.innerHTML = `<section class="sec">${head('Compress')}<dl class="kv"><dt>Current size</dt><dd>${fmtBytes(d.bytes.length)}</dd></dl>
+    <span class="lbl">Smart compress (keeps text)</span><p class="hint">Picks the best format for every picture: tuned JPEG for photos, lossless colours for charts and screenshots, and sharp black and white for text scans. Text, links and form fields stay as they are.</p>
+    <div class="grid2"><div class="field"><label for="cIDpi">Picture resolution</label><select id="cIDpi" class="inp">${opt(96, '96 dpi (screen)', C.dpi)}${opt(150, '150 dpi (reading)', C.dpi)}${opt(200, '200 dpi (print)', C.dpi)}${opt(300, '300 dpi (high)', C.dpi)}</select></div>
+    <div class="field"><label for="cIQ">Quality</label><select id="cIQ" class="inp">${opt(.5, 'Smallest', C.q)}${opt(.7, 'Balanced', C.q)}${opt(.85, 'Best', C.q)}</select></div></div>
+    <label class="chk"><input type="checkbox" id="cIG" ${C.grey ? 'checked' : ''}> Turn colour pictures grey</label>
+    <label class="chk"><input type="checkbox" id="cDup" ${C.dedupe ? 'checked' : ''}> Store repeated fonts and pictures once</label>
+    <label class="chk"><input type="checkbox" id="cStrip" ${C.strip ? 'checked' : ''}> Remove thumbnails and hidden editing data</label>
+    <button class="btn primary" id="cImg">Compress</button>
+    <span class="lbl">Lossless only</span><p class="hint">Removes repeats and unused objects and packs the structure. Nothing you see changes.</p><button class="btn" id="cLoss">Optimise structure</button>
+    <span class="lbl">Scans</span><p class="hint">Redraws every page as an image. <b>Text over background</b> (MRC) keeps lettering razor sharp as a black-and-white layer over a tiny background picture, the way professional scan compressors do. Text is no longer selectable until you run OCR.</p>
+    <div class="grid2"><div class="field"><label for="cRm">Method</label><select id="cRm" class="inp">${opt('mrc', 'Text over background (MRC)', C.rmode)}${opt('jpeg', 'Plain JPEG pages', C.rmode)}</select></div>
+    <div class="field"><label for="cDpi">Text sharpness</label><select id="cDpi" class="inp">${opt(150, '150 dpi', C.rdpi)}${opt(200, '200 dpi', C.rdpi)}${opt(300, '300 dpi', C.rdpi)}${opt(400, '400 dpi', C.rdpi)}</select></div></div>
+    <button class="btn" id="cRas">Compress pages</button></section>`;
+  bindClose(P);
+  const report = (before, extra = '') => toast(`Size: ${fmtBytes(before)} → ${fmtBytes(cur().bytes.length)} (${Math.max(0, Math.round((1 - cur().bytes.length / before) * 100))}% smaller)${extra}`, 7000);
+  const read = () => { Object.assign(C, { dpi: +$('#cIDpi', P).value, q: +$('#cIQ', P).value, grey: $('#cIG', P).checked, dedupe: $('#cDup', P).checked, strip: $('#cStrip', P).checked, rmode: $('#cRm', P).value, rdpi: +$('#cDpi', P).value }); pref.set('compress', C); };
+  $('#cImg', P).onclick = async () => {
+    read(); const b = d.bytes.length; let res, rm = 0, st = 0;
+    const ok = await editBytes('Compressed', async pdf => {
+      res = await recompressImages(pdf, { dpi: C.dpi, q: C.q, grey: C.grey, progress: n => { $('#busyMsg').textContent = `Compressing picture ${n}…`; } });
+      if (C.strip) st = stripHidden(pdf); if (C.dedupe) rm = dedupeObjects(pdf);
+    }, 'Compressing…');
+    if (ok) { const k = res.kinds; const parts = [k.photo && plural(k.photo, 'photo'), k.palette && plural(k.palette, 'graphic'), k.bw && plural(k.bw, 'black-and-white scan')].filter(Boolean); report(b, parts.length ? `. Recompressed ${parts.join(', ')}.` : res.seen ? '. The pictures were already small.' : ''); }
+  };
+  $('#cLoss', P).onclick = async () => { read(); const b = d.bytes.length; if (await editBytes('Optimised', pdf => { dedupeObjects(pdf); })) report(b); };
+  $('#cRas', P).onclick = async () => {
+    read(); const b = d.bytes.length; const dpi = C.rdpi; const q = C.q;
+    if (await editBytes('Compressed', async (pdf, d) => {
+      const nd = await PDFDocument.create(); nd.setTitle(pdf.getTitle() || ''); nd.setAuthor(pdf.getAuthor() || '');
+      for (let i = 0; i < d.info.length; i++) {
+        $('#busyMsg').textContent = `Compressing page ${i + 1} of ${d.info.length}…`;
+        const view = d.info[i].page.view;
+        if (C.rmode === 'mrc') { const { c } = await renderToCanvas(d, i, dpi / 72, { rot0: true }); await mrcPage(nd, c, view, d.info[i].rot, { fg: dpi, bg: dpi >= 300 ? 100 : 75, q: q - .1 }); continue; }
+        const { c } = await renderToCanvas(d, i, Math.min(dpi, 200) / 72, { rot0: true }); const img = await nd.embedJpg(await canvasBytes(c, 'image/jpeg', q));
+        const w = view[2] - view[0], h = view[3] - view[1]; const p = nd.addPage([w, h]); p.setMediaBox(view[0], view[1], w, h); p.drawImage(img, { x: view[0], y: view[1], width: w, height: h }); p.setRotation(degrees(d.info[i].rot));
+      }
+      return nd;
+    }, 'Compressing…')) report(b);
+  };
+};
+
+/* ---- combine: order files, pick pages, bookmark each file ---- */
+function parseRange(s, n) {
+  s = (s || '').trim(); if (!s) return [...Array(n).keys()]; const out = [];
+  for (const part of s.split(/[,;\s]+/)) { if (!part) continue; const m = part.match(/^(\d+)?\s*-\s*(\d+)?$/); if (m) { let a = m[1] ? +m[1] : 1, b = m[2] ? +m[2] : n; const st = a <= b ? 1 : -1; for (let k = a; st > 0 ? k <= b : k >= b; k += st) if (k >= 1 && k <= n) out.push(k - 1); } else if (/^\d+$/.test(part) && +part >= 1 && +part <= n) out.push(+part - 1); }
+  return out;
+}
+// A source file's bookmarks as a tree of {title, page, kids}, with pages as indexes into that file.
+function readOutline(src) {
+  const L = PDFLib; const N = L.PDFName.of; const cat = src.catalog; const pages = src.getPages(); const idx = new Map(pages.map((p, i) => [p.ref.toString(), i]));
+  const named = new Map();
+  const dests = cat.lookup(N('Dests')); if (dests instanceof L.PDFDict) for (const [k, v] of dests.entries()) named.set(k.decodeText(), v);
+  const walkNames = (node, depth = 0) => { if (!(node instanceof L.PDFDict) || depth > 20) return; const ns = node.lookup(N('Names')); if (ns instanceof L.PDFArray) for (let i = 0; i + 1 < ns.size(); i += 2) { const k = ns.lookup(i); named.set(k.decodeText ? k.decodeText() : String(k), ns.get(i + 1)); } const kids = node.lookup(N('Kids')); if (kids instanceof L.PDFArray) for (let i = 0; i < kids.size(); i++) walkNames(kids.lookup(i), depth + 1); };
+  const nm = cat.lookup(N('Names')); if (nm instanceof L.PDFDict) walkNames(nm.lookup(N('Dests')));
+  const pageOf = d => { d = d instanceof L.PDFRef ? src.context.lookup(d) : d; if (d instanceof L.PDFDict) d = d.lookup(N('D')); if (d instanceof L.PDFName || d instanceof L.PDFString || d instanceof L.PDFHexString) { let v = named.get(d.decodeText()); v = v instanceof L.PDFRef ? src.context.lookup(v) : v; if (v instanceof L.PDFDict) v = v.lookup(N('D')); d = v; } if (d instanceof L.PDFArray) { const r = d.get(0); if (r instanceof L.PDFRef) return idx.get(r.toString()) ?? -1; if (r instanceof L.PDFNumber) return r.asNumber(); } return -1; };
+  const seen = new Set();
+  const list = (first, depth) => { const out = []; let ref = first; while (ref instanceof L.PDFRef && !seen.has(ref.toString()) && depth < 12) { seen.add(ref.toString()); const it = src.context.lookup(ref); if (!(it instanceof L.PDFDict)) break;
+    const t = it.lookup(N('Title')); let pg = -1; const dst = it.get(N('Dest')); if (dst) pg = pageOf(dst); else { const a = it.lookup(N('A')); if (a instanceof L.PDFDict && a.lookup(N('S'))?.decodeText?.() === 'GoTo') pg = pageOf(a.get(N('D'))); }
+    out.push({ title: t ? t.decodeText() : '', page: pg, kids: list(it.get(N('First')), depth + 1) }); ref = it.get(N('Next')); }
+    return out; };
+  const root = cat.lookup(N('Outlines')); return root instanceof L.PDFDict ? list(root.get(N('First')), 0) : [];
+}
+// Appends a bookmark tree to pdf. Items whose page is missing go to their first child's page; empty branches are dropped.
+function addOutlineTree(pdf, items, open = true) {
+  const L = PDFLib; const ctx = pdf.context; const cat = pdf.catalog; const N = L.PDFName.of; const pages = pdf.getPages();
+  const fix = list => list.map(it => { const kids = fix(it.kids || []); const page = it.page >= 0 ? it.page : kids.length ? kids[0].page : -1; return page >= 0 ? { title: it.title, page, kids, open: it.open } : null; }).filter(Boolean);
+  items = fix(items); if (!items.length) return;
+  let root = cat.lookup(N('Outlines')); let rootRef = cat.get(N('Outlines'));
+  if (!(root instanceof L.PDFDict)) { root = ctx.obj({ Type: 'Outlines', Count: 0 }); rootRef = ctx.register(root); cat.set(N('Outlines'), rootRef); }
+  const write = (parent, parentRef, list) => {
+    let prev = parent.get(N('Last')) || null; let visible = 0;
+    for (const it of list) {
+      const ref = ctx.nextRef(); const o = ctx.obj({ Title: L.PDFHexString.fromText(it.title), Parent: parentRef, Dest: [pages[Math.min(it.page, pages.length - 1)].ref, 'XYZ', null, null, null] });
+      if (prev) { o.set(N('Prev'), prev); const pd = ctx.lookup(prev); if (pd instanceof L.PDFDict) pd.set(N('Next'), ref); } else parent.set(N('First'), ref);
+      ctx.assign(ref, o); prev = ref; visible++;
+      if (it.kids.length) { const n = write(o, ref, it.kids); o.set(N('Count'), L.PDFNumber.of(it.open ? n : -it.kids.length)); if (it.open) visible += n; }
+    }
+    if (prev) parent.set(N('Last'), prev); return visible;
+  };
+  const n = write(root, rootRef, items); const cnt = root.lookup(N('Count')); root.set(N('Count'), L.PDFNumber.of(Math.abs(cnt instanceof L.PDFNumber ? cnt.asNumber() : 0) + n));
+}
+// copyPages brings the widgets but not the form; register their fields, renaming clashes.
+function mergeFields(nd, newPages, tag) {
+  const L = PDFLib; const N = L.PDFName.of; const ctx = nd.context; let form = nd.catalog.lookup(N('AcroForm'));
+  const tops = new Map();
+  for (const p of newPages) { const an = p.node.Annots(); if (!an) continue; for (let i = 0; i < an.size(); i++) { let ref = an.get(i); let w = an.lookup(i); if (!(w instanceof L.PDFDict) || w.lookup(N('Subtype'))?.decodeText?.() !== 'Widget') continue; let guard = 0; while (w.get(N('Parent')) instanceof L.PDFRef && guard++ < 20) { ref = w.get(N('Parent')); w = ctx.lookup(ref); } if (w.get(N('T')) && !w.get(N('Parent'))) tops.set(ref.toString(), [ref, w]); } }
+  if (!tops.size) return 0;
+  if (!(form instanceof L.PDFDict)) { form = ctx.obj({ Fields: [] }); nd.catalog.set(N('AcroForm'), ctx.register(form)); }
+  let fields = form.lookup(N('Fields')); if (!(fields instanceof L.PDFArray)) { fields = ctx.obj([]); form.set(N('Fields'), fields); }
+  const have = new Set(); for (let i = 0; i < fields.size(); i++) { const f = fields.lookup(i); const t = f instanceof L.PDFDict && f.lookup(N('T')); if (t) have.add(t.decodeText()); }
+  for (const [ref, w] of tops.values()) { let t = w.lookup(N('T')).decodeText(); if (have.has(t)) { let k = 2; while (have.has(`${t} (${tag} ${k})`)) k++; t = `${t} (${tag} ${k})`; w.set(N('T'), L.PDFHexString.fromText(t)); } have.add(t); fields.push(ref); }
+  form.set(N('NeedAppearances'), L.PDFBool.True); return tops.size;
+}
+
+async function combineFiles(files) {
+  files = files || await pickFile('#mergeIn'); if (!files || !files.length) return;
+  const items = [];
+  const addFiles = async fs => { busy('Reading files…'); try { for (const f of fs) { if (!(/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name))) continue; const bytes = new Uint8Array(await f.arrayBuffer()); try { const doc = await PDFDocument.load(bytes, LOAD); items.push({ name: f.name, bytes, n: doc.getPageCount(), range: '' }); } catch (e) { toast('Skipped ' + f.name + ': ' + e.message); } } } finally { unbusy(); } };
+  await addFiles(files); if (!items.length) return;
+  const O = Object.assign({ marks: true, keep: true, dedupe: true, dest: 'new' }, pref.get('combine', {}));
+  const body = el('div', '', ''); const inp = el('input'); inp.type = 'file'; inp.accept = 'application/pdf,.pdf'; inp.multiple = true; inp.hidden = true;
+  const draw = () => {
+    const tot = items.reduce((s, it) => s + parseRange(it.range, it.n).length, 0);
+    body.innerHTML = `<p class="muted small" style="margin:0">Drag rows or use the arrows to set the order. Leave Pages empty for all pages, or type e.g. 1-3, 5.</p>
+      <ol class="cmb">${items.map((it, k) => `<li draggable="true" data-k="${k}"><span class="cmb-n">${k + 1}</span><span class="cmb-name" title="${esc(it.name)}">${esc(it.name)}<span class="muted small"> · ${plural(it.n, 'page')}</span></span>
+        <input class="inp cmb-r" data-r="${k}" placeholder="All" value="${esc(it.range)}" aria-label="Pages from ${esc(it.name)}">
+        <button type="button" class="icon-btn sm" data-up="${k}" aria-label="Move up" ${k ? '' : 'disabled'}>${svg('up')}</button><button type="button" class="icon-btn sm" data-down="${k}" aria-label="Move down" ${k < items.length - 1 ? '' : 'disabled'}>${svg('down')}</button><button type="button" class="icon-btn sm" data-x="${k}" aria-label="Remove">${svg('x')}</button></li>`).join('')}</ol>
+      <div class="row"><button type="button" class="btn sm" id="cmbAdd">${svg('plus')}Add files</button><button type="button" class="btn sm" id="cmbAZ">Sort A–Z</button><button type="button" class="btn sm" id="cmbRev">Reverse</button></div>
+      <label class="chk"><input type="checkbox" id="cmbMarks" ${O.marks ? 'checked' : ''}> Add a bookmark for each file</label>
+      <label class="chk"><input type="checkbox" id="cmbKeep" ${O.keep ? 'checked' : ''}> Keep each file's own bookmarks</label>
+      <label class="chk"><input type="checkbox" id="cmbDup" ${O.dedupe ? 'checked' : ''}> Store repeated fonts and pictures once (smaller file)</label>
+      <div class="field"><span class="lbl">Result</span><div class="row"><label class="chk"><input type="radio" name="cmbDest" value="new" ${O.dest !== 'end' || !cur() ? 'checked' : ''}> A new PDF</label><label class="chk"><input type="radio" name="cmbDest" value="end" ${O.dest === 'end' && cur() ? 'checked' : ''} ${cur() ? '' : 'disabled'}> Add to the end of the open PDF</label></div></div>
+      <p class="hint" style="margin:0" id="cmbSum">${plural(items.length, 'file')}, ${plural(tot, 'page')} in total.</p>`;
+    body.append(inp);
+  };
+  draw();
+  body.addEventListener('click', async e => {
+    const b = e.target.closest('button'); if (!b) return; const d = b.dataset;
+    if (d.up) { const k = +d.up; [items[k - 1], items[k]] = [items[k], items[k - 1]]; }
+    else if (d.down) { const k = +d.down; [items[k + 1], items[k]] = [items[k], items[k + 1]]; }
+    else if (d.x) { items.splice(+d.x, 1); }
+    else if (b.id === 'cmbAdd') { inp.value = ''; inp.onchange = async () => { await addFiles([...inp.files]); draw(); }; inp.click(); return; }
+    else if (b.id === 'cmbAZ') items.sort((a, c) => a.name.localeCompare(c.name, undefined, { numeric: true }));
+    else if (b.id === 'cmbRev') items.reverse();
+    else return;
+    draw();
+  });
+  body.addEventListener('input', e => { const r = e.target.dataset.r; if (r != null) { items[+r].range = e.target.value; const tot = items.reduce((s, it) => s + parseRange(it.range, it.n).length, 0); body.querySelector('#cmbSum').textContent = `${plural(items.length, 'file')}, ${plural(tot, 'page')} in total.`; } });
+  let dragK = null;
+  body.addEventListener('dragstart', e => { const li = e.target.closest('li[data-k]'); if (li) { dragK = +li.dataset.k; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/x-quire-cmb', '1'); } });
+  body.addEventListener('dragover', e => { if (dragK != null && e.target.closest('li[data-k]')) e.preventDefault(); });
+  body.addEventListener('drop', e => { const li = e.target.closest('li[data-k]'); if (li && dragK != null) { e.preventDefault(); e.stopPropagation(); const to = +li.dataset.k; const [m] = items.splice(dragK, 1); items.splice(to, 0, m); dragK = null; draw(); } });
+  const r = await modal({ title: 'Combine files', body, actions: [{ label: 'Cancel', value: null }, { label: 'Combine', primary: true, value: 'ok', validate: () => items.some(it => parseRange(it.range, it.n).length) }] });
+  if (!r) return;
+  O.marks = body.querySelector('#cmbMarks').checked; O.keep = body.querySelector('#cmbKeep').checked; O.dedupe = body.querySelector('#cmbDup').checked; O.dest = (body.querySelector('input[name=cmbDest]:checked') || {}).value || 'new'; pref.set('combine', O);
+  const build = async nd => {
+    const tree = [];
+    for (const it of items) {
+      const idx = parseRange(it.range, it.n); if (!idx.length) continue; const src = await PDFDocument.load(it.bytes, LOAD); const start = nd.getPageCount();
+      const copied = await nd.copyPages(src, idx); copied.forEach(p => nd.addPage(p)); mergeFields(nd, copied, it.name.replace(/\.pdf$/i, ''));
+      let kids = []; if (O.keep) { const pos = new Map(); idx.forEach((p, k) => { if (!pos.has(p)) pos.set(p, start + k); }); const map = list => list.map(o => ({ title: o.title, page: pos.has(o.page) ? pos.get(o.page) : -1, kids: map(o.kids) })); try { kids = map(readOutline(src)); } catch (e) { console.warn('outline', e); } }
+      if (O.marks) tree.push({ title: it.name.replace(/\.pdf$/i, ''), page: start, kids, open: false }); else tree.push(...kids);
+    }
+    addOutlineTree(nd, tree); if (O.dedupe) dedupeObjects(nd); return tree;
+  };
+  if (O.dest === 'end' && cur()) {
+    const d = cur(); const n0 = d.info.length;
+    const ok = await editBytes(`Added ${plural(items.length, 'file')}`, async (pdf, dd) => { await build(pdf); while (dd.annots.length < pdf.getPageCount()) dd.annots.push([]); }, 'Combining…');
+    if (ok) gotoPage(n0); return;
+  }
+  busy('Combining ' + plural(items.length, 'file') + '…');
+  try { const nd = await PDFDocument.create(); await build(nd); unbusy(); const d = await openBytes(await nd.save(), 'Combined.pdf'); if (d) { d.dirty = true; renderTabs(); } }
+  catch (e) { toast('Combine failed: ' + e.message); } finally { unbusy(); }
 }
 
 async function findAll(d, q, cs) {
