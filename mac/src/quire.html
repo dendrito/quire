@@ -1628,7 +1628,9 @@ async function ocrPrepare(d, i, { fast = false, vertical = false } = {}) {
   try { flattenLight(c); } catch (e) { console.warn('ocr light', e); }
   try { ocrStretch(c); } catch (e) { console.warn('ocr contrast', e); }
   let angle = 0; if (!vertical) { try { angle = skewAngle(c); } catch {} }
-  return { c: angle ? rotateCanvas(c, -angle) : c, vp, angle, W: c.width, H: c.height };
+  const out = angle ? rotateCanvas(c, -angle) : c; let tables = [];
+  try { tables = ocrUnrule(out); } catch (e) { console.warn('ocr rules', e); }
+  return { c: out, vp, angle, W: c.width, H: c.height, tables };
 }
 // Word boxes from a straightened picture, turned back to the page: three corners in PDF points (bottom left, bottom right,
 // top left), so the invisible words lie along the tilted lines of the scan and selection follows them.
@@ -1671,6 +1673,61 @@ function ocrStretch(c) {
   for (let i = 0, j = 0; j < n; i += 4, j++) { const v = (D[i] * 299 + D[i + 1] * 587 + D[i + 2] * 114) / 1000 | 0; Y[j] = v; hist[v]++; }
   let lo = 0, a = 0; while (lo < 255 && a + hist[lo] < n * .005) a += hist[lo++]; let hi = 255; a = 0; while (hi > lo && a + hist[hi] < n * .3) a += hist[hi--];
   const k = 255 / Math.max(8, hi - lo); for (let i = 0, j = 0; j < n; i += 4, j++) D[i] = D[i + 1] = D[i + 2] = (Y[j] - lo) * k; g.putImageData(im, 0, 0);
+}
+// Tables. With its ruling lines on the page Tesseract takes a grid for a picture and reads nothing at all (a ruled test table:
+// no words), and its automatic layout reads a table column by column and drops short cells. As in the line-based table
+// detectors of the literature (Kasar et al. 2013; run-length line finding), long thin runs of ink are found across and down;
+// lines that cross others form a grid, and the grid's area is a table. Grid lines and long separator rules are painted out
+// of the copy the engine reads. Table areas, ruled or not, are then read again row by row (Tesseract's single-column mode),
+// which on the test tables read every cell.
+function ocrUnrule(c) {
+  const W = c.width, H = c.height, g = c.getContext('2d', { willReadFrequently: true }), im = g.getImageData(0, 0, W, H), D = im.data, n = W * H; const ink = new Uint8Array(n);
+  for (let i = 0, j = 0; j < n; i += 4, j++) ink[j] = (D[i] * 299 + D[i + 1] * 587 + D[i + 2] * 114) / 1000 < 150 ? 1 : 0;
+  const L = Math.max(60, Math.round(Math.min(W, H) * .05)), hs = [], vs = [];
+  for (let y = 0; y < H; y++) { let s0 = -1; for (let x = 0; x <= W; x++) { const v = x < W && ink[y * W + x]; if (v) { if (s0 < 0) s0 = x; } else if (s0 >= 0) { if (x - s0 >= L) hs.push({ a: s0, b: x, p: y, q: y }); s0 = -1; } } }
+  for (let x = 0; x < W; x++) { let s0 = -1; for (let y = 0; y <= H; y++) { const v = y < H && ink[y * W + x]; if (v) { if (s0 < 0) s0 = y; } else if (s0 >= 0) { if (y - s0 >= L) vs.push({ a: s0, b: y, p: x, q: x }); s0 = -1; } } }
+  // join runs on neighbouring rows (or columns) into one line with a thickness
+  const join = segs => { segs.sort((u, v) => u.p - v.p); const out = []; for (const s1 of segs) { const o = out.find(t => s1.p - t.q <= 1 && Math.min(t.b, s1.b) - Math.max(t.a, s1.a) > (s1.b - s1.a) * .5); if (o) { o.q = s1.p; o.a = Math.min(o.a, s1.a); o.b = Math.max(o.b, s1.b); } else out.push({ ...s1 }); } return out.filter(t => t.q - t.p < Math.max(6, L / 8)); };
+  const H2 = join(hs), V2 = join(vs), tol = 6;
+  const cross = (h, v) => v.p >= h.a - tol && v.p <= h.b + tol && h.p >= v.a - tol && h.p <= v.b + tol;
+  const gh = H2.filter(h => V2.filter(v => cross(h, v)).length >= 2), gv = V2.filter(v => H2.filter(h => cross(h, v)).length >= 2);
+  const wipe = [...gh, ...gv, ...H2.filter(h => h.b - h.a > W * .25)];
+  for (const t of wipe) { const horiz = H2.includes(t); for (let u = t.a; u < t.b; u++) for (let w = t.p - 2; w <= t.q + 2; w++) { const x = horiz ? u : w, y = horiz ? w : u; if (x < 0 || y < 0 || x >= W || y >= H) continue; const i = (y * W + x) * 4; D[i] = D[i + 1] = D[i + 2] = 255; } }
+  if (wipe.length) g.putImageData(im, 0, 0);
+  // grid areas: boxes of crossing lines, merged while they overlap
+  const boxes = []; for (const h of gh) { const vv = V2.filter(v => cross(h, v)); boxes.push([h.a, Math.min(h.p, ...vv.map(v => v.a)), h.b, Math.max(h.q, ...vv.map(v => v.b))]); }
+  for (let k = 0; k < boxes.length; k++) for (let m = boxes.length - 1; m > k; m--) { const A = boxes[k], B = boxes[m]; if (A[0] <= B[2] + tol && B[0] <= A[2] + tol && A[1] <= B[3] + tol && B[1] <= A[3] + tol) { A[0] = Math.min(A[0], B[0]); A[1] = Math.min(A[1], B[1]); A[2] = Math.max(A[2], B[2]); A[3] = Math.max(A[3], B[3]); boxes.splice(m, 1); m = boxes.length; } }
+  return boxes.filter(b => b[2] - b[0] > L && b[3] - b[1] > L / 2);
+}
+// Borderless tables: rows where lines of three or more separate text blocks sit side by side, three rows or more in a row.
+function ocrFindTables(data) {
+  const lines = (data.lines || []).filter(l => l.text.trim()); if (lines.length < 6) return [];
+  const bid = l => l.block ? JSON.stringify(l.block.bbox) : JSON.stringify(l.bbox);
+  const hgt = lines.map(l => l.bbox.y1 - l.bbox.y0).sort((a, b) => a - b)[lines.length >> 1] || 20;
+  const rows = []; for (const l of lines.slice().sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1))) { const cy = (l.bbox.y0 + l.bbox.y1) / 2; const r = rows.find(r => Math.abs(r.cy - cy) < hgt * .45); if (r) r.ls.push(l); else rows.push({ cy, ls: [l] }); }
+  const multi = rows.map(r => new Set(r.ls.map(bid)).size >= 3 && r.ls.every(l => l.text.trim().length < 40));
+  const out = []; let k = 0;
+  while (k < rows.length) { if (!multi[k]) { k++; continue; } let e = k; while (e + 1 < rows.length && multi[e + 1]) e++; if (e - k >= 2) { const ls = rows.slice(k, e + 1).flatMap(r => r.ls); out.push([Math.min(...ls.map(l => l.bbox.x0)), Math.min(...ls.map(l => l.bbox.y0)), Math.max(...ls.map(l => l.bbox.x1)), Math.max(...ls.map(l => l.bbox.y1))]); } k = e + 1; }
+  return out;
+}
+async function ocrTables(worker, c, data, ruled) {
+  const boxes = [...ruled]; for (const b of ocrFindTables(data)) if (!boxes.some(B => b[0] < B[2] && B[0] < b[2] && b[1] < B[3] && B[1] < b[3])) boxes.push(b);
+  if (!boxes.length) return data;
+  await worker.setParameters({ tessedit_pageseg_mode: '4' });
+  try {
+    for (const B of boxes) {
+      const pad = 12, x0 = Math.max(0, B[0] - pad), y0 = Math.max(0, B[1] - pad), w = Math.min(c.width - x0, B[2] - B[0] + pad * 2), h = Math.min(c.height - y0, B[3] - B[1] + pad * 2);
+      const k = el('canvas'); k.width = w; k.height = h; k.getContext('2d').drawImage(c, x0, y0, w, h, 0, 0, w, h);
+      const { data: d2 } = await worker.recognize(k); if (!(d2.words || []).some(x => x.text.trim())) continue;
+      const inside = bb => { const cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2; return cx >= x0 && cx <= x0 + w && cy >= y0 && cy <= y0 + h; };
+      const sh = bb => ({ x0: bb.x0 + x0, x1: bb.x1 + x0, y0: bb.y0 + y0, y1: bb.y1 + y0 });
+      data.lines = (data.lines || []).map(l => ({ ...l, words: (l.words || []).filter(x => !inside(x.bbox)) })).filter(l => l.words.length)
+        .concat((d2.lines || []).map(l => ({ ...l, bbox: sh(l.bbox), words: (l.words || []).map(x => ({ ...x, bbox: sh(x.bbox) })) })));
+      data.words = data.lines.flatMap(l => l.words);
+    }
+  } finally { await worker.setParameters({ tessedit_pageseg_mode: '3' }); }
+  data.lines.sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0)); data.tables = boxes.length;
+  return data;
 }
 // Second reading of lines the engine was unsure of: each such line is cut out and read again, enlarged, with thicker ink and
 // with Wolf-Jolion local thresholding (made for low-contrast pages); the reading with the best confidence is kept.
@@ -1926,7 +1983,7 @@ const TASKS = {
         let next = 0, done = 0; const t0 = Date.now();
         const lane = async worker => { while (next < idx.length) { const i = idx[next++];
           const pre = await ocrPrepare(d, i, { fast: O.fast, vertical }); let { data } = await worker.recognize(pre.c);
-          if (!O.fast && !vertical) data = await ocrRetry(worker, pre.c, data);
+          if (!O.fast && !vertical) { data = await ocrTables(worker, pre.c, data, pre.tables || []); data = await ocrRetry(worker, pre.c, data); }
           const r = { i, vp: pre.vp, angle: pre.angle, W: pre.W, H: pre.H, words: ocrWords(data) }; if (r.angle) ocrPlace(r); results.push(r); done++;
           const left = done < idx.length && done >= 2 ? Math.round((Date.now() - t0) / done * (idx.length - done) / 60000) : 0;
           msg(`Read ${done} of ${plural(idx.length, 'page')}${left > 1 ? `, about ${left} minutes left` : ''}…`); bar.firstChild.style.width = (done / idx.length * 100) + '%'; } };
@@ -8862,8 +8919,11 @@ async function cvPage(pg, opts = {}) {
     if (!it.str || !it.str.trim()) continue; const [a, b, c, d, e, f] = it.transform; // spaces come back from the gaps
     if (Math.abs(b) > Math.abs(a) * .1 || Math.abs(c) > Math.abs(d) * .1) continue; // rotated text: skip (watermarks, spines)
     const size = Math.abs(d) || Math.hypot(c, d) || 10; const F = fi(it.fontName);
-    runs.push({ x: e, y: f, w: it.width, h: size, size, text: it.str, font: F, sp: !it.str.trim() });
+    runs.push({ x: e, y: f, w: it.width, h: size, size, text: it.str, font: F, sp: !it.str.trim(), ang: Math.atan2(b, a) });
   }
+  // A tilted scan's OCR words lie along the tilt, so one table row would read as several lines: turn the words level first.
+  const angs = runs.filter(r => r.text.length > 1).map(r => r.ang).sort((p, q) => p - q), tilt = angs.length ? angs[angs.length >> 1] : 0;
+  if (Math.abs(tilt) > .002) { const cs = Math.cos(-tilt), sn = Math.sin(-tilt), cx = (view[0] + view[2]) / 2, cy = (view[1] + view[3]) / 2; for (const r of runs) { const dx = r.x - cx, dy = r.y - cy; r.x = cx + dx * cs - dy * sn; r.y = cy + dx * sn + dy * cs; } }
   // pictures: where images are drawn (from the operator list), so they can be cut from the rendered page
   const imgs = []; let m = [1, 0, 0, 1, 0, 0]; const stack = []; const O = pdfjsLib.OPS;
   const mul = (p, q) => [p[0] * q[0] + p[1] * q[2], p[0] * q[1] + p[1] * q[3], p[2] * q[0] + p[3] * q[2], p[2] * q[1] + p[3] * q[3], p[4] * q[0] + p[5] * q[2] + q[4], p[4] * q[1] + p[5] * q[3] + q[5]];
