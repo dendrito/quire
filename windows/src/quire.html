@@ -9625,7 +9625,8 @@ TASKS.a11y = function (P, d) {
 // baseline, straightened, and read by the chosen reader. The words go into the same invisible text layer as OCR.
 const HTR_ORT_VER = '1.20.1';
 const HTR_ORT = VENDOR ? VENDOR + 'onnxruntime/' : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${HTR_ORT_VER}/dist/`;
-const HTR_REV = 'claude/project-thread-vzqdhg';
+// the commit that holds models/htr (a commit, not a branch, so the links never move; jsDelivr serves files up to 20 MB, raw GitHub the rest)
+const HTR_REV = 'dd1484833d06e68855c6c1e1c616663d178a93a4';
 const HTR_SRC = () => window.QUIRE_HTR ? [window.QUIRE_HTR] : VENDOR ? [VENDOR + 'htr/'] : [`https://cdn.jsdelivr.net/gh/dendrito/quire@${HTR_REV}/models/htr/`, `https://raw.githubusercontent.com/dendrito/quire/${HTR_REV}/models/htr/`];
 const HTR_READERS = [
   { id: 'mccatmus', name: 'Early modern hands, 16th–21st century', short: 'McCATMuS', mb: 16, langs: 'Portuguese, Spanish, French, Latin, Italian, English, German, Dutch',
