@@ -8697,6 +8697,68 @@ function pdfaWalk(pdf, page, visit) {
   if (A instanceof L.PDFArray) for (const r of A.asArray()) { const a = pdf.context.lookup(r); if (!(a instanceof L.PDFDict)) continue; const AP = a.lookup(N('AP')); if (AP instanceof L.PDFDict) for (const k of ['N', 'R', 'D']) { const v = AP.lookup(N(k)); const ss = v instanceof L.PDFDict && !(v.dict) ? v.values().map(x => pdf.context.lookup(x)) : [v]; for (const s of ss) if (s && s.dict) { visit({ kind: 'content', stream: s, where: 'annot' }); const r6 = s.dict.lookup(N('Resources')); if (r6) res(r6, 'annot'); } } }
 }
 const pdfaDecoded = s => { try { return s instanceof PDFLib.PDFRawStream ? PDFLib.decodePDFRawStream(s).decode() : s.getContents ? s.getContents() : null; } catch { return null; } };
+// ---- embedding fonts a file only names ----
+// A PDF may name Helvetica, Arial, Times or Courier without carrying them; PDF/A and PDF/UA need every font inside.
+// They are replaced by the free fonts drawn to the same widths (Arimo, Tinos, Cousine, from Liberation), cut down to
+// the letters in use, so the text stays exactly where it was. Any other missing font is reported, not guessed.
+const FONT_SUB = { sans: 'Arimo', serif: 'Tinos', mono: 'Cousine' }, FONT_SUB_VER = { Arimo: '0.4.3', Tinos: '0.4.2', Cousine: '0.4.3' };
+const FONT_SUB_OK = /^(helvetica|arial|arialmt|times|timesnewroman|timesroman|courier|couriernew|liberation(sans|serif|mono)|arimo|tinos|cousine|nimbus(sans|roman|mono)[a-z]*)$/;
+const fontSubUrl = (fam, bold, italic) => { const v = `${bold ? '700Bold' : '400Regular'}${italic ? '_Italic' : ''}`, file = `${fam}_${v}.ttf`; return VENDOR ? VENDOR + 'fonts-sub/' + file : `https://cdn.jsdelivr.net/npm/@expo-google-fonts/${fam.toLowerCase()}@${FONT_SUB_VER[fam]}/${v}/${file}`; };
+const FONT_SUB_CACHE = new Map();
+async function fontSubLoad(fam, bold, italic) {
+  const u = fontSubUrl(fam, bold, italic); if (!FONT_SUB_CACHE.has(u)) FONT_SUB_CACHE.set(u, (async () => { if (!window.fontkit) await loadScript(FONTKIT_URL); const r = await fetch(u); if (!r.ok) throw new Error('font ' + r.status); const bytes = new Uint8Array(await r.arrayBuffer()); return { fk: window.fontkit.create(bytes), bytes }; })());
+  return FONT_SUB_CACHE.get(u);
+}
+// The font cut down to the glyphs in use, glyph numbers unchanged (unused glyphs left empty), plus a (3,0) cmap from
+// the PDF's character codes and a 'post' table. Done here rather than by fontkit's subsetter, which garbles some glyphs.
+function fontSfnt(bytes, codeToGid) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), n = dv.getUint16(4), T = {};
+  for (let k = 0; k < n; k++) { const o = 12 + k * 16; T[String.fromCharCode(...bytes.subarray(o, o + 4))] = bytes.subarray(dv.getUint32(o + 8), dv.getUint32(o + 8) + dv.getUint32(o + 12)); }
+  const hd = new DataView(T.head.buffer, T.head.byteOffset, T.head.length), longLoca = hd.getInt16(50) === 1, nG = new DataView(T.maxp.buffer, T.maxp.byteOffset).getUint16(4);
+  const ld = new DataView(T.loca.buffer, T.loca.byteOffset, T.loca.length), at = g => longLoca ? ld.getUint32(g * 4) : ld.getUint16(g * 2) * 2, gl = T.glyf;
+  const keep = new Set([0, ...codeToGid.values()]), todo = [...keep];
+  while (todo.length) { const g = todo.pop(), a = at(g), b = at(g + 1); if (b - a < 10) continue; const v = new DataView(gl.buffer, gl.byteOffset + a, b - a); if (v.getInt16(0) >= 0) continue;
+    let p = 10, fl; do { fl = v.getUint16(p); const c = v.getUint16(p + 2); if (!keep.has(c)) { keep.add(c); todo.push(c); } p += 4 + (fl & 1 ? 4 : 2) + (fl & 8 ? 2 : fl & 0x40 ? 4 : fl & 0x80 ? 8 : 0); } while (fl & 0x20 && p < b - a); }
+  let size = 0; for (const g of keep) size += (at(g + 1) - at(g) + 3) & ~3;
+  const glyf = new Uint8Array(size), loca = new Uint8Array((nG + 1) * 4), lv = new DataView(loca.buffer); let off = 0;
+  for (let g = 0; g < nG; g++) { lv.setUint32(g * 4, off); if (keep.has(g)) { const a = at(g), b = at(g + 1); glyf.set(gl.subarray(a, b), off); off += (b - a + 3) & ~3; } } lv.setUint32(nG * 4, off);
+  const head = T.head.slice(); new DataView(head.buffer).setInt16(50, 1); new DataView(head.buffer).setUint32(8, 0);
+  const codes = [...codeToGid.keys()].sort((a, b) => a - b), seg = codes.length + 1, sub = new DataView(new ArrayBuffer(16 + seg * 8));
+  const lg = Math.floor(Math.log2(seg)); sub.setUint16(0, 4); sub.setUint16(2, sub.byteLength); sub.setUint16(6, seg * 2); sub.setUint16(8, 2 << lg); sub.setUint16(10, lg); sub.setUint16(12, seg * 2 - (2 << lg));
+  const ix = (arr, k) => 14 + arr * seg * 2 + (arr ? 2 : 0) + k * 2;
+  [...codes.map(c => [0xF000 + c, codeToGid.get(c)]), [0xFFFF, 0]].forEach(([u, g], k) => { sub.setUint16(ix(0, k), u); sub.setUint16(ix(1, k), u); sub.setUint16(ix(2, k), u === 0xFFFF ? 1 : (g - u) & 0xFFFF); sub.setUint16(ix(3, k), 0); });
+  const cmap = new Uint8Array(12 + sub.byteLength), cd = new DataView(cmap.buffer); cd.setUint16(2, 1); cd.setUint16(4, 3); cd.setUint16(6, 0); cd.setUint32(8, 12); cmap.set(new Uint8Array(sub.buffer), 12);
+  const post = new Uint8Array(32); new DataView(post.buffer).setUint32(0, 0x00030000);
+  const tabs = [['cmap', cmap], ['glyf', glyf], ['head', head], ['loca', loca], ['post', post], ...['hhea', 'hmtx', 'maxp', 'cvt ', 'fpgm', 'prep', 'OS/2', 'name'].filter(t => T[t]).map(t => [t, T[t]])].sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const h0 = 12 + tabs.length * 16; let total = h0; for (const [, d] of tabs) total += (d.length + 3) & ~3;
+  const out = new Uint8Array(total), od = new DataView(out.buffer); od.setUint32(0, 0x00010000); od.setUint16(4, tabs.length); const lt = Math.floor(Math.log2(tabs.length)); od.setUint16(6, 16 << lt); od.setUint16(8, lt); od.setUint16(10, tabs.length * 16 - (16 << lt));
+  off = h0; tabs.forEach(([tag, d], k) => { const o = 12 + k * 16; for (let j = 0; j < 4; j++) out[o + j] = tag.charCodeAt(j); out.set(d, off); let sum = 0; for (let j = 0; j < d.length; j += 4) sum = (sum + (((d[j] << 24) | ((d[j + 1] || 0) << 16) | ((d[j + 2] || 0) << 8) | (d[j + 3] || 0)) >>> 0)) >>> 0; od.setUint32(o + 4, sum); od.setUint32(o + 8, off); od.setUint32(o + 12, d.length); off += (d.length + 3) & ~3; });
+  return out;
+}
+async function fontEmbedMissing(pdf) {
+  const L = PDFLib, N = n => L.PDFName.of(n), ctx = pdf.context, done = [], left = [];
+  for (const [ref, o] of [...ctx.enumerateIndirectObjects()]) {
+    if (!(o instanceof L.PDFDict) || String(o.get(N('Type'))) !== '/Font') continue; const st = String(o.get(N('Subtype')));
+    if (!/^\/(Type1|TrueType|MMType1)$/.test(st) || pdfaFontEmbedded(pdf, o)) continue;
+    const f = ceFont(pdf, o, ''), key = f.clean.toLowerCase().replace(/[-,](bold|italic|oblique|bolditalic|boldoblique|roman|regular|ps|mt|psmt)+$/g, '').replace(/[^a-z]/g, '').replace(/(bold|italic|oblique|ps|mt|psmt|roman)+$/g, '');
+    if (/symbol|dingbat|wingding/i.test(f.clean) || !(FONT_SUB_OK.test(key) || (!f.w.size && f.stdE))) { left.push(f.clean); continue; }
+    try {
+      const { fk, bytes } = await fontSubLoad(FONT_SUB[f.family], f.bold, f.italic), map = new Map(), wid = new Map(), tu = [];
+      for (let c = 0; c < 256; c++) { const u = f.uni(c) || ([127, 129, 141, 143, 144, 157].includes(c) && !f.hasTU ? '•' : null); /* WinAnsi's spare codes draw a bullet */ if (!u || [...u].length !== 1) continue; const g = fk.glyphForCodePoint(u.codePointAt(0)); if (!g || !g.id) continue; map.set(c, g.id); wid.set(c, Math.round(g.advanceWidth * 1000 / fk.unitsPerEm)); tu.push(`<${c.toString(16).padStart(2, '0')}> <${[...u].map(x => x.codePointAt(0).toString(16).padStart(4, '0')).join('')}>`); }
+      if (!map.size) { left.push(f.clean); continue; }
+      const ttf = fontSfnt(bytes, map), lo = Math.min(...map.keys()), hi = Math.max(...map.keys()), sc = 1000 / fk.unitsPerEm;
+      const name = `${'QUIRE' + String.fromCharCode(65 + done.length % 26)}+${FONT_SUB[f.family]}${f.bold || f.italic ? '-' : ''}${f.bold ? 'Bold' : ''}${f.italic ? 'Italic' : ''}`;
+      const file = ctx.flateStream(ttf, { Length1: ttf.length });
+      const fd = ctx.obj({ Type: 'FontDescriptor', FontName: name, Flags: 4 | (f.family === 'mono' ? 1 : 0) | (f.family === 'serif' ? 2 : 0) | (f.italic ? 64 : 0), FontBBox: [fk.bbox.minX, fk.bbox.minY, fk.bbox.maxX, fk.bbox.maxY].map(v => Math.round(v * sc)), ItalicAngle: fk.italicAngle || 0, Ascent: Math.round(fk.ascent * sc), Descent: Math.round(fk.descent * sc), CapHeight: Math.round((fk.capHeight || fk.ascent * .7) * sc), StemV: f.bold ? 140 : 80, FontFile2: ctx.register(file) });
+      const cm = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange\n` + tu.reduce((a, l, k) => a + (k % 100 ? '' : `${Math.min(100, tu.length - k)} beginbfchar\n`) + l + '\n' + ((k % 100 === 99 || k === tu.length - 1) ? 'endbfchar\n' : ''), '') + 'endcmap CMapName currentdict /CMap defineresource pop end end';
+      for (const k of ['Encoding', 'ToUnicode', 'FontDescriptor', 'Widths', 'FirstChar', 'LastChar']) o.delete(N(k));
+      o.set(N('Subtype'), N('TrueType')); o.set(N('BaseFont'), N(name)); o.set(N('FirstChar'), L.PDFNumber.of(lo)); o.set(N('LastChar'), L.PDFNumber.of(hi));
+      o.set(N('Widths'), ctx.obj(Array.from({ length: hi - lo + 1 }, (_, k) => wid.get(lo + k) || 0))); o.set(N('FontDescriptor'), ctx.register(fd)); o.set(N('ToUnicode'), ctx.register(ctx.flateStream(new TextEncoder().encode(cm))));
+      done.push(`${f.clean} → ${name.slice(7)}`);
+    } catch (e) { console.warn('Quire: embedding', f.clean, e); left.push(f.clean); }
+  }
+  return { done, left };
+}
 function pdfaFontEmbedded(pdf, F) {
   const L = PDFLib, N = n => L.PDFName.of(n); const st = String(F.get(N('Subtype')));
   if (st === '/Type3') return true;
@@ -8720,7 +8782,8 @@ async function pdfaConvert(d, onStep = () => {}) {
     if (names.includes('/LZWDecode')) { const raw = pdfaDecoded(o); if (raw) { const nd = o.dict.clone(ctx); nd.delete(N('Filter')); nd.delete(N('DecodeParms')); nd.delete(N('Length')); ctx.assign(ref, ctx.flateStream(raw, Object.fromEntries(nd.entries().map(([k, v]) => [k.asString().slice(1), v])))); lzw++; } }
     if (String(o.dict.get(N('Subtype'))) === '/PS' || o.dict.get(N('PS'))) { o.dict.delete(N('PS')); ps++; }
   }
-  // 2. per page: fonts, colour, graphics state, images
+  // 2. per page: fonts, colour, graphics state, images. Fonts the file only names are put in first, so those pages need not become pictures.
+  try { onStep('Embedding fonts…'); const fe = await fontEmbedMissing(pdf); for (const x of fe.done) rep.fixed.push('Font embedded: ' + x); } catch (e) { console.warn(e); }
   for (let i = 0; i < pages.length; i++) {
     let rgb = false, cmyk = false;
     const csOf = c => { c = c instanceof L.PDFRef ? ctx.lookup(c) : c; if (c instanceof L.PDFName) return String(c); if (c instanceof L.PDFArray) { const k = String(c.get(0)); if (k === '/ICCBased') return '/ICC'; if (k === '/Indexed') return csOf(c.get(1)); if (k === '/Separation' || k === '/DeviceN') return csOf(c.get(2)); return k; } return ''; };
@@ -9388,7 +9451,7 @@ async function a11yScan(d) {
   add('lang', 'Language of the text', langS ? 'pass' : 'fail', langS ? langS : (guess ? `Not set. It looks like ${a11yLangName(guess)}.` : 'Not set'), 'lang');
   add('tags', 'Tagged PDF (structure for screen readers)', tagged ? 'pass' : 'fail', tagged ? 'The file has tags.' : 'No tags: screen readers guess the reading order and cannot find headings.', tagged ? null : 'tags');
   add('text', 'Real text, not only pictures of text', noText ? 'fail' : 'pass', noText ? `${plural(noText, 'page')} without text. Run OCR on scans.` : 'Every page has text.', noText ? 'ocr' : null);
-  add('fonts', 'Fonts are inside the file', noEmb.size ? 'warn' : 'pass', noEmb.size ? `Not inside: ${esc([...noEmb].slice(0, 6).join(', '))}${noEmb.size > 6 ? '…' : ''}. Readers use a look-alike font, and PDF/UA does not allow this. Export again from the original program with fonts embedded.` : 'Yes');
+  add('fonts', 'Fonts are inside the file', noEmb.size ? 'fail' : 'pass', noEmb.size ? `Not inside: ${esc([...noEmb].slice(0, 6).join(', '))}${noEmb.size > 6 ? '…' : ''}. Readers use a look-alike font, and PDF/UA does not allow this. Fix puts in look-alikes drawn to the same widths (Helvetica/Arial, Times, Courier); for other fonts, export again from the original program with fonts embedded.` : 'Yes', noEmb.size ? 'fonts' : null);
   add('chars', 'Characters can be read as letters', bad ? 'warn' : 'pass', bad ? `${plural(bad, 'page')} with characters that cannot be turned into letters (fonts without a Unicode map). Copying or reading aloud may give wrong letters.` : 'Yes');
   if (tagged) add('alt', 'Pictures have descriptions (alt text)', figsNoAlt ? 'fail' : 'pass', figs ? (figsNoAlt ? `${figsNoAlt} of ${figs} pictures need a description.` : (figs > 1 ? `All ${figs} pictures are described.` : 'The picture is described.')) : 'No pictures tagged.', figsNoAlt ? 'alt' : null);
   add('bm', 'Bookmarks in long documents', d.info.length <= 20 || hasBm ? 'pass' : 'fail', d.info.length <= 20 ? 'Short document: not needed.' : hasBm ? 'Yes' : `${d.info.length} pages and no bookmarks.`, d.info.length > 20 && !hasBm ? 'bm' : null);
@@ -9396,6 +9459,9 @@ async function a11yScan(d) {
   if (links) add('links', 'Links have descriptions', linksNoDesc ? 'fail' : 'pass', linksNoDesc ? `${linksNoDesc} of ${links} links` : `All ${links}`, linksNoDesc ? 'links' : null);
   if (fields) add('fields', 'Form fields have tooltips', fieldsNoTip ? 'fail' : 'pass', fieldsNoTip ? `${fieldsNoTip} of ${fields} fields` : `All ${fields}`, fieldsNoTip ? 'fields' : null);
   add('sec', 'Security lets screen readers read the text', enc ? 'fail' : 'pass', enc ? 'The password settings block screen readers. Unlock and protect again.' : 'Yes');
+  let xmp = ''; try { const md = cat0.lookup(N('Metadata')); xmp = md ? new TextDecoder().decode(pdfaDecoded(md)) : ''; } catch {}
+  const uaid = /pdfuaid:part(\s*=\s*["']1|>\s*1\s*<)/.test(xmp);
+  add('uaid', 'Marked as a PDF/UA file', uaid ? 'pass' : C.some(c => c.state === 'fail') ? 'warn' : 'fail', uaid ? 'Yes' : 'Not marked. Once the checks above pass, Fix adds the PDF/UA mark that checkers, libraries and archives look for.', uaid ? null : 'uaid');
   add('order', 'Reading order', 'manual', 'Check that the order makes sense: Read aloud follows it.');
   add('contrast', 'Colour contrast', 'manual', 'Check that text stands out from its background.');
   return { checks: C, guess, title, tagged };
@@ -9407,6 +9473,7 @@ async function a11yFix(d, ids, opts = {}) {
   const L = PDFLib, N = n => L.PDFName.of(n); const did = [];
   const r = await editBytes('Accessibility fixes', async pdf => {
     const ctx = pdf.context, cat0 = pdf.catalog;
+    if (ids.includes('fonts')) { const r = await fontEmbedMissing(pdf); if (r.done.length) did.push('fonts'); if (r.left.length) toast(`Not embedded (no matching free font): ${[...new Set(r.left)].slice(0, 4).join(', ')}`); }
     if (ids.includes('title')) {
       let info = ctx.trailerInfo.Info ? ctx.lookup(ctx.trailerInfo.Info) : null; if (!(info instanceof L.PDFDict)) { info = ctx.obj({}); ctx.trailerInfo.Info = ctx.register(info); }
       const t = (opts.title || (info.lookup(N('Title')) && info.lookup(N('Title')).decodeText()) || baseName(d)).trim(); info.set(N('Title'), L.PDFHexString.fromText(t));
@@ -9417,6 +9484,12 @@ async function a11yFix(d, ids, opts = {}) {
       else { const r0 = lxReadXmp(pdf) || {}; x = new TextDecoder().decode(xmpPacket({ ...r0, title: t, authors: r0.authors || [], tags: r0.tags || [], ids: r0.ids || {} }, 'acrobat')); }
       cat0.set(N('Metadata'), ctx.register(ctx.stream(new TextEncoder().encode(x), { Type: 'Metadata', Subtype: 'XML' })));
       did.push('title');
+    }
+    if (ids.includes('uaid')) {
+      const md = cat0.lookup(N('Metadata')); let x = null; try { x = md ? new TextDecoder().decode(pdfaDecoded(md)) : null; } catch {}
+      if (!x || !/<\/rdf:RDF>/.test(x)) { const r0 = lxReadXmp(pdf) || {}; x = new TextDecoder().decode(xmpPacket({ ...r0, authors: r0.authors || [], tags: r0.tags || [], ids: r0.ids || {} }, 'acrobat')); }
+      if (!/pdfuaid:part/.test(x)) x = x.replace(/<\/rdf:RDF>/, '<rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"><pdfuaid:part>1</pdfuaid:part></rdf:Description></rdf:RDF>');
+      cat0.set(N('Metadata'), ctx.register(ctx.stream(new TextEncoder().encode(x), { Type: 'Metadata', Subtype: 'XML' }))); did.push('PDF/UA mark');
     }
     if (ids.includes('lang') && (opts.lang || opts.guess)) { cat0.set(N('Lang'), L.PDFString.of(opts.lang || opts.guess)); did.push('language'); }
     if (ids.includes('tabs') || ids.includes('tags')) for (const p of pdf.getPages()) if (p.node.get(N('Annots'))) p.node.set(N('Tabs'), N('S'));
@@ -9434,6 +9507,7 @@ async function a11yTag(pdf, d) {
   const models = []; const sizes = [];
   for (let i = 0; i < pages.length; i++) { let m = null; try { m = ceModel(pdf, i); } catch (e) { console.warn('tag', e); } models.push(m); if (m) for (const p of m.paras) if (!p.inv) for (let k = 0; k < Math.min(50, p.text.length); k++) sizes.push(Math.round(p.fs * 2) / 2); }
   const body = median(sizes) || 10;
+  let hPrev = 0;
   for (let i = 0; i < pages.length; i++) {
     const m = models[i]; const page = pages[i]; const pageRef = page.ref; const mcidElems = []; const reps = []; let mcid = 0; const pageKids = [];
     if (m) {
@@ -9441,7 +9515,8 @@ async function a11yTag(pdf, d) {
       const used = new Set();
       const paras = m.paras.filter(p => p.text.trim()).sort((a, b) => Math.min(...a.runs.map(r => r.op)) - Math.min(...b.runs.map(r => r.op)));
       for (const p of paras) {
-        const lvl = p.inv ? 0 : p.fs >= body * 1.6 ? 1 : p.fs >= body * 1.3 ? 2 : p.fs >= body * 1.12 && p.lines.length <= 2 && p.runs.every(r => r.f && /bold|black|heavy|semi/i.test(r.f.clean || '')) ? 3 : 0;
+        let lvl = p.inv ? 0 : p.fs >= body * 1.6 ? 1 : p.fs >= body * 1.3 ? 2 : p.fs >= body * 1.12 && p.lines.length <= 2 && p.runs.every(r => r.f && /bold|black|heavy|semi/i.test(r.f.clean || '')) ? 3 : 0;
+        if (lvl) { lvl = Math.min(lvl, hPrev + 1); hPrev = lvl; } /* PDF/UA: the first heading is H1 and no level is skipped going down */
         const S = lvl ? 'H' + lvl : 'P'; lvl ? cnt.heads++ : cnt.paras++;
         const eref = ctx.nextRef(); const ks = [];
         for (const r of p.runs) { if (used.has(r.op)) continue; used.add(r.op); const o = m.ops[r.op]; reps.push({ s: o.s, e: o.e, t: `/${S} <</MCID ${mcid}>> BDC ${ceStr(m.raw.subarray(o.s, o.e))} EMC` }); ks.push(mcid); mcidElems[mcid++] = eref; }
@@ -9500,7 +9575,7 @@ TASKS.a11y = function (P, d) {
     a11yScan(d).then(r => { A11.res = r; if (S.task === 'a11y' && cur() === d) TASKS.a11y(P, d); }).catch(e => { P.querySelector('.muted').textContent = 'Could not check: ' + e.message; }); return;
   }
   const R = A11.res; const icon = s => s === 'pass' ? '<span style="color:#2e8b57">✓</span>' : s === 'fail' ? '<span style="color:#c33">✕</span>' : s === 'warn' ? '<span style="color:#d4a017">!</span>' : '<span class="muted">?</span>';
-  const auto = R.checks.filter(c => c.state === 'fail' && ['title', 'lang', 'tags', 'tabs', 'links', 'fields'].includes(c.fix));
+  const auto = R.checks.filter(c => c.state === 'fail' && ['title', 'lang', 'tags', 'tabs', 'links', 'fields', 'fonts', 'uaid'].includes(c.fix));
   const fixBtn = c => !c.fix || c.state === 'pass' ? '' : `<button class="btn sm" data-afix="${c.fix}">${{ title: 'Set title', lang: 'Set language', tags: 'Add tags', ocr: 'Run OCR', alt: 'Describe pictures', bm: 'Bookmarks', tabs: 'Fix', links: 'Describe links', fields: 'Add tooltips' }[c.fix]}</button>`;
   P.innerHTML = `<section class="sec">${head('Accessibility')}
     <p class="hint" style="margin:0">${R.checks.filter(c => c.state === 'fail').length ? `${plural(R.checks.filter(c => c.state === 'fail').length, 'problem')} found.` : 'No problems found by the automatic checks.'} The same checks Acrobat's Accessibility Checker makes, in plain words.</p>

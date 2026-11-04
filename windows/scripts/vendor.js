@@ -28,7 +28,9 @@ const copies = [
   ['tesseract.js/dist/tesseract.min.js', 'tesseract/tesseract.min.js'],
   ['tesseract.js/dist/worker.min.js', 'tesseract/worker.min.js'],
   ...['', '-lstm', '-simd', '-simd-lstm'].map(v => [`tesseract.js-core/tesseract-core${v}.wasm.js`, `tesseract-core/tesseract-core${v}.wasm.js`]),
-  ...OCR_LANGS.map(l => [`@tesseract.js-data/${l}/4.0.0_best_int/${l}.traineddata.gz`, `tessdata/${l}.traineddata.gz`])
+  ...OCR_LANGS.map(l => [`@tesseract.js-data/${l}/4.0.0_best_int/${l}.traineddata.gz`, `tessdata/${l}.traineddata.gz`]),
+  // fonts drawn to the widths of Helvetica/Arial, Times and Courier, put into PDFs that only name those fonts (PDF/A, PDF/UA)
+  ...['Arimo', 'Tinos', 'Cousine'].flatMap(f => ['400Regular', '400Regular_Italic', '700Bold', '700Bold_Italic'].map(v => [`@expo-google-fonts/${f.toLowerCase()}/${v}/${f}_${v}.ttf`, `fonts-sub/${f}_${v}.ttf`]))
 ];
 let fontCss = '';
 for (const [family, pkg, weights] of FONTS) {
