@@ -3913,6 +3913,186 @@ TASKS.bookindex = async function (P, d) {
   };
 };
 
+/* ---- contents pages: link the book's own table of contents, or build a new one ---- */
+// For scanned books (after OCR) and born-digital ones. "Link" finds the printed contents page, matches each entry to
+// the page it names (page labels, else the printed→file offset worked out from the body) and lays a link over the
+// entry. Every line of the contents pages is listed, so a line Quire missed can be given a page by hand.
+// "Build" sets a new contents page from bookmarks, headings or the detected entries, editable row by row, and inserts
+// it as real pages with dot leaders and linked entries. Links Quire adds are named "quire-toc-…" so they can be replaced.
+Object.assign(IC, { toc: '<path d="M4 6h2M4 12h2M4 18h2M9 6h11M9 12h11M9 18h11"/>' });
+Object.assign(ACTS, { toc: ['Contents page: link it or build one', 'toc', () => openTask('toc')] });
+Object.assign(RLBL, { toc: 'Contents' });
+Object.assign(CMD_KW, { toc: 'table of contents toc hyperlink links chapters scanned book contents page sumário índice build new' });
+RIB.index.items = ['@toc', '@bookmarks', '@labels', '|', '@library', '@estante', '|', '@bookindex'];
+const TOC_LINE = /^(.*?\p{L}.*?)(?:\s*[.·…_․‥\-–—]{2,}\s*|\s+)(\d{1,4}|[ivxlcdm]{1,8})$/iu;
+function tocLevels(rows) { const xs = [...new Set(rows.map(r => Math.round(r.x / 6) * 6))].sort((a, b) => a - b).slice(0, 4); for (const r of rows) { const dots = (r.title.match(/^(\d+(?:\.\d+)*)\.?\s/) || [])[1]; r.lvl = dots ? Math.min(3, dots.split('.').length - 1) : Math.max(0, xs.indexOf(Math.round(r.x / 6) * 6)); } }
+async function tocDetect(d, pages, offset) {
+  const labels = await docLabels(d); const after = Math.max(...pages) + 1; const rows = [];
+  for (const i of pages) for (const l of await ixLines(d, i)) {
+    const m = l.text.match(TOC_LINE); const isHead = TOC_WORDS.test(l.text) && l.text.length < 40;
+    rows.push({ src: i, x: l.x, x1: l.x1, y: l.y, size: l.size, text: l.text, title: m && !isHead ? m[1].replace(/[.·…_\s]+$/, '').trim() : l.text, num: m && !isHead ? m[2] : '', page: null, use: false });
+  }
+  if (offset == null) { const r = await bmFromToc(d, pages, null); offset = r.offset; }
+  for (const r of rows) if (r.num) { let p = null; if (labels) { const k = labels.findIndex((l, i) => i >= after && l.toLowerCase() === r.num.toLowerCase()); if (k >= 0) p = k; } if (p == null && /^\d+$/.test(r.num)) p = +r.num - 1 + offset; if (p != null && p >= 0 && p < d.info.length) { r.page = p; r.use = true; } }
+  tocLevels(rows.filter(r => r.use)); return { rows, offset, pages };
+}
+function tocDropLinks(pdf, pageIdx) {
+  const N = LX.N; const page = pdf.getPage(pageIdx); const annots = page.node.lookup(N('Annots')); if (!(annots instanceof PDFLib.PDFArray)) return 0; let n = 0;
+  for (let k = annots.size() - 1; k >= 0; k--) { const a = annots.lookup(k); if (a instanceof PDFLib.PDFDict && /^quire-toc/.test(lxStr(a.lookup(N('NM'))))) { const ref = annots.get(k); annots.remove(k); if (ref instanceof PDFLib.PDFRef) pdf.context.delete(ref); n++; } }
+  return n;
+}
+function tocLinkAnnot(pdf, rect, toPage, k, boxed) {
+  const ctx = pdf.context; return ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', NM: PDFLib.PDFString.of('quire-toc-' + k), Rect: rect.map(v => +v.toFixed(2)), Border: [0, 0, boxed ? 1 : 0], C: [.17, .36, .83], H: 'I', Dest: [pdf.getPage(toPage).ref, 'XYZ', null, null, null] }));
+}
+// Lays out a contents page: returns [{page, items:[{text, x, y, size, bold, num, numX, dotsFrom, dotsTo, rect, to}]}].
+function tocLayout(F, FB, rows, o, W, H, numOf) {
+  const M = Math.max(48, Math.min(W, H) * .1); const fs = o.size || 11, lh = fs * 1.55; const numW = Math.max(...rows.map(r => F.widthOfTextAtSize(numOf(r), fs)), 10);
+  const out = [{ items: [] }]; let y = H - M - 26 - lh * 1.4; const right = W - M;
+  for (const r of rows) {
+    const font = r.lvl === 0 && o.boldTop ? FB : F; const x = M + r.lvl * 16; const maxW = right - x - numW - 18;
+    const lines = wrapText(font, safe(font, r.title || 'Untitled'), fs, maxW); if (r.lvl === 0 && o.boldTop && r !== rows[0]) y -= lh * .35;
+    if (y - lh * (lines.length - 1) < M) { out.push({ items: [] }); y = H - M; }
+    lines.forEach((t, k) => {
+      const last = k === lines.length - 1; const tw = font.widthOfTextAtSize(t, fs); const num = numOf(r); const nx = right - F.widthOfTextAtSize(num, fs);
+      out[out.length - 1].items.push({ text: t, x: x + (k ? 12 : 0), y, size: fs, font, num: last ? num : null, numX: nx, dotsFrom: last && o.dots ? x + (k ? 12 : 0) + tw + 6 : null, dotsTo: nx - 6, rect: [x - 2, y - fs * .3, right + 2, y + fs * .95], to: r.page });
+      y -= lh;
+    });
+  }
+  return { pages: out, M };
+}
+async function tocInsert(pdf, d, rows, o) {
+  const n = pdf.getPageCount(); const at = Math.max(0, Math.min(n, o.at)); const F = await pdf.embedFont(StandardFonts.Helvetica), FB = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const ref = pdf.getPage(Math.min(at, n - 1)).getSize(); const W = ref.width, H = ref.height; const labels = o.printed ? await docLabels(d) : null;
+  let count = 1; for (let pass = 0; pass < 3; pass++) { const numOf = r => labels ? labels[r.page] : String(r.page + 1 + (r.page >= at ? count : 0)); const L = tocLayout(F, FB, rows, o, W, H, numOf); if (L.pages.length === count || pass === 2) { count = L.pages.length; var lay = L; break; } count = L.pages.length; }
+  const targets = pdf.getPages().map(p => p.ref); const dots = F.widthOfTextAtSize('.', o.size || 11) * 1.6; let k = 0;
+  lay.pages.forEach((pgL, pi) => {
+    const p = pdf.insertPage(at + pi, [W, H]);
+    if (pi === 0) p.drawText(safe(FB, o.title || 'Contents'), { x: lay.M, y: H - lay.M - 20, size: 20, font: FB });
+    for (const it of pgL.items) {
+      p.drawText(it.text, { x: it.x, y: it.y, size: it.size, font: it.font });
+      if (it.num != null) { p.drawText(it.num, { x: it.numX, y: it.y, size: it.size, font: F }); if (it.dotsFrom != null && it.dotsTo - it.dotsFrom > dots * 2) { let s = ''; const nDots = Math.floor((it.dotsTo - it.dotsFrom) / dots); for (let j = 0; j < nDots; j++) s += '.'; p.drawText(s, { x: it.dotsTo - nDots * dots, y: it.y, size: it.size, font: F, characterSpacing: dots - F.widthOfTextAtSize('.', it.size), color: rgb(.45, .47, .52) }); } }
+      if (o.links && it.to != null && targets[it.to]) { const ctx = pdf.context; p.node.addAnnot(ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', NM: PDFLib.PDFString.of('quire-toc-new-' + (k++)), Rect: it.rect.map(v => +v.toFixed(2)), Border: [0, 0, 0], H: 'I', Dest: [targets[it.to], 'XYZ', null, null, null] }))); }
+    }
+  });
+  const R = plRead(pdf); // keep printed page numbers right around the new pages
+  if (R.length) {
+    const out = R.map(r => r.start < at ? r : { ...r, start: r.start + count }); const cov = R.filter(r => r.start < at).pop();
+    if (cov && !R.some(r => r.start === at)) out.push({ ...cov, start: at + count, st: (cov.st || 1) + (at - cov.start) });
+    out.push({ start: at, style: '', prefix: o.title || 'Contents', st: 1 }); plWrite(pdf, out);
+  }
+  if (o.bookmark) { const tree = await bmRead(d); const shift = t => t.forEach(x => { if (x.page != null && x.page >= at) x.page += count; shift(x.kids); }); shift(tree); const node = { title: o.title || 'Contents', page: at, top: null, open: false, kids: [] }; const i = tree.findIndex(x => x.page != null && x.page > at); i < 0 ? tree.push(node) : tree.splice(i, 0, node); bmWrite(pdf, tree); }
+  d.annots.splice(at, 0, ...Array.from({ length: count }, () => [])); return { at, count };
+}
+S.toc = Object.assign({ mode: 'link', boxed: false, bm: false, src: 'bookmarks', title: 'Contents', dots: true, links: true, printed: true, boldTop: true, bookmark: true }, pref.get('toc', {}));
+TASKS.toc = async function (P, d) {
+  const T = S.toc; d.tocS = d.tocS && d.tocS.bytes === d.bytes ? d.tocS : { bytes: d.bytes, link: null, build: null };
+  const st = d.tocS; const labels = await docLabels(d); if (S.task !== 'toc' || cur() !== d) return;
+  const lab = i => i == null ? '' : labels ? labels[i] : String(i + 1);
+  const saveT = () => pref.set('toc', T);
+  const shell = inner => `<section class="sec">${head('Contents page')}
+    <div class="segs" id="tcMode"><button type="button" data-m="link" class="${T.mode === 'link' ? 'on' : ''}">Link existing</button><button type="button" data-m="build" class="${T.mode === 'build' ? 'on' : ''}">Build new</button></div>${inner}</section>`;
+  const bindMode = () => $$('#tcMode button', P).forEach(b => b.onclick = () => { T.mode = b.dataset.m; saveT(); draw(); });
+  const textless = async pages => { for (const i of pages) if ((await ixLines(d, i)).length) return false; return true; };
+  const drawLink = async () => {
+    const L = st.link;
+    P.innerHTML = shell(`<p class="hint">Finds the printed contents page, works out which page each entry points to, and makes each line clickable. Scanned books need OCR first so the page has text.</p>
+      <div class="grid2"><div class="field"><label for="tcPg">Contents pages</label><input id="tcPg" class="inp" placeholder="auto, or 5-7" value="${esc(L ? L.pages.map(p => p + 1).join(',') : T.pages || '')}"></div><div class="field"><label for="tcOff">Page offset</label><input id="tcOff" class="inp" type="number" placeholder="auto" value="${L ? L.offset : ''}"></div></div>
+      <div class="row"><button class="btn ${L ? '' : 'primary'}" id="tcDet">${L ? 'Detect again' : 'Detect'}</button>${L ? '<button class="btn" id="tcRe">Re-match pages</button>' : ''}</div><p class="hint" id="tcMsg">${L ? `Contents on page ${L.pages.map(p => p + 1).join(', ')}. Printed page 1 is page ${L.offset + 1} of the file. Tick the lines to link and correct any page; click a line to check its target.` : ''}</p>
+      ${L ? `<ul class="tc-rows">${L.rows.map((r, k) => `<li class="${r.use ? 'on' : ''}" style="padding-left:${4 + (r.use ? (r.lvl || 0) * 10 : 0)}px"><input type="checkbox" data-u="${k}" ${r.use ? 'checked' : ''} aria-label="Link this line"><span class="tc-t" data-go="${k}" title="${esc(r.text)}">${esc(r.text)}</span><input class="inp tc-p" type="number" min="1" max="${d.info.length}" data-p="${k}" value="${r.page != null ? r.page + 1 : ''}" placeholder="page" aria-label="Goes to page"></li>`).join('')}</ul>
+      <span class="muted small">${L.rows.filter(r => r.use).length} of ${L.rows.length} lines will be links. Numbers are pages of the file${labels ? ' (the label is shown when you hover a line)' : ''}.</span>
+      <label class="chk"><input type="checkbox" id="tcBox" ${T.boxed ? 'checked' : ''}> Show a thin blue box around each link</label>
+      <label class="chk"><input type="checkbox" id="tcBm" ${T.bm ? 'checked' : ''}> Also replace the bookmarks with these entries</label>
+      <div class="row"><button class="btn primary" id="tcGo">Add links</button><button class="btn" id="tcDel">Remove Quire's links</button></div>` : ''}`);
+    bindClose(P); bindMode();
+    const detect = async (keepOff) => {
+      const v = $('#tcPg', P).value.trim(); T.pages = v; saveT(); busy('Looking for the contents page…');
+      try {
+        const pages = v && v !== 'auto' ? parseRanges(v, d.info.length) : await bmFindTocPages(d);
+        if (!pages.length) { unbusy(); $('#tcMsg', P).textContent = (await textless([...Array(Math.min(d.info.length, 12)).keys()])) ? 'The first pages have no text, so the contents page can\'t be read. Run OCR first (Tools → OCR), then detect again.' : 'No contents page found in the first 30 pages. Type its page numbers, e.g. 5-7.'; return; }
+        if (await textless(pages)) { unbusy(); $('#tcMsg', P).innerHTML = `Page ${pages.map(p => p + 1).join(', ')} has no text yet. <button class="btn sm" id="tcOcr">Run OCR</button>`; $('#tcOcr', P).onclick = () => openTask('ocr'); return; }
+        const ov = $('#tcOff', P).value.trim(); st.link = await tocDetect(d, pages, keepOff && ov !== '' ? +ov : null);
+      } catch (e) { console.error(e); toast('Could not read the contents page: ' + (e.message || e)); } finally { unbusy(); }
+      draw();
+    };
+    $('#tcDet', P).onclick = () => detect(false); if ($('#tcRe', P)) $('#tcRe', P).onclick = () => detect(true);
+    if (!L) return;
+    $$('[data-u]', P).forEach(c => c.onchange = () => { const r = L.rows[+c.dataset.u]; r.use = c.checked; if (r.use && r.page == null) r.page = d.cur; tocLevels(L.rows.filter(x => x.use)); draw(); });
+    $$('[data-p]', P).forEach(c => c.onchange = () => { const r = L.rows[+c.dataset.p]; const v = Math.round(+c.value); r.page = v >= 1 && v <= d.info.length ? v - 1 : null; r.use = r.page != null; tocLevels(L.rows.filter(x => x.use)); draw(); });
+    $$('[data-go]', P).forEach(s => { const r = L.rows[+s.dataset.go]; if (labels && r.page != null) s.title = `${r.text} → page ${lab(r.page)}`; s.onclick = () => gotoPage(r.page != null ? r.page : r.src); });
+    $('#tcBox', P).onchange = e => { T.boxed = e.target.checked; saveT(); }; $('#tcBm', P).onchange = e => { T.bm = e.target.checked; saveT(); };
+    $('#tcDel', P).onclick = () => editBytes('Contents links removed', pdf => { let n = 0; for (let i = 0; i < pdf.getPageCount(); i++) n += tocDropLinks(pdf, i); if (!n) { toast('There are no links made by Quire in this file.'); return false; } });
+    $('#tcGo', P).onclick = async () => {
+      const use = L.rows.filter(r => r.use && r.page != null); if (!use.length) { toast('Tick at least one line'); return; }
+      const keep = L; const boxed = T.boxed, bm = T.bm;
+      if (await editBytes(`${use.length} contents links added`, pdf => {
+        for (const p of keep.pages) tocDropLinks(pdf, p);
+        use.forEach((r, k) => pdf.getPage(r.src).node.addAnnot(tocLinkAnnot(pdf, [r.x - 2, r.y - r.size * .3, r.x1 + 2, r.y + r.size * .95], r.page, k, boxed)));
+        if (bm) bmWrite(pdf, bmNest(use.map(r => ({ title: r.title, page: r.page, lvl: r.lvl || 0 }))));
+      })) { d.bm = null; d.tocS = { bytes: d.bytes, link: keep, build: st.build }; }
+    };
+  };
+  const drawBuild = async () => {
+    const B = st.build;
+    P.innerHTML = shell(`<p class="hint">Sets a new contents page and inserts it into the book, with dot leaders and entries that link to their pages.</p>
+      <div class="field"><label for="tcSrc">Start from</label><select id="tcSrc" class="inp">${[['bookmarks', 'The bookmarks'], ['headings', 'Headings in the text'], ['detected', 'The book\'s own contents page'], ['blank', 'Nothing (type it in)']].map(([v, l]) => `<option value="${v}"${T.src === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+      <button class="btn ${B ? '' : 'primary'}" id="tcFill">${B ? 'Start again from this' : 'Fill in the entries'}</button><p class="hint" id="tcMsg"></p>
+      ${B ? `<ul class="tc-rows tc-b">${B.rows.map((r, k) => `<li class="${k === B.sel ? 'sel' : ''}" data-r="${k}" style="padding-left:${4 + r.lvl * 14}px"><input class="inp tc-ti" data-ti="${k}" value="${esc(r.title)}" aria-label="Entry title"><input class="inp tc-p" type="number" min="1" max="${d.info.length}" data-p="${k}" value="${r.page != null ? r.page + 1 : ''}" placeholder="page" aria-label="Page of the file"></li>`).join('')}</ul>
+      <div class="row bm-tools" style="gap:2px">${[['add', 'plus', 'Add an entry for the current page'], ['up', 'up', 'Move up'], ['down', 'down', 'Move down'], ['out', 'outdent', 'Move out a level'], ['in', 'indent', 'Move in a level'], ['del', 'del', 'Delete']].map(([k, ic, t]) => `<button class="icon-btn sm" data-tb="${k}" data-tip="${t}" aria-label="${t}" ${k !== 'add' && B.sel == null ? 'disabled' : ''}>${svg(ic)}</button>`).join('')}</div>
+      <span class="muted small">${B.rows.length} entries. Click an entry to select it; page numbers are pages of the file.</span>
+      <div class="grid2"><div class="field"><label for="tcTitle">Heading</label><input id="tcTitle" class="inp" value="${esc(T.title)}"></div><div class="field"><label for="tcAt">Insert before page</label><input id="tcAt" class="inp" type="number" min="1" max="${d.info.length + 1}" value="${B.at + 1}"></div></div>
+      <label class="chk"><input type="checkbox" id="tcDots" ${T.dots ? 'checked' : ''}> Dot leaders</label>
+      <label class="chk"><input type="checkbox" id="tcBold" ${T.boldTop ? 'checked' : ''}> Top-level entries in bold</label>
+      <label class="chk"><input type="checkbox" id="tcLinks" ${T.links ? 'checked' : ''}> Link each entry to its page</label>
+      <label class="chk"><input type="checkbox" id="tcPr" ${T.printed ? 'checked' : ''} ${labels ? '' : 'disabled'}> Use printed page numbers (page labels)</label>
+      <label class="chk"><input type="checkbox" id="tcBmk" ${T.bookmark ? 'checked' : ''}> Add a "${esc(T.title)}" bookmark</label>
+      <div class="row"><button class="btn primary" id="tcIns">Insert contents page</button></div>` : ''}`);
+    bindClose(P); bindMode();
+    $('#tcSrc', P).onchange = e => { T.src = e.target.value; saveT(); };
+    $('#tcFill', P).onclick = async () => {
+      let rows = []; const msg = $('#tcMsg', P);
+      try {
+        if (T.src === 'bookmarks') { const flat = (t, lvl) => t.flatMap(n => [{ title: n.title, page: n.page, lvl: Math.min(lvl, 3) }, ...flat(n.kids, lvl + 1)]); rows = flat(d.bm && d.bm.dirty ? d.bm.tree : await bmRead(d), 0).filter(r => r.page != null); if (!rows.length) { msg.textContent = 'This file has no bookmarks. Start from headings instead, or make bookmarks first.'; return; } }
+        else if (T.src === 'headings') { busy('Looking for headings…'); const r = await bmFromHeadings(d, { levels: 3, ratio: 1.15, onProgress: (i, n) => $('#busyMsg').textContent = `Reading page ${i + 1} of ${n}…` }); rows = r.items.map(i => ({ title: i.title, page: i.page, lvl: i.lvl })); if (!rows.length) { msg.textContent = r.body ? 'No headings found.' : 'This file has no text. Run OCR first.'; return; } }
+        else if (T.src === 'detected') { busy('Reading the contents page…'); const L = st.link || await (async () => { const pages = await bmFindTocPages(d); return pages.length ? tocDetect(d, pages, null) : null; })(); if (!L) { msg.textContent = 'No contents page found. Use "Link existing" to point at it first.'; return; } st.link = L; rows = L.rows.filter(r => r.use).map(r => ({ title: r.title, page: r.page, lvl: r.lvl || 0 })); }
+        else rows = [{ title: 'Chapter 1', page: d.cur, lvl: 0 }];
+      } finally { unbusy(); }
+      const at = T.src === 'detected' && st.link ? Math.max(...st.link.pages) + 1 : Math.min(d.info.length, 1);
+      st.build = { rows, sel: null, at }; draw();
+    };
+    if (!B) return;
+    $$('[data-r]', P).forEach(li => li.onclick = e => { if (e.target.matches('input')) { B.sel = +li.dataset.r; $$('[data-r]', P).forEach(x => x.classList.toggle('sel', x === li)); $$('[data-tb]', P).forEach(b => b.disabled = false); return; } B.sel = +li.dataset.r; draw(); });
+    $$('[data-ti]', P).forEach(i => i.oninput = () => { B.rows[+i.dataset.ti].title = i.value; });
+    $$('#tcRows [data-p], .tc-b [data-p]', P).forEach(i => i.onchange = () => { const v = Math.round(+i.value); B.rows[+i.dataset.p].page = v >= 1 && v <= d.info.length ? v - 1 : null; });
+    $$('[data-tb]', P).forEach(b => b.onclick = () => {
+      const k = b.dataset.tb, s = B.sel, R = B.rows;
+      if (k === 'add') { const at = s == null ? R.length : s + 1; R.splice(at, 0, { title: `Page ${lab(d.cur)}`, page: d.cur, lvl: s == null ? 0 : R[s].lvl }); B.sel = at; }
+      else if (s == null) return;
+      else if (k === 'up' && s > 0) { [R[s - 1], R[s]] = [R[s], R[s - 1]]; B.sel = s - 1; }
+      else if (k === 'down' && s < R.length - 1) { [R[s + 1], R[s]] = [R[s], R[s + 1]]; B.sel = s + 1; }
+      else if (k === 'in') R[s].lvl = Math.min(3, R[s].lvl + 1);
+      else if (k === 'out') R[s].lvl = Math.max(0, R[s].lvl - 1);
+      else if (k === 'del') { R.splice(s, 1); B.sel = R.length ? Math.min(s, R.length - 1) : null; }
+      draw(); const f = B.sel != null && $(`[data-ti="${B.sel}"]`, P); if (f && k === 'add') { f.focus(); f.select(); }
+    });
+    const opts = () => { T.title = $('#tcTitle', P).value.trim() || 'Contents'; T.dots = $('#tcDots', P).checked; T.boldTop = $('#tcBold', P).checked; T.links = $('#tcLinks', P).checked; T.printed = $('#tcPr', P).checked; T.bookmark = $('#tcBmk', P).checked; B.at = Math.max(0, Math.min(d.info.length, (+$('#tcAt', P).value || 1) - 1)); saveT(); };
+    $$('#tcTitle,#tcAt,#tcDots,#tcBold,#tcLinks,#tcPr,#tcBmk', P).forEach(n => n.onchange = opts);
+    $('#tcIns', P).onclick = async () => {
+      opts(); const rows = B.rows.filter(r => r.title.trim() && r.page != null); if (!rows.length) { toast('Every entry needs a title and a page'); return; }
+      const o = { ...T, printed: T.printed && !!labels, at: B.at }; let res;
+      if (await editBytes('Contents page inserted', async pdf => { res = await tocInsert(pdf, d, rows, o); })) { d.bm = null; d.tocS = null; gotoPage(res.at); toast(`Contents inserted as page${res.count > 1 ? 's' : ''} ${res.at + 1}${res.count > 1 ? '–' + (res.at + res.count) : ''}`); }
+    };
+  };
+  const draw = () => (T.mode === 'build' ? drawBuild() : drawLink());
+  draw();
+};
+(function () { const st = document.createElement('style'); st.textContent = `
+.tc-rows{list-style:none;margin:0 -6px;padding:0;display:flex;flex-direction:column;gap:1px;max-height:42vh;overflow:auto}
+.tc-rows li{display:grid;grid-template-columns:auto 1fr 58px;align-items:center;gap:6px;border-radius:7px;padding:2px 6px 2px 4px;font-size:12px}
+.tc-rows li.on{background:var(--accent-soft)}.tc-rows li:not(.on) .tc-t{color:var(--muted)}
+.tc-b li{grid-template-columns:1fr 58px}.tc-b li.sel{background:var(--accent-soft)}
+.tc-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}.tc-t:hover{text-decoration:underline}
+.tc-rows .inp{padding:4px 6px;font-size:12px}`; document.head.append(st); })();
+
 /* ================= signature ================= */
 async function signatureDialog() {
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';

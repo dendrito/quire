@@ -109,3 +109,11 @@ Code: the "index & library" block just above "signature". New ribbon tab **Index
   - Index search: word*, "phrase", -exclude.
   - Back-of-book index: terms (`Term = variant; variant`, `Main > sub`), Suggest terms (capitalised names/phrases on 2+ pages and ≤40% of pages), preview, then index pages appended in two columns with letter headings, page ranges, page-label numbers, linked numbers, an "Index" bookmark and an "Index N" page label range. Sub-terms count only on pages that also mention the main term.
 - Tested in Chromium on a generated 11-page book: TOC → 4 nested bookmarks with offset 3, labels i–iii then 1–8, XMP read back by pdf.js and by `lxReadXmp`, index search, index pages with 4 link annotations. Not tested against a real Calibre import or a running Estante.
+
+### Contents page (done, 4 Nov 2026)
+
+Index → **Contents** (`TASKS.toc`, block "contents pages" after the book index code).
+
+- **Link existing**: finds the printed contents page (or takes page numbers), lists every line on it, matches "Title …… 41" lines to file pages (page labels first, else the offset learned by finding entry titles in the body; "Re-match pages" uses a typed offset), and lets the user tick lines and correct any target page by hand. **Add links** puts a Link annotation over each ticked line (optional thin blue box) and can replace the bookmarks with the entries. Pages with no text get a Run OCR button. Links are named `quire-toc-…`, so re-applying or **Remove Quire's links** replaces only Quire's.
+- **Build new**: entries from the bookmarks, headings, the detected contents page, or blank; edit titles and pages, add, reorder, indent/outdent, delete. **Insert contents page** (`tocInsert`) sets title, entries, wrapped long titles, dot leaders and right-aligned numbers, links every line, inserts the pages before a chosen page, shifts page numbers or keeps printed labels (adds a "Contents" label range and continues the old numbering after it) and can add a bookmark.
+- Tested in Chromium on the generated book (text, not OCR): 4 entries matched with offset 3, links pointed at pages 4/5/7/9, a 5-entry contents page inserted before page 4 with shifted numbers and 6 links. Not yet tried on a real OCR'd scan.
