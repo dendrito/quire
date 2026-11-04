@@ -8948,14 +8948,21 @@ function cvFamily(n, fam) {
 }
 // ---- lines, blocks (XY-cut) and paragraphs ----
 function cvLines(runs) {
+  // OCR text sits in an invisible font, and each word is sized by its own box (so "a" looks smaller than "Lisboa"): it gets a real font and the line's size
+  runs = runs.map(r => r.font && r.font.name === 'GlyphLessFont' ? { ...r, ocr: true, font: { ...r.font, family: 'Times New Roman' } } : r);
   const rs = runs.slice().sort((p, q) => q.y - p.y || p.x - q.x); const lines = [];
   for (const r of rs) {
-    let ln = null; for (let k = lines.length - 1; k >= 0 && k >= lines.length - 6; k--) { const L = lines[k]; if (Math.abs(L.y - r.y) <= Math.max(1.5, Math.min(L.size, r.size) * .35)) { ln = L; break; } }
+    let ln = null; for (let k = lines.length - 1; k >= 0 && k >= lines.length - 6; k--) { const L = lines[k]; const sup = (a, b, ta) => a.size < b.size * .9 && a.y - b.y > 0 && a.y - b.y < b.size * .6 && ta.trim().length <= 3; // a raised small run (footnote mark) belongs to the line below it
+      if (Math.abs(L.y - r.y) <= Math.max(1.5, Math.min(L.size, r.size) * .35) || sup(r, L, r.text) || (L.runs.every(q => q.text.trim().length <= 3) && sup(L, r, 'x'))) { ln = L; if (r.size > L.size) L.y = r.y; break; } }
     if (!ln) { ln = { y: r.y, size: r.size, runs: [] }; lines.push(ln); } ln.runs.push(r); ln.size = Math.max(ln.size, r.size);
   }
+  // body size of an OCR page: word boxes run from x-height to ascender+descender, so the tall end of the range is the font size
+  const oz = runs.filter(r => r.ocr && r.text.trim().length >= 3).map(r => r.size).sort((a, b) => a - b), oq = f => oz[Math.min(oz.length - 1, Math.floor(oz.length * f))];
+  const pageSz = !oz.length ? 0 : (oq(.9) - oq(.25)) / oq(.5) < .15 ? oq(.5) : Math.round(oq(.9) / .92 * 2) / 2;
   const out = [];
   for (const L of lines) {
     L.runs.sort((p, q) => p.x - q.x);
+    if (L.runs.some(r => r.ocr)) { const big = L.runs.filter(r => r.text.trim().length >= 3); let sz = median((big.length ? big : L.runs).map(r => r.size)); if (Math.max(...L.runs.map(r => r.size)) < pageSz * 1.4) sz = pageSz; /* one body size per page, as the eye reads it */ L.size = sz; L.runs = L.runs.map(r => r.ocr ? { ...r, size: sz, y: L.y } : r); }
     // split a line where there is a wide gap (columns, table cells)
     let seg = null; const segs = [];
     for (const r of L.runs) { if (r.sp && !seg) continue; const gap = seg ? r.x - (seg.x1) : 0; if (!seg || gap > Math.max(L.size * 1.6, 9)) { seg = { x0: r.x, x1: r.x + r.w, y: L.y, size: L.size, runs: [r] }; segs.push(seg); } else { seg.runs.push(r); seg.x1 = Math.max(seg.x1, r.x + r.w); } }
@@ -9008,7 +9015,7 @@ function cvFindTables(segs, body) {
   return out;
 }
 function cvColumns(xs, tol) { const s = xs.slice().sort((a, b) => a - b); const cl = []; for (const x of s) { const c = cl[cl.length - 1]; if (c && x - c.max <= tol) { c.max = x; c.n++; } else cl.push({ min: x, max: x, n: 1 }); } return cl.filter(c => c.n >= 2 || cl.length <= 3).map(c => c.min); }
-function cvParas(block, body) {
+function cvParas(block, body, page) {
   const segs = block.slice().sort((p, q) => q.y - p.y || p.x0 - q.x0); const out = []; let cur_ = null;
   const left = Math.min(...segs.map(s => s.x0)), right = Math.max(...segs.map(s => s.x1));
   const lineGap = median(segs.slice(1).map((s, k) => segs[k].y - s.y).filter(g => g > 0)) || body * 1.2;
@@ -9021,12 +9028,24 @@ function cvParas(block, body) {
   for (const p of out) {
     p.runs = []; p.segs.forEach((s, k) => {
       const next = p.segs[k + 1]; const hy = next && /[A-Za-zÀ-ÿ][-‐]$/.test(s.text) && /^[a-zà-ÿ]/.test(next.text);
-      s.runs.forEach((r, j) => { let t = r.text; if (hy && j === s.runs.length - 1) t = t.replace(/[-‐]\s*$/, ''); p.runs.push({ ...r, text: t, join: j === 0 && k > 0 ? (p.segs[k - 1]._hy ? '' : ' ') : (j > 0 && cvGap(s.runs[j - 1], r) > s.size * .18 ? ' ' : '') }); });
+      s.runs.forEach((r, j) => { let t = r.text; if (r.size < s.size * .9 && r.y > s.y + s.size * .2 && /^[\d*†‡a-z]{1,3}$/.test(t.trim())) r = { ...r, sup: true, size: s.size }; if (hy && j === s.runs.length - 1) t = t.replace(/[-‐]\s*$/, ''); p.runs.push({ ...r, text: t, join: j === 0 && k > 0 ? (p.segs[k - 1]._hy ? '' : ' ') : (j > 0 && cvGap(s.runs[j - 1], r) > s.size * .18 ? ' ' : '') }); });
       s._hy = hy;
     });
     p.text = p.runs.map(r => r.join + r.text).join('').replace(/\s+/g, ' ').trim();
     p.rtl = (p.text.match(new RegExp(CV_RTL.source, 'g')) || []).length > p.text.length * .3;
-    p.center = Math.abs((p.segs[0].x0 + p.segs[0].x1) / 2 - (left + right) / 2) < body && p.segs.every(s => s.x0 > left + body * 2);
+    const col = page && right - left < (page.right - page.left) * .7 && (left > page.left + body * 6 || right < page.right - body * 6); /* a column: indents count from the column, not the page */
+    const mid = s => (s.x0 + s.x1) / 2, PL = page && !col ? page.left : left, PR = page && !col ? page.right : right;
+    p.center = (Math.abs(mid(p.segs[0]) - (left + right) / 2) < body && p.segs.every(s => s.x0 > left + body * 2)) || (p.segs.length <= 3 && p.segs.every(s => Math.abs(mid(s) - (PL + PR) / 2) < body * 1.2 && s.x0 > PL + body * 3));
+    // layout as on the page, as ABBYY's "editable copy" keeps it: alignment, indents, space before, line spacing
+    const n = p.segs.length, tol = Math.max(2, body * .6), L0 = n > 1 ? Math.min(...p.segs.slice(1).map(s => s.x0)) : p.segs[0].x0;
+    p.indent = Math.max(0, L0 - PL); p.first = n > 1 ? p.segs[0].x0 - L0 : 0;
+    if (p.center) p.align = 'center';
+    else if (n > 2 && p.segs.slice(0, -1).every(s => Math.abs(s.x1 - right) < tol)) p.align = 'both';
+    else if (p.segs.every(s => Math.abs(s.x1 - PR) < tol || Math.abs(s.x1 - right) < tol && n > 1) && p.segs.some(s => s.x0 > PL + (PR - PL) * .3)) p.align = 'right';
+    else p.align = 'left';
+    p.rIndent = page && p.align !== 'left' || n > 1 ? Math.max(0, PR - Math.max(...p.segs.map(s => s.x1))) : 0; if (p.rIndent < body * 1.5) p.rIndent = 0;
+    if (p.align === 'center' || p.align === 'right') p.indent = p.first = p.rIndent = 0;
+    const gaps = p.segs.slice(1).map((s, k) => p.segs[k].y - s.y); p.lineGap = gaps.length ? median(gaps) : 0;
   }
   return out;
 }
@@ -9054,19 +9073,32 @@ async function cvDocx(d, o, onStep) {
   const { doc, pages } = await cvRead(d, onStep, o.pages); await loadScript(JSZIP_URL); const z = new JSZip(); const media = [];
   try {
     const running = o.dropRunning && pages.length > 1 ? cvRunning(pages) : () => false;
+    // page margins from where the text really sits (ignoring running heads), so lines break where they did on the page
+    const M = (() => { const all = pages.flatMap(P => P.segs.filter(s => !(P.edge.includes(s) && running(s))).map(s => ({ s, P }))); if (!all.length) return { left: null };
+      const q = (a, f) => { const v = a.map(f).sort((x, y) => x - y); return v[Math.floor(v.length * f.q)] ?? v[0]; };
+      const lf = x => x.s.x0 - x.P.view[0]; lf.q = .02; const rt = x => x.P.view[2] - x.s.x1; rt.q = .02; const tp = x => x.P.view[3] - x.s.top; tp.q = .02; const bt = x => x.s.bot - x.P.view[1]; bt.q = .02;
+      const cl = v => Math.max(18, Math.min(110, v)); return { left: pages[0].view[0] + cl(q(all, lf)), l: cl(q(all, lf)), r: cl(q(all, rt)), t: cl(q(all, tp)), b: cl(q(all, bt)) }; })();
+    // repeating heads and page numbers become the Word header and footer instead of being lost
+    const heads = { top: null, bot: null, num: null };
+    if (o.dropRunning && pages.length > 1) for (const P of pages) for (const sg of P.edge) { if (!running(sg)) continue; const top = sg.top > (P.view[1] + P.view[3]) / 2; const t = sg.text.trim();
+      if (/^[\divxlcIVXLC\s\-–—.|]{1,12}$/.test(t)) { heads.num = heads.num || (top ? 'top' : 'bot'); continue; } const k = top ? 'top' : 'bot'; if (!heads[k]) heads[k] = t.replace(/\b\d{1,4}\b/g, '').replace(/\s+/g, ' ').trim(); }
     const body = median(pages.flatMap(P => P.segs.flatMap(s => s.runs.map(r => r.size)))) || 11;
     const sizes = [...new Set(pages.flatMap(P => P.segs.map(s => Math.round(s.size))).filter(s => s >= body * 1.2))].sort((a, b) => b - a);
     const hLevel = sz => { const k = sizes.indexOf(Math.round(sz)); return sz >= body * 1.2 && k >= 0 ? Math.min(3, k + 1) : 0; };
     let xml = ''; const X = s => xe(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
-    let pend = null; const flush = () => { if (!pend) return; const { p, h } = pend; pend = null; const allB = p.runs.every(r => r.font.bold || !r.text.trim());
+    let pend = null, lastY = null, colsOpen = 0, lastCol = 0; const flush = () => { if (!pend) return; const { p, h } = pend; pend = null; const allB = p.runs.every(r => r.font.bold || !r.text.trim());
           const sty = h ? `<w:pStyle w:val="Heading${h}"/>` : '';
-          const ppr = `<w:pPr>${sty}${p.rtl ? '<w:bidi/>' : ''}${p.center ? '<w:jc w:val="center"/>' : ''}${p.list ? '<w:ind w:left="360" w:hanging="360"/>' : ''}</w:pPr>`;
+          const tw = v => Math.round(v * 20), lay = o.layout !== false;
+          const ind = p.list ? `<w:ind w:left="${Math.max(360, lay ? tw(p.indent) : 0)}" w:hanging="360"/>` : lay && (p.indent > 2 || Math.abs(p.first) > 2 || p.rIndent) ? `<w:ind w:left="${tw(p.indent)}"${p.rIndent ? ` w:right="${tw(p.rIndent)}"` : ''}${p.first > 0 ? ` w:firstLine="${tw(p.first)}"` : p.first < 0 ? ` w:hanging="${tw(-p.first)}"` : ''}/>` : '';
+          const sp = lay ? `<w:spacing w:before="${Math.min(tw(p.before || 0), 1440)}" w:after="0"${p.lineGap && p.size ? ` w:line="${Math.max(200, Math.min(720, Math.round(p.lineGap / p.size * 240 / 1.17)))}" w:lineRule="auto"` : ''}/>` : '';
+          const jc = p.align === 'center' || p.center ? 'center' : lay && p.align !== 'left' ? p.align : '';
+          const ppr = `<w:pPr>${sty}${p.rtl ? '<w:bidi/>' : ''}${sp}${ind}${jc ? `<w:jc w:val="${p.rtl && jc === 'right' ? 'left' : jc}"/>` : ''}</w:pPr>`;
           // merge neighbouring runs with the same formatting
-          const merged = []; for (const r of p.runs) { const t = r.join + r.text; const L = merged[merged.length - 1]; if (L && L.font.family === r.font.family && L.font.bold === r.font.bold && L.font.italic === r.font.italic && Math.abs(L.size - r.size) < .6) L.text += t; else merged.push({ ...r, text: merged.length ? t : t.trimStart() }); }
+          const merged = []; for (const r of p.runs) { const t = r.join + r.text; const L = merged[merged.length - 1]; if (L && L.font.family === r.font.family && L.font.bold === r.font.bold && L.font.italic === r.font.italic && Math.abs(L.size - r.size) < .6 && !L.sup === !r.sup) L.text += t; else merged.push({ ...r, text: merged.length ? t : t.trimStart() }); }
           xml += `<w:p>${ppr}${merged.map(r => h ? run({ ...r, font: { ...r.font, bold: allB ? false : r.font.bold } }, r.size) : run(r, o.keepSizes ? r.size : (Math.abs(r.size - body) < 1.2 ? body : r.size))).join('')}</w:p>`;
     };
 
-    const run = (r, sz) => `<w:r><w:rPr><w:rFonts w:ascii="${X(r.font.family)}" w:hAnsi="${X(r.font.family)}" w:cs="${X(r.font.family)}"/>${r.font.bold ? '<w:b/>' : ''}${r.font.italic ? '<w:i/>' : ''}<w:sz w:val="${Math.round(sz * 2)}"/><w:szCs w:val="${Math.round(sz * 2)}"/></w:rPr><w:t xml:space="preserve">${X(r.text)}</w:t></w:r>`;
+    const run = (r, sz) => `<w:r><w:rPr><w:rFonts w:ascii="${X(r.font.family)}" w:hAnsi="${X(r.font.family)}" w:cs="${X(r.font.family)}"/>${r.font.bold ? '<w:b/>' : ''}${r.font.italic ? '<w:i/>' : ''}<w:sz w:val="${Math.round(sz * 2)}"/><w:szCs w:val="${Math.round(sz * 2)}"/>${r.sup ? '<w:vertAlign w:val="superscript"/>' : ''}</w:rPr><w:t xml:space="preserve">${X(r.text)}</w:t></w:r>`;
     for (const [n, P] of pages.entries()) {
       onStep(`Writing page ${n + 1} of ${pages.length}…`);
       const segs = P.segs.filter(s => !(P.edge.includes(s) && running(s)));
@@ -9083,7 +9115,16 @@ async function cvDocx(d, o, onStep) {
       // keep blocks in XY-cut order, then slot pictures in by height
       const ord = items.filter(x => x.B); for (const pi of items.filter(x => x.pic || x.extra)) { let k = ord.findIndex(x => x.y < pi.y); ord.splice(k < 0 ? ord.length : k, 0, pi); }
       let canvas = null;
+      // text set in two or three columns becomes a Word section with that many columns, as ABBYY does
+      const bb = B => [Math.min(...B.map(s => s.x0)), Math.max(...B.map(s => s.x1)), Math.min(...B.map(s => s.bot)), Math.max(...B.map(s => s.top))];
+      const textW = M.l ? pw - M.l - M.r : pw * .8, colBlocks = blocks.filter(B => { const [a, b, lo, hi] = bb(B); return b - a < textW * .6 && B.length >= 3 && blocks.some(C => C !== B && C.length >= 3 && (([c, d, lo2, hi2]) => (d < a || c > b) && Math.min(hi, hi2) - Math.max(lo, lo2) > body * 3)(bb(C))); });
+      const nCols = Math.min(3, Math.max(2, colBlocks.map(B => bb(B)[0]).sort((a, b) => a - b).filter((x, k, a) => !k || x - a[k - 1] > textW * .25).length));
+      const closeCols = () => { if (colsOpen) { flush(); xml += `<w:p><w:pPr>@@SECTN${colsOpen}@@</w:pPr></w:p>`; colsOpen = 0; } };
       for (const it of ord) {
+        if (it.B && o.layout !== false) { const isCol = colBlocks.includes(it.B);
+          if (isCol && !colsOpen) { flush(); if (xml) xml += '<w:p><w:pPr>@@SECT1@@</w:pPr></w:p>'; colsOpen = nCols; lastCol = bb(it.B)[0]; }
+          else if (isCol && bb(it.B)[0] > lastCol + textW * .25) { flush(); xml += '<w:p><w:r><w:br w:type="column"/></w:r></w:p>'; lastCol = bb(it.B)[0]; pend = null; }
+          else if (!isCol) closeCols(); }
         if (it.pic) {
           if (!canvas) { const vp = P.pg.getViewport({ scale: 2 }); canvas = el('canvas'); canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height); const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height); await P.pg.render({ canvasContext: g, viewport: vp }).promise; canvas.vp = vp; }
           const [x0, y0, x1, y1] = it.pic; const a = canvas.vp.convertToViewportPoint(x0, y1), b = canvas.vp.convertToViewportPoint(x1, y0);
@@ -9097,10 +9138,13 @@ async function cvDocx(d, o, onStep) {
         if (it.T) {
           const T = it.T; const total = T.cols.length;
           flush(); xml += `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(b => `<w:${b} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join('')}</w:tblBorders></w:tblPr><w:tblGrid>${T.cols.map(() => `<w:gridCol w:w="${Math.round(9000 / total)}"/>`).join('')}</w:tblGrid>`;
-          T.grid.forEach((g, ri) => { xml += `<w:tr>${g.map(c => `<w:tc><w:tcPr><w:tcW w:w="${Math.round(5000 / total)}" w:type="pct"/></w:tcPr><w:p><w:r><w:rPr>${ri === 0 && T.rows[0].cells.every(s => s.runs.every(r => r.font.bold)) ? '<w:b/>' : ''}<w:sz w:val="${Math.round(Math.min(body, 11) * 2)}"/></w:rPr><w:t xml:space="preserve">${X(c)}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`; });
+          const tx1 = Math.max(...T.rows.flatMap(r => r.cells.map(c => c.x1))), cw = T.cols.map((x, j) => Math.max(1, (T.cols[j + 1] ?? tx1) - x)), cs = cw.reduce((a, b) => a + b, 0); /* columns as wide as on the page */
+          T.grid.forEach((g, ri) => { xml += `<w:tr>${g.map((c, ci) => `<w:tc><w:tcPr><w:tcW w:w="${Math.round(5000 * cw[ci] / cs)}" w:type="pct"/></w:tcPr><w:p><w:r><w:rPr>${ri === 0 && T.rows[0].cells.every(s => s.runs.every(r => r.font.bold)) ? '<w:b/>' : ''}<w:sz w:val="${Math.round(Math.min(body, 11) * 2)}"/></w:rPr><w:t xml:space="preserve">${X(c)}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`; });
           xml += '</w:tbl><w:p/>'; continue;
         }
-        for (const p of cvParas(it.B, body)) {
+        for (const p of cvParas(it.B, body, M.l ? { left: P.view[0] + M.l, right: P.view[2] - M.r } : null)) {
+          // space above, measured from the paragraph before it on the same page
+          p.before = lastY && lastY.n === n ? Math.max(0, lastY.y - p.segs[0].y - Math.max(p.lineGap || 0, lastY.gap || 0, p.size * 1.15)) : 0; lastY = { n, y: p.segs[p.segs.length - 1].y, gap: p.lineGap };
           if (!p.text) continue; const h = o.headings ? hLevel(p.size) : 0;
           // a paragraph that runs on into the next column or page is joined back together
           if (pend && !h && !pend.h && !p.list && !/[.!?:;"”»)\]]\s*$/.test(pend.p.text) && /^[a-zà-ÿ]/.test(p.text) && Math.abs(p.size - pend.p.size) < 1) {
@@ -9110,21 +9154,27 @@ async function cvDocx(d, o, onStep) {
           flush(); pend = { p, h };
         }
       }
+      closeCols();
       if (o.pageBreaks && n < pages.length - 1) flush(), xml += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
       P.pg.cleanup();
     }
     flush(); const P0 = pages[0]; const pw = P0 ? P0.view[2] - P0.view[0] : 595, ph = P0 ? P0.view[3] - P0.view[1] : 842; const tw = v => Math.round(v * 20);
-    const sect = `<w:sectPr><w:pgSz w:w="${tw(pw)}" w:h="${tw(ph)}"${pw > ph ? ' w:orient="landscape"' : ''}/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>`;
-    const fam = (() => { const c = new Map(); for (const P of pages) for (const r of P.runs) c.set(r.font.family, (c.get(r.font.family) || 0) + r.text.length); return [...c].sort((a, b) => b[1] - a[1])[0]?.[0] || 'Calibri'; })();
+    const sect = `<w:sectPr><w:pgSz w:w="${tw(pw)}" w:h="${tw(ph)}"${pw > ph ? ' w:orient="landscape"' : ''}/>${M.l && o.layout !== false ? `<w:pgMar w:top="${tw(M.t)}" w:right="${tw(M.r)}" w:bottom="${tw(M.b)}" w:left="${tw(M.l)}" w:header="${tw(Math.min(M.t * .5, 36))}" w:footer="${tw(Math.min(M.b * .5, 36))}" w:gutter="0"/>` : '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/>'}</w:sectPr>`;
+    const hf = (tag, text, num) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${tag} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="center"/></w:pPr>${text ? `<w:r><w:t xml:space="preserve">${X(text)}${num ? '   ' : ''}</w:t></w:r>` : ''}${num ? '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>' : ''}</w:p></w:${tag}>`;
+    const hasH = !!(heads.top || heads.num === 'top'), hasF = !!(heads.bot || heads.num === 'bot');
+    const sect2 = sect.replace('<w:sectPr>', `<w:sectPr>${hasH ? '<w:headerReference w:type="default" r:id="rHead"/>' : ''}${hasF ? '<w:footerReference w:type="default" r:id="rFoot"/>' : ''}`).replace('<w:pgSz', '<w:type w:val="continuous"/><w:pgSz');
+    xml = xml.replace(/@@SECT1@@/g, sect2).replace(/@@SECTN(\d)@@/g, (_, k) => sect2.replace('</w:sectPr>', `<w:cols w:num="${k}" w:space="${tw(body * 2)}"/></w:sectPr>`));
+    if (hasH) z.file('word/header1.xml', hf('hdr', heads.top, heads.num === 'top')); if (hasF) z.file('word/footer1.xml', hf('ftr', heads.bot, heads.num === 'bot'));
+    const fam = (() => { const c = new Map(); for (const P of pages) for (const r of P.runs) if (r.font.name !== 'GlyphLessFont') c.set(r.font.family, (c.get(r.font.family) || 0) + r.text.length); return [...c].sort((a, b) => b[1] - a[1])[0]?.[0] || (pages.some(P => P.runs.length) ? 'Times New Roman' : 'Calibri'); })();
     const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
-    z.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`);
+    z.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/>${hasH ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : ''}${hasF ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ''}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`);
     z.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`);
     z.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xe(baseName(d))}</dc:title><dc:creator>${xe(S.author && S.author !== 'Me' ? S.author : '')}</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString().replace(/\.\d+Z/, 'Z')}</dcterms:created></cp:coreProperties>`);
-    z.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${media.map(([n], k) => `<Relationship Id="rImg${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${n}"/>`).join('')}</Relationships>`);
+    z.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${hasH ? '<Relationship Id="rHead" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>' : ''}${hasF ? '<Relationship Id="rFoot" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>' : ''}${media.map(([n], k) => `<Relationship Id="rImg${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${n}"/>`).join('')}</Relationships>`);
     for (const [n, b] of media) z.file('word/media/' + n, b);
     const hs = (k, sz) => `<w:style w:type="paragraph" w:styleId="Heading${k}"><w:name w:val="heading ${k}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${360 - k * 60}" w:after="120"/><w:outlineLvl w:val="${k - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr></w:style>`;
     z.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${xe(fam)}" w:hAnsi="${xe(fam)}" w:cs="${xe(fam)}"/><w:sz w:val="${Math.round(body * 2)}"/><w:szCs w:val="${Math.round(body * 2)}"/><w:lang w:val="${xe((navigator.language || 'en-US'))}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>${hs(1, Math.round(Math.max(body * 1.8, 28)))}${hs(2, Math.round(Math.max(body * 1.5, 24)))}${hs(3, Math.round(Math.max(body * 1.25, 22)))}<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`);
-    z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${xml || '<w:p/>'}${sect}</w:body></w:document>`);
+    z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${xml || '<w:p/>'}${sect2}</w:body></w:document>`);
     const noText = pages.filter(P => !P.runs.length).map(P => P.i + 1);
     return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), noText, pictures: media.length };
   } finally { doc.destroy(); }
@@ -9172,13 +9222,13 @@ async function cvDialog(kind) {
   const ck = (id, label, on) => `<label class="chk"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:10px';
   body.innerHTML = `<div class="field"><label for="cvPg">Pages</label><input id="cvPg" class="inp" placeholder="All ${d.info.length} pages, or e.g. 1-5, 8"></div>` + (word
-    ? ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvRun', 'Leave out running headers and page numbers', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
+    ? ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvLay', 'Keep the page layout (margins, indents, spacing, alignment, columns)', last.layout ?? true) + ck('cvRun', 'Move running headers and page numbers into the Word header and footer', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
     : ck('cvOne', 'Everything on one sheet (otherwise one sheet per page)', last.oneSheet ?? false) + ck('cvNum', 'Store numbers as numbers (1.234,56 and 1,234.56 both understood)', last.numbers ?? true))
     + `<p class="hint" style="margin:0">${word ? 'Makes an editable document that flows, like ABBYY and Acrobat do: paragraphs are joined across lines and columns, so it will not look exactly like the PDF.' : 'Columns are found from where text lines up on each page.'} Scanned pages need OCR first.</p>`;
   const r = await modal({ title: word ? 'Convert to Word' : 'Convert to Excel', body, actions: [{ label: 'Cancel', value: null }, { label: 'Convert', primary: true, value: 'ok' }] });
   if (!r) return;
   const pages = cvRange($('#cvPg', body).value, d.info.length); if (!pages.length) { toast('No pages in that range'); return; }
-  const o = word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
+  const o = word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, layout: $('#cvLay', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
   pref.set('cv', { ...last, ...o }); o.pages = pages;
   busy('Converting…');
   try {
