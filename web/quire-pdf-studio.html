@@ -215,6 +215,35 @@ fieldset.ff-radio legend{padding:0;margin-bottom:4px;width:100%}
 .ver-list li{display:flex;flex-direction:column;gap:4px;padding:6px 0;border-bottom:1px solid var(--line,#eee)}
 .ba-files{max-height:180px;overflow:auto;font-size:12px}.ba-err{color:#c03a3a}.ba-ok{color:#1f8a4c}.ba-opt{padding:2px 0 6px 24px;display:flex;flex-direction:column;gap:4px}
 .qr-val{font-size:12px;word-break:break-all;padding:2px 0 4px}
+/* snapshot, loupe, split view, audit */
+.viewer.snapping .page,.viewer.snapping .page canvas{cursor:crosshair!important}
+.snapbox{position:absolute;border:1.5px dashed var(--accent);background:var(--accent-soft);pointer-events:none;z-index:4}
+.snapdlg img{max-width:100%;max-height:46vh;display:block;margin:0 auto 8px;border:1px solid var(--line);background:#fff}
+.snapdlg textarea{width:100%;box-sizing:border-box;margin-top:6px;font:12px var(--f-mono)}
+.loupe{position:fixed;z-index:40;border-radius:14px;display:flex;flex-direction:column;overflow:hidden;resize:both;min-width:180px;min-height:140px;box-shadow:var(--shadow)}
+.loupe .lp-h{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;cursor:move;font:600 12px var(--f-ui);user-select:none}
+.loupe .lp-h span{flex:1}.loupe select{width:auto}
+.loupe canvas{flex:1;width:100%;min-height:0;background:#fff}
+.loupe .lp-tip{position:absolute;inset:40px 0 auto;text-align:center}
+.stage.split-v .viewer{right:50%}.stage.split-h .viewer{bottom:50%}
+.splitpane{position:absolute;overflow:auto;background:var(--desk);scrollbar-width:thin;z-index:3}
+.stage.split-v .splitpane{top:0;bottom:0;right:0;width:50%;border-left:1px solid var(--line)}
+.stage.split-h .splitpane{left:0;right:0;bottom:0;height:50%;border-top:1px solid var(--line)}
+.sp-bar{position:sticky;top:8px;margin:8px auto 0;width:max-content;max-width:calc(100% - 16px);display:flex;align-items:center;gap:2px;padding:4px 6px;border-radius:12px;z-index:2;font:500 12px var(--f-mono);color:var(--muted);flex-wrap:wrap}
+.sp-bar .sp-pg{width:34px;text-align:right;border:0;background:transparent;font:inherit;color:var(--fg)}
+.sp-pages{display:flex;flex-direction:column;align-items:center;gap:20px;padding:20px 20px 110px;width:max-content;min-width:100%;box-sizing:border-box}
+.sp-page{background:var(--paper);box-shadow:var(--page-shadow);flex:none}
+.stage.split-v .dock{left:25%;max-width:calc(50% - 24px)}.stage.split-v .pill{left:25%}
+.audit{display:flex;flex-direction:column;gap:12px;min-width:0}
+.au-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--hover)}
+.au-bar span{display:block;height:100%}
+.au-t{width:100%;border-collapse:collapse;font-size:12.5px}
+.au-t td,.au-t th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;font-variant-numeric:tabular-nums}
+.au-t td+td,.au-t th+th{text-align:right;white-space:nowrap}
+.au-t th{font-weight:600;color:var(--muted)}
+.au-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:7px;vertical-align:-1px}
+.au-tips{margin:0;padding:10px 12px 10px 28px;background:var(--accent-soft);border-radius:10px;font-size:12.5px;line-height:1.5}
+.au-tips li+li{margin-top:4px}
 /* command search */
 #qlShade{position:fixed;inset:0;z-index:40;background:rgba(10,12,18,.25)}
 #ql{position:fixed;z-index:41;top:12vh;left:50%;transform:translateX(-50%);width:min(520px,calc(100% - 32px));border-radius:14px;padding:8px;box-sizing:border-box}
@@ -4789,6 +4818,413 @@ TASKS.qr = function (P, d) {
     redrawAll(); toast(QRS.all ? `QR code added to ${plural(d.info.length, 'page')}` : 'QR code added. Drag it to move it.');
   };
 };
+
+/* ================= snapshot, loupe, split view, space audit, placeholders, initials, email ================= */
+Object.assign(IC, {
+  snap: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/>',
+  loupe: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20M8 10.5h5M10.5 8v5"/>',
+  splitv: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M12 4v16M6 8h3M6 11h3M15 8h3M15 11h3"/>',
+  audit: '<path d="M4 20V10M9 20V4M14 20v-7M19 20v-11"/>',
+  email: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m4 7 8 6 8-6"/>',
+  initials: '<path d="M5 18V7M5 7l3 0M5 18h3M11 18l3-11 3 11M12 14h4"/><path d="M3 21h18"/>',
+  fsig: '<rect x="3" y="7" width="18" height="11" rx="1.5" stroke-dasharray="2.5 2"/><path d="M6 15c1.5-3 3-3 3.5-1s1.5 2 2.5 0 2-2 3 0M6 4l2 2M4 6l2-2"/>'
+});
+Object.assign(RLBL, { snap: 'Snapshot', loupe: 'Loupe', splitv: 'Split', audit: 'Space', email: 'Email', initials: 'Initials', fsig: 'Sign here' });
+Object.assign(ACTS, {
+  snap: ['Snapshot: copy an area as a picture', 'snap', () => snapToggle()],
+  loupe: ['Loupe: magnify under the pointer', 'loupe', () => loupeToggle()],
+  splitv: ['Split view: see two places at once', 'splitv', () => splitToggle()],
+  audit: ['Audit space usage', 'audit', () => auditDialog()],
+  email: ['Send by email', 'email', () => emailDialog()],
+  initials: ['Initials on every page', 'initials', () => initialsDialog()]
+});
+TOOLS.push({ id: 'fsig', label: 'Signature placeholder', key: '', hint: 'Drag where someone should sign or initial. It becomes an empty signature field that Acrobat, PDF-XChange and Quire’s Digital ID signing all recognise.' });
+TOOL.fsig = TOOLS[TOOLS.length - 1]; FFIELD.add('fsig'); BOX.add('fsig'); PANEL_TOOLS.add('fsig'); CLICKPLACE.fsig = [160, 40];
+RIB.view.items.push('|', '@snap', '@loupe', '@splitv');
+RIB.forms.items = RIB.forms.items.flatMap(x => x === 'fbutton' ? ['fbutton', 'fsig'] : [x]);
+RIB.comment.items = RIB.comment.items.flatMap(x => x === 'sign' ? ['sign', '@initials'] : [x]);
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@compress' ? ['@compress', '@audit'] : x === '@txt' ? ['@email', '@txt'] : [x]);
+
+/* ---- snapshot: drag an area (or click a page) to copy it as a picture, with its text ---- */
+const SNAP = { on: false, dpi: pref.get('snapDpi', 200) };
+function snapToggle(on = !SNAP.on) {
+  SNAP.on = on; $('#viewer').classList.toggle('snapping', on);
+  $$('[data-act="snap"]').forEach(b => b.classList.toggle('on', on));
+  if (on) toast('Drag over the page to copy an area. Click once for the whole page. Esc to stop.', 4200);
+}
+{ const _st = setTool; setTool = async function (id, quiet) { if (SNAP.on) snapToggle(false); return _st(id, quiet); }; }
+{ const _rr = renderRibbon; renderRibbon = function () { _rr(); $$('[data-act="snap"]').forEach(b => b.classList.toggle('on', SNAP.on)); $$('[data-act="loupe"]').forEach(b => b.classList.toggle('on', !!LP.box)); $$('[data-act="splitv"]').forEach(b => b.classList.toggle('on', !!SPL.on)); }; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && SNAP.on && !$('#dlg').open) { snapToggle(false); e.stopPropagation(); } }, true);
+$('#viewer').addEventListener('pointerdown', e => {
+  if (!SNAP.on || e.button !== 0) return; const wrap = e.target.closest('#pages .page'); if (!wrap) return;
+  e.preventDefault(); e.stopPropagation(); const i = +wrap.dataset.i; const R = wrap.getBoundingClientRect();
+  const s = [e.clientX - R.left, e.clientY - R.top]; const box = el('div', 'snapbox'); wrap.append(box); let c = s;
+  const place = () => { const x = Math.min(s[0], c[0]), y = Math.min(s[1], c[1]); Object.assign(box.style, { left: x + 'px', top: y + 'px', width: Math.abs(c[0] - s[0]) + 'px', height: Math.abs(c[1] - s[1]) + 'px' }); };
+  place();
+  const mv = ev => { c = [Math.max(0, Math.min(R.width, ev.clientX - R.left)), Math.max(0, Math.min(R.height, ev.clientY - R.top))]; place(); };
+  const up = () => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); box.remove();
+    let r = { x: Math.min(s[0], c[0]) / R.width, y: Math.min(s[1], c[1]) / R.height, w: Math.abs(c[0] - s[0]) / R.width, h: Math.abs(c[1] - s[1]) / R.height };
+    if (r.w * R.width < 6 || r.h * R.height < 6) r = { x: 0, y: 0, w: 1, h: 1 };
+    snapTake(i, r);
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up);
+}, true);
+// Renders page i as shown in the viewer (with view rotation and unsaved markup) at a scale
+async function viewRender(d, i, scale) {
+  const pg = d.info[i].page; const vp = pg.getViewport({ scale, rotation: vrot(d, i) });
+  const c = el('canvas'); c.width = Math.max(1, Math.round(vp.width)); c.height = Math.max(1, Math.round(vp.height)); const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: g, viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise;
+  for (const a of d.annots[i] || []) if (a.src) await ensureImg(a.src);
+  for (const a of d.annots[i] || []) if (a.type !== 'redact') drawAnnot(g, vp, a, scale, { final: true });
+  return { c, vp };
+}
+// Text inside a fraction-of-page rectangle, in reading order
+async function textInRect(d, i, r) {
+  const pg = d.info[i].page; const vp = pg.getViewport({ scale: 1, rotation: vrot(d, i) }); const tc = await pg.getTextContent(); const out = [];
+  for (const it of tc.items) {
+    if (!it.str || !it.str.trim()) continue; const t = it.transform; const p = vp.convertToViewportPoint(t[4] + (it.width || 0) / 2, t[5] + (it.height || Math.hypot(t[2], t[3])) / 3);
+    const fx = p[0] / vp.width, fy = p[1] / vp.height; if (fx >= r.x && fx <= r.x + r.w && fy >= r.y && fy <= r.y + r.h) out.push({ s: it.str, x: p[0], y: p[1], h: Math.hypot(t[2], t[3]) || 10 });
+  }
+  out.sort((a, b) => Math.abs(a.y - b.y) < Math.min(a.h, b.h) * .5 ? a.x - b.x : a.y - b.y);
+  let txt = '', ly = null, lh = 0; for (const o of out) { if (ly !== null) txt += Math.abs(o.y - ly) < Math.min(o.h, lh) * .5 ? (/\s$/.test(txt) || /^\s/.test(o.s) ? '' : ' ') : '\n'; txt += o.s; ly = o.y; lh = o.h; }
+  return txt.trim();
+}
+async function copyPng(blob) { try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); return true; } catch { return false; } }
+async function snapTake(i, r) {
+  const d = cur(); if (!d) return; busy('Taking snapshot…');
+  let blob, text = '', w = 0, h = 0;
+  try {
+    const { c } = await viewRender(d, i, SNAP.dpi / 72);
+    const o = el('canvas'); w = o.width = Math.max(1, Math.round(r.w * c.width)); h = o.height = Math.max(1, Math.round(r.h * c.height));
+    o.getContext('2d').drawImage(c, r.x * c.width, r.y * c.height, w, h, 0, 0, w, h);
+    blob = await new Promise(res => o.toBlob(res, 'image/png')); text = await textInRect(d, i, r);
+  } catch (e) { unbusy(); toast('Could not take the snapshot: ' + e.message); return; }
+  unbusy(); const copied = await copyPng(blob); const url = URL.createObjectURL(blob);
+  const body = el('div', 'snapdlg');
+  body.innerHTML = `<img src="${url}" alt="Snapshot preview"><p class="muted small">${copied ? 'Copied to the clipboard as a picture.' : 'Your browser did not allow copying a picture here. Save it instead, or copy it from the preview.'} ${w} × ${h} pixels at <select id="snDpi" class="inp sm">${[96, 150, 200, 300, 600].map(v => `<option${v === SNAP.dpi ? ' selected' : ''}>${v}</option>`).join('')}</select> dpi.</p>${text ? `<details><summary>Text in this area (${text.split(/\s+/).length} words)</summary><textarea class="inp" rows="5" readonly>${esc(text)}</textarea></details>` : ''}`;
+  $('#snDpi', body).onchange = e => { SNAP.dpi = +e.target.value; pref.set('snapDpi', SNAP.dpi); $('#dlg').close(); snapTake(i, r); };
+  const acts = [{ label: 'Close', value: null }];
+  if (text) acts.unshift({ label: 'Copy text', value: 'text' });
+  acts.push({ label: 'Save PNG', primary: true, value: 'save' });
+  const a = await modal({ title: r.w === 1 && r.h === 1 ? `Snapshot of page ${i + 1}` : `Snapshot from page ${i + 1}`, body, actions: acts });
+  if (a === 'save') await saveFile(`${baseName(d)}-p${i + 1}-snapshot.png`, blob);
+  if (a === 'text') { try { await navigator.clipboard.writeText(text); toast('Text copied'); } catch { toast('Could not copy the text'); } }
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* ---- loupe: a floating magnifier that follows the pointer ---- */
+const LP = { box: null, mag: pref.get('loupeMag', 3), last: null, hi: null, job: null };
+function loupeToggle() {
+  if (LP.box) { LP.box.remove(); LP.box = null; LP.hi = null; renderRibbon(); return; }
+  const b = el('div', 'loupe glass'); b.innerHTML = `<div class="lp-h"><span>Loupe</span><select class="inp sm" aria-label="Magnification">${[2, 3, 4, 6, 8].map(v => `<option value="${v}"${v === LP.mag ? ' selected' : ''}>${v}×</option>`).join('')}</select><button class="icon-btn sm" data-lp="copy" aria-label="Copy what the loupe shows" title="Copy picture">${svg('snap')}</button><button class="icon-btn sm" data-lp="x" aria-label="Close loupe">✕</button></div><canvas></canvas><p class="muted small lp-tip">Move the pointer over a page.</p>`;
+  const sz = pref.get('loupeBox', { x: innerWidth - 340, y: 120, w: 300, h: 220 });
+  Object.assign(b.style, { left: Math.max(8, Math.min(innerWidth - 200, sz.x)) + 'px', top: Math.max(8, Math.min(innerHeight - 150, sz.y)) + 'px', width: sz.w + 'px', height: sz.h + 'px' });
+  document.body.append(b); LP.box = b;
+  $('select', b).onchange = e => { LP.mag = +e.target.value; pref.set('loupeMag', LP.mag); LP.hi = null; loupeDraw(); };
+  $('[data-lp="x"]', b).onclick = loupeToggle;
+  $('[data-lp="copy"]', b).onclick = async () => { const c = $('canvas', b); const bl = await new Promise(r => c.toBlob(r, 'image/png')); if (await copyPng(bl)) toast('Loupe view copied'); else { await saveFile('loupe.png', bl); } };
+  const h = $('.lp-h', b); h.onpointerdown = e => { if (e.target.closest('select,button')) return; h.setPointerCapture(e.pointerId); const o = [e.clientX - b.offsetLeft, e.clientY - b.offsetTop]; h.onpointermove = ev => { b.style.left = ev.clientX - o[0] + 'px'; b.style.top = ev.clientY - o[1] + 'px'; }; h.onpointerup = () => { h.onpointermove = null; loupeSave(); }; };
+  new ResizeObserver(() => { loupeSave(); loupeDraw(); }).observe(b);
+  renderRibbon();
+}
+function loupeSave() { const b = LP.box; if (b) pref.set('loupeBox', { x: b.offsetLeft, y: b.offsetTop, w: b.offsetWidth, h: b.offsetHeight }); }
+$('#viewer').addEventListener('pointermove', e => {
+  if (!LP.box) return; const wrap = e.target.closest('#pages .page'); if (!wrap) return; const R = wrap.getBoundingClientRect();
+  LP.last = { i: +wrap.dataset.i, fx: (e.clientX - R.left) / R.width, fy: (e.clientY - R.top) / R.height }; loupeDraw();
+}, { passive: true });
+function loupeDraw() {
+  const b = LP.box, L = LP.last, d = cur(); if (!b || !L || !d || !d.views || !d.views[L.i]) return;
+  const cv = $('canvas', b); const tip = $('.lp-tip', b); if (tip) tip.remove();
+  const W = cv.clientWidth, H = cv.clientHeight; const k = dpr(); if (cv.width !== Math.round(W * k) || cv.height !== Math.round(H * k)) { cv.width = Math.round(W * k); cv.height = Math.round(H * k); }
+  const v = d.views[L.i]; const key = [d.id || d.name, L.i, d.zoom, LP.mag, vrot(d, L.i), d.bytes && d.bytes.length].join('|');
+  let src = v.c, sw = v.c.width, sh = v.c.height;
+  if (LP.hi && LP.hi.key === key) { src = LP.hi.c; sw = src.width; sh = src.height; }
+  else if (!LP.job || LP.job.key !== key) {
+    const pw = v.vp.width, ph = v.vp.height; const sc = Math.min(d.zoom * LP.mag * k, 9000 / Math.max(pw / d.zoom, ph / d.zoom));
+    const job = LP.job = { key }; clearTimeout(LP.t);
+    LP.t = setTimeout(async () => { try { const { c } = await viewRender(d, L.i, sc); if (LP.job === job) { LP.hi = { key, c }; loupeDraw(); } } catch {} }, 120);
+  }
+  // pixels of the source per screen pixel at this magnification
+  const per = sw / (v.vp.width * LP.mag);
+  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.imageSmoothingQuality = 'high';
+  const cw = W * per, ch = H * per; g.drawImage(src, L.fx * sw - cw / 2, L.fy * sh - ch / 2, cw, ch, 0, 0, cv.width, cv.height);
+  g.strokeStyle = 'rgba(43,92,255,.6)'; g.lineWidth = k; g.beginPath(); g.moveTo(cv.width / 2 - 8 * k, cv.height / 2); g.lineTo(cv.width / 2 + 8 * k, cv.height / 2); g.moveTo(cv.width / 2, cv.height / 2 - 8 * k); g.lineTo(cv.width / 2, cv.height / 2 + 8 * k); g.stroke();
+}
+
+/* ---- split view: a second, independent view of the same document ---- */
+const SPL = { on: false, dir: pref.get('splitDir', 'v'), zoom: null, io: null, pane: null, doc: null };
+function splitToggle() {
+  SPL.on = !SPL.on; const st = $('.stage');
+  st.classList.remove('split-v', 'split-h'); if (SPL.pane) { SPL.pane.remove(); SPL.pane = null; }
+  if (SPL.on) { st.classList.add('split-' + SPL.dir); splitBuild(); }
+  const d = cur(); if (d && d.autoFit) setZoom(fitZoom(d, 'width'), true); else if (d) layout();
+  renderRibbon();
+}
+function splitBuild() {
+  const d = cur(); if (SPL.io) SPL.io.disconnect(); if (SPL.pane) SPL.pane.remove();
+  const p = SPL.pane = el('div', 'splitpane'); $('.stage').append(p);
+  if (!d) { p.innerHTML = '<p class="muted" style="padding:90px 20px">Open a PDF to use split view.</p>'; return; }
+  if (SPL.doc !== d) { SPL.doc = d; SPL.zoom = null; }
+  p.innerHTML = `<div class="sp-bar glass"><span class="pgn"><input class="sp-pg" inputmode="numeric" aria-label="Page in split view" value="1"><span>/ ${d.info.length}</span></span><button class="icon-btn sm" data-sp="out" aria-label="Zoom out">−</button><button class="txt-btn" data-sp="fit">Width</button><button class="icon-btn sm" data-sp="in" aria-label="Zoom in">+</button><button class="txt-btn" data-sp="dir">${SPL.dir === 'v' ? 'Stack' : 'Side by side'}</button><button class="txt-btn" data-sp="here" title="Show the main view's page here">Match</button><button class="icon-btn sm" data-sp="x" aria-label="Close split view">✕</button></div><div class="sp-pages"></div>`;
+  const host = $('.sp-pages', p); const fit = () => Math.max(.15, (p.clientWidth - 40) / Math.max(...d.info.map(x => (vrot(d, d.info.indexOf(x)) % 180 ? x.h : x.w))));
+  if (!SPL.zoom) SPL.zoom = fit();
+  const z = SPL.zoom; const views = d.info.map((inf, i) => {
+    const vp = inf.page.getViewport({ scale: z, rotation: vrot(d, i) }); const w = el('div', 'sp-page'); w.dataset.i = i; w.style.width = vp.width + 'px'; w.style.height = vp.height + 'px';
+    w.title = 'Double-click to show this page in the main view'; w.ondblclick = () => gotoPage(i, true); host.append(w); return w;
+  });
+  SPL.io = new IntersectionObserver(ents => { for (const en of ents) if (en.isIntersecting && !en.target.dataset.done) { en.target.dataset.done = 1; splitRender(d, +en.target.dataset.i, en.target, z); } }, { root: p, rootMargin: '600px 0px' });
+  views.forEach(w => SPL.io.observe(w));
+  const pg = $('.sp-pg', p); const track = () => { let k = 0; const line = p.scrollTop + p.clientHeight * .35; views.forEach((w, i) => { if (w.offsetTop <= line) k = i; }); if (document.activeElement !== pg) pg.value = k + 1; };
+  p.onscroll = track;
+  pg.onchange = () => { const i = Math.max(0, Math.min(d.info.length - 1, (+pg.value || 1) - 1)); p.scrollTop = views[i].offsetTop - 60; };
+  const rez = f => { const top = p.scrollTop / Math.max(1, p.scrollHeight); SPL.zoom = Math.max(.1, Math.min(6, f)); splitBuild(); SPL.pane.scrollTop = top * SPL.pane.scrollHeight; };
+  $$('[data-sp]', p).forEach(b => b.onclick = () => {
+    const a = b.dataset.sp;
+    if (a === 'in') rez(SPL.zoom * 1.25); if (a === 'out') rez(SPL.zoom / 1.25); if (a === 'fit') rez(fit());
+    if (a === 'x') splitToggle();
+    if (a === 'here') p.scrollTop = views[d.cur].offsetTop - 60;
+    if (a === 'dir') { SPL.dir = SPL.dir === 'v' ? 'h' : 'v'; pref.set('splitDir', SPL.dir); SPL.on = false; SPL.zoom = null; splitToggle(); }
+  });
+}
+async function splitRender(d, i, w, z) {
+  try { const { c } = await viewRender(d, i, z * dpr()); c.style.width = '100%'; c.style.height = '100%'; if (w.isConnected) { w.innerHTML = ''; w.append(c); } } catch {}
+}
+{ const _bv = buildViewer; buildViewer = function () { const r = _bv.apply(this, arguments); if (SPL.on) { if (SPL.doc !== cur()) SPL.zoom = null; const top = SPL.pane ? SPL.pane.scrollTop : 0; splitBuild(); SPL.pane.scrollTop = top; } return r; }; }
+
+/* ---- audit space usage: what the bytes in the file are spent on ---- */
+const AUD_CATS = [['Images', '#2b5cff'], ['Fonts', '#e08a00'], ['Page content', '#1f9d6b'], ['Annotations and forms', '#b04fd1'], ['Attachments', '#d93a2b'], ['Bookmarks', '#0aa3b8'], ['Tags and structure', '#7a7f2a'], ['Metadata', '#8a6d3b'], ['Thumbnails', '#c25b8a'], ['Colour profiles', '#5f6fa8'], ['Pages and document structure', '#9aa0aa'], ['Other objects', '#c7c9ce'], ['Cross-reference and file overhead', '#e1e2e5']];
+async function auditSpace(bytes) {
+  const L = PDFLib, N = L.PDFName.of; const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false }); const ctx = pdf.context;
+  if (ctx.trailerInfo.Encrypt) { try { pdf.getPages(); } catch { throw new Error('the file is password protected. Unlock it first (Protect, Unlock).'); } }
+  const key = r => r.objectNumber + ' ' + r.generationNumber; const cat = new Map(); const sizeOf = new Map(); const objs = new Map();
+  // object streams: members are counted at their share of the compressed stream
+  const member = new Map();
+  for (const [r, o] of ctx.enumerateIndirectObjects()) {
+    objs.set(key(r), [r, o]);
+    if (o instanceof L.PDFRawStream && String(o.dict.get(N('Type'))) === '/ObjStm') {
+      try { const raw = L.decodePDFRawStream(o).decode(); const first = o.dict.lookup(N('First')).asNumber(); const head = new TextDecoder('latin1').decode(raw.subarray(0, first)).trim().split(/\s+/).map(Number); const nums = []; for (let k = 0; k < head.length; k += 2) nums.push([head[k], head[k + 1]]); const f = (o.contents.length + 60) / Math.max(1, raw.length - first); nums.forEach(([n, off], k) => member.set(n + ' 0', ((k + 1 < nums.length ? nums[k + 1][1] : raw.length - first) - off) * f)); } catch {}
+    }
+  }
+  for (const [k, [r, o]] of objs) {
+    const isStm = o instanceof L.PDFRawStream || o instanceof L.PDFStream; const t = isStm ? String(o.dict.get(N('Type')) || '') : '';
+    if (t === '/ObjStm' || t === '/XRef') { sizeOf.set(k, 0); continue; }
+    let s; if (member.has(k)) s = member.get(k);
+    else if (o instanceof L.PDFRawStream) s = o.contents.length + o.dict.sizeInBytes() + 40;
+    else { try { s = o.sizeInBytes() + 22; } catch { s = 30; } }
+    sizeOf.set(k, s);
+  }
+  const SKIP = new Set(['Parent', 'P', 'Pg', 'Prev', 'Next', 'First', 'Last', 'Dest', 'A', 'Popup', 'IRT', 'StructParent', 'StructParents', 'Obj']);
+  const walk = (v, c, coll, skip = SKIP) => {
+    if (v instanceof L.PDFRef) { const k = key(v); if (cat.has(k)) { if (coll && cat.get(k) === c) coll.add(k); return; } if (!objs.has(k)) return; cat.set(k, c); if (coll) coll.add(k); v = objs.get(k)[1]; }
+    const dict = v instanceof L.PDFDict ? v : (v && v.dict instanceof L.PDFDict ? v.dict : null);
+    if (dict) { for (const [n, x] of dict.entries()) if (!skip.has(n.decodeText())) walk(x, c, coll, skip); }
+    else if (v instanceof L.PDFArray) for (const x of v.asArray()) walk(x, c, coll, skip);
+  };
+  const look = v => v instanceof L.PDFRef ? (objs.get(key(v)) || [])[1] : v; const dictOf = o => o instanceof L.PDFDict ? o : o && o.dict;
+  const images = new Map(), fonts = new Map(); const pages = pdf.getPages();
+  const resWalk = (res, pi, depth = 0) => {
+    res = look(res); if (!(res instanceof L.PDFDict) || depth > 8) return;
+    const F = look(res.get(N('Font'))); if (F instanceof L.PDFDict) for (const [n, fr] of F.entries()) {
+      const fd = look(fr); const id = fr instanceof L.PDFRef ? key(fr) : 'd' + pi + n.decodeText(); if (!fonts.has(id) && fd instanceof L.PDFDict) {
+        const name = String(fd.get(N('BaseFont')) || n.toString()).slice(1); const D = look(fd.get(N('DescendantFonts'))); const fdd = D instanceof L.PDFArray ? look(D.get(0)) : fd;
+        const desc = fdd instanceof L.PDFDict ? look(fdd.get(N('FontDescriptor'))) : null; const emb = desc instanceof L.PDFDict && ['FontFile', 'FontFile2', 'FontFile3'].some(x => desc.get(N(x)));
+        fonts.set(id, { name, type: String(fd.get(N('Subtype')) || '').slice(1), emb, subset: /^[A-Z]{6}\+/.test(name), pages: new Set(), keys: new Set() });
+        walk(fr, 'Fonts', fonts.get(id).keys);
+      }
+      if (fonts.has(id)) fonts.get(id).pages.add(pi);
+    }
+    const X = look(res.get(N('XObject'))); if (X instanceof L.PDFDict) for (const [, xr] of X.entries()) {
+      const xo = look(xr); const xd = dictOf(xo); if (!xd) continue; const st = String(xd.get(N('Subtype')) || '');
+      if (st === '/Image') { const id = xr instanceof L.PDFRef ? key(xr) : null; if (id && !images.has(id)) { const keys = new Set(); walk(xr, 'Images', keys); const fl = xd.lookup(N('Filter')); images.set(id, { w: +(xd.lookup(N('Width')) || 0).toString(), h: +(xd.lookup(N('Height')) || 0).toString(), filter: (fl instanceof L.PDFArray ? fl.asArray().map(String) : [String(fl || '')]).map(s => s.slice(1)).filter(Boolean).join(', ') || 'none', pages: new Set(), keys }); } if (id) images.get(id).pages.add(pi); }
+      else if (st === '/Form') { resWalk(xd.get(N('Resources')), pi, depth + 1); walk(xr, 'Page content'); }
+    }
+    for (const nm of ['Pattern', 'Shading', 'ExtGState']) { const P = look(res.get(N(nm))); if (P instanceof L.PDFDict) for (const [, pr] of P.entries()) { const pd = dictOf(look(pr)); if (pd) resWalk(pd.get(N('Resources')), pi, depth + 1); walk(pr, 'Page content'); } }
+    const CS = look(res.get(N('ColorSpace'))); if (CS instanceof L.PDFDict) walk(CS, 'Colour profiles');
+  };
+  pages.forEach((p, pi) => {
+    resWalk(p.node.Resources ? p.node.Resources() : p.node.get(N('Resources')), pi);
+    const A = look(p.node.get(N('Annots'))); if (A instanceof L.PDFArray) for (const ar of A.asArray()) { const ad = look(ar); if (ad instanceof L.PDFDict) { const AP = look(ad.get(N('AP'))); if (AP instanceof L.PDFDict) for (const [, s] of AP.entries()) { const sv = look(s); const sd = dictOf(sv); if (sd && !(sv instanceof L.PDFDict && !sv.get(N('Type')) && !sv.get(N('BBox')))) resWalk(sd.get(N('Resources')), pi); else if (sv instanceof L.PDFDict) for (const [, s2] of sv.entries()) { const d2 = dictOf(look(s2)); if (d2) resWalk(d2.get(N('Resources')), pi); } } const FS = ad.get(N('FS')); if (FS) walk(FS, 'Attachments'); } walk(ar, 'Annotations and forms'); }
+    walk(p.node.get(N('Contents')), 'Page content'); const T = p.node.get(N('Thumb')); if (T) walk(T, 'Thumbnails');
+  });
+  const C = pdf.catalog; const Nm = look(C.get(N('Names')));
+  if (Nm instanceof L.PDFDict && Nm.get(N('EmbeddedFiles'))) walk(Nm.get(N('EmbeddedFiles')), 'Attachments', null, new Set(['Parent']));
+  const AF = look(C.get(N('AcroForm'))); if (AF instanceof L.PDFDict) { resWalk(AF.get(N('DR')), -1); walk(C.get(N('AcroForm')), 'Annotations and forms', null, new Set(['Parent', 'P'])); }
+  if (C.get(N('Outlines'))) walk(C.get(N('Outlines')), 'Bookmarks', null, new Set(['Parent', 'Dest', 'A', 'SE']));
+  if (C.get(N('StructTreeRoot'))) walk(C.get(N('StructTreeRoot')), 'Tags and structure', null, new Set(['P', 'Pg', 'Obj', 'Parent']));
+  if (C.get(N('Metadata'))) walk(C.get(N('Metadata')), 'Metadata'); if (ctx.trailerInfo.Info) walk(ctx.trailerInfo.Info, 'Metadata');
+  const OI = C.get(N('OutputIntents')); if (OI) walk(OI, 'Colour profiles');
+  pages.forEach(p => { const k = key(p.ref); if (!cat.has(k)) cat.set(k, 'Pages and document structure'); });
+  for (const [k, [, o]] of objs) if (!cat.has(k)) { const d = dictOf(o); const t = d ? String(d.get(N('Type')) || '') : ''; cat.set(k, /^\/(Pages|Catalog|Page)$/.test(t) ? 'Pages and document structure' : t === '/Metadata' ? 'Metadata' : t === '/EmbeddedFile' ? 'Attachments' : 'Other objects'); }
+  const tot = new Map(AUD_CATS.map(([c]) => [c, 0])); for (const [k, c] of cat) tot.set(c, tot.get(c) + (sizeOf.get(k) || 0));
+  let counted = 0; for (const [, v] of tot) counted += v;
+  const over = Math.max(0, bytes.length - counted); if (counted > bytes.length) { const f = bytes.length / counted; for (const [c, v] of tot) tot.set(c, v * f); }
+  tot.set('Cross-reference and file overhead', over);
+  const sum = keys => [...keys].reduce((a, k) => a + (sizeOf.get(k) || 0), 0) * Math.min(1, bytes.length / Math.max(1, counted));
+  return {
+    size: bytes.length, objects: objs.size, pages: pages.length, cats: AUD_CATS.map(([c, col]) => ({ c, col, b: tot.get(c) })).filter(x => x.b > 0),
+    images: [...images.values()].map(x => ({ ...x, b: sum(x.keys), pages: [...x.pages].sort((a, b) => a - b) })).sort((a, b) => b.b - a.b),
+    fonts: [...fonts.values()].map(x => ({ ...x, b: sum(x.keys), pages: [...x.pages].filter(p => p >= 0) })).sort((a, b) => b.b - a.b)
+  };
+}
+const kb = b => b >= 1048576 ? (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + ' MB' : b >= 1024 ? Math.round(b / 1024) + ' KB' : Math.round(b) + ' B';
+const pgList = ps => { if (!ps.length) return '–'; const r = []; let a = ps[0], p = ps[0]; for (const x of ps.slice(1).concat([null])) { if (x === p + 1) { p = x; continue; } r.push(a === p ? a + 1 : `${a + 1}–${p + 1}`); a = p = x; } return r.slice(0, 6).join(', ') + (r.length > 6 ? '…' : ''); };
+async function auditDialog() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  busy('Measuring where the space goes…'); let A, edited = false;
+  try { let b = d.bytes; const pend = d.annots.some(x => x.length); if (pend) { b = await buildOutput(d); edited = true; } A = await auditSpace(b); } catch (e) { unbusy(); toast('Could not read this file: ' + e.message); return; }
+  unbusy();
+  const pct = b => (b / A.size * 100); const big = A.cats.slice().sort((a, b) => b.b - a.b);
+  const tips = []; const img = A.cats.find(x => x.c === 'Images'), fnt = A.cats.find(x => x.c === 'Fonts'), att = A.cats.find(x => x.c === 'Attachments'), th = A.cats.find(x => x.c === 'Thumbnails'), ov = A.cats.find(x => x.c === 'Cross-reference and file overhead');
+  if (img && pct(img.b) > 40) tips.push(`Pictures are ${Math.round(pct(img.b))}% of the file. <button class="linkbtn" data-au="compress">Compress</button> can shrink them a lot.`);
+  if (fnt && pct(fnt.b) > 25) { const full = A.fonts.filter(f => f.emb && !f.subset).length; tips.push(`Fonts are ${Math.round(pct(fnt.b))}% of the file${full ? `, and ${full} ${full === 1 ? 'is' : 'are'} embedded in full rather than just the letters used` : ''}.`); }
+  const unemb = A.fonts.filter(f => !f.emb && !/^(Type3)$/.test(f.type) && !/^(Helvetica|Times|Courier|Symbol|ZapfDingbats)/.test(f.name)); if (unemb.length) tips.push(`${unemb.length} font${unemb.length > 1 ? 's are' : ' is'} not embedded, so the file may look different on other computers: ${unemb.slice(0, 4).map(f => esc(f.name)).join(', ')}.`);
+  if (att && pct(att.b) > 10) tips.push(`Attached files take ${kb(att.b)}. <button class="linkbtn" data-au="sanitize">Sanitize</button> can remove them.`);
+  if (th) tips.push('The file keeps page thumbnails that most readers make on the fly. Compress removes them.');
+  if (ov && pct(ov.b) > 15 && A.size > 200000) tips.push('A large share is file overhead. Saving through Compress rewrites it more tightly.');
+  const body = el('div', 'audit');
+  body.innerHTML = `<p class="muted small" style="margin:0">${esc(d.name)}: ${kb(A.size)}, ${A.pages} page${A.pages === 1 ? '' : 's'}, ${A.objects.toLocaleString()} objects${edited ? '. Measured with your unsaved changes included' : ''}.</p>
+  <div class="au-bar">${big.map(x => `<span style="width:${Math.max(.4, pct(x.b))}%;background:${x.col}" title="${esc(x.c)}: ${kb(x.b)}"></span>`).join('')}</div>
+  <table class="au-t"><tbody>${big.map(x => `<tr><td><span class="au-dot" style="background:${x.col}"></span>${esc(x.c)}</td><td>${kb(x.b)}</td><td>${pct(x.b).toFixed(pct(x.b) < 1 ? 1 : 0)}%</td></tr>`).join('')}</tbody></table>
+  ${tips.length ? `<ul class="au-tips">${tips.map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
+  ${A.images.length ? `<details${img && pct(img.b) > 30 ? ' open' : ''}><summary>Largest pictures (${A.images.length})</summary><table class="au-t"><thead><tr><th>Size</th><th>Pixels</th><th>Kind</th><th>Pages</th></tr></thead><tbody>${A.images.slice(0, 12).map(x => `<tr><td>${kb(x.b)}</td><td>${x.w} × ${x.h}</td><td>${esc(x.filter)}</td><td>${x.pages.length ? `<button class="linkbtn" data-au-pg="${x.pages[0]}">${pgList(x.pages)}</button>` : '–'}</td></tr>`).join('')}</tbody></table></details>` : ''}
+  ${A.fonts.length ? `<details><summary>Fonts (${A.fonts.length})</summary><table class="au-t"><thead><tr><th>Font</th><th>Size</th><th>Embedded</th><th>Pages</th></tr></thead><tbody>${A.fonts.map(f => `<tr><td>${esc(f.name.replace(/^[A-Z]{6}\+/, ''))}<span class="muted small"> ${esc(f.type)}</span></td><td>${kb(f.b)}</td><td>${f.emb ? (f.subset ? 'Subset' : 'Full') : 'No'}</td><td>${pgList(f.pages)}</td></tr>`).join('')}</tbody></table></details>` : ''}`;
+  let go = null;
+  body.addEventListener('click', e => { const t = e.target.closest('[data-au],[data-au-pg]'); if (!t) return; go = t.dataset.au || ('pg' + t.dataset.auPg); $('#dlg').close(); $('#dlg').dispatchEvent(new Event('cancel')); });
+  const r = await modal({ title: 'Space usage', body, actions: [{ label: 'Save report (CSV)', value: 'csv' }, { label: 'Close', primary: true, value: null }] });
+  if (r === 'csv') { const q = s => `"${String(s).replace(/"/g, '""')}"`; const rows = [['Section', 'Item', 'Bytes', 'Percent', 'Details', 'Pages'].join(',')]; big.forEach(x => rows.push(['Category', q(x.c), Math.round(x.b), pct(x.b).toFixed(2), '', ''].join(','))); A.images.forEach(x => rows.push(['Picture', q(`${x.w}x${x.h}`), Math.round(x.b), pct(x.b).toFixed(2), q(x.filter), q(pgList(x.pages))].join(','))); A.fonts.forEach(f => rows.push(['Font', q(f.name), Math.round(f.b), pct(f.b).toFixed(2), q(f.type + (f.emb ? f.subset ? ' subset' : ' full' : ' not embedded')), q(pgList(f.pages))].join(','))); await saveFile(`${baseName(d)}-space.csv`, new Blob([rows.join('\n')], { type: 'text/csv' })); }
+  if (go === 'compress') openTask('compress'); else if (go === 'sanitize') sanitizeDialog(); else if (go && go.startsWith('pg')) gotoPage(+go.slice(2), true);
+}
+
+/* ---- signature and initials placeholders: empty signature fields ---- */
+{ const _ms = makeShape; makeShape = function (i, s, c) { if (S.tool !== 'fsig') return _ms(i, s, c); return Object.assign({ type: 'fsig' }, norm(toPdf(i, s), toPdf(i, c))); }; }
+{ const _af = addFormField; addFormField = async function (i, a) { if (S.tool !== 'fsig') return _af(i, a); return addSigPlaceholder(i, a); }; }
+async function addSigPlaceholder(i, a) {
+  const d = cur(); let names = [];
+  try { names = (await PDFDocument.load(d.bytes, LOAD)).getForm().getFields().map(f => f.getName()); } catch {}
+  const last = pref.get('phLast', { kind: 'sign', who: '' });
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+  body.innerHTML = `<div class="segs" role="tablist"><button type="button" data-k="sign"${last.kind === 'sign' ? ' class="on"' : ''}>Signature</button><button type="button" data-k="init"${last.kind === 'init' ? ' class="on"' : ''}>Initials</button></div>
+    <div class="field"><label for="phWho">Who signs here <span class="muted">(optional)</span></label><input id="phWho" class="inp" placeholder="Client, Witness, Maria…" value="${esc(last.who)}"></div>
+    <div class="field"><label for="phName">Field name</label><input id="phName" class="inp"></div>
+    <label class="chk"><input type="checkbox" id="phReq" checked> Required</label>
+    <p class="muted small" style="margin:0">Leaves an empty signature field with a “Sign here” label. Acrobat, PDF-XChange and Quire’s Digital ID offer it as the place to sign, and Initials on every page fills initials placeholders.</p>`;
+  let kind = last.kind; const nm = $('#phName', body);
+  const auto = () => { const base = kind === 'init' ? 'Initials' : 'Signature'; const who = $('#phWho', body).value.trim().replace(/[^\p{L}\p{N}]+/gu, ''); let n = 1, x; do { x = base + (who ? '_' + who : '') + (n > 1 || !who ? n : ''); n++; } while (names.includes(x)); nm.value = x; };
+  auto(); $('#phWho', body).oninput = auto;
+  $$('.segs button', body).forEach(b => b.onclick = () => { kind = b.dataset.k; $$('.segs button', body).forEach(x => x.classList.toggle('on', x === b)); auto(); });
+  const r = await modal({ title: 'Signature placeholder', body, actions: [{ label: 'Cancel', value: null }, { label: 'Add placeholder', primary: true, value: 'ok', validate: () => { const v = nm.value.trim(); if (!v || names.includes(v)) { toast(v ? 'A field already has that name' : 'Give the field a name'); return false; } return true; } }] });
+  if (!r) { drawOverlay(i); return; }
+  const who = $('#phWho', body).value.trim(); pref.set('phLast', { kind, who });
+  await editBytes(kind === 'init' ? 'Added initials placeholder' : 'Added signature placeholder', pdf => sigPlaceholder(pdf, i, a, { name: nm.value.trim(), kind, who, req: $('#phReq', body).checked }));
+}
+function sigPlaceholder(pdf, i, a, o) {
+  const L = PDFLib, N = L.PDFName.of, ctx = pdf.context; const page = pdf.getPage(i); const font = pdf.embedStandardFont(L.StandardFonts.Helvetica);
+  const w = a.x2 - a.x1, h = a.y2 - a.y1; const lab = (o.kind === 'init' ? 'Initial here' : 'Sign here') + (o.who ? ': ' + o.who : '');
+  let fs = Math.min(10, h * .32); while (fs > 4 && font.widthOfTextAtSize(lab, fs) > w - 8) fs -= .5;
+  const ops = `q 1 .97 .82 rg 0 0 ${w.toFixed(2)} ${h.toFixed(2)} re f .85 .6 .1 RG 0.8 w [3 2] 0 d .5 .5 ${(w - 1).toFixed(2)} ${(h - 1).toFixed(2)} re S Q q .55 .38 .05 RG 0.8 w 6 ${(h * .28).toFixed(2)} m ${(w - 6).toFixed(2)} ${(h * .28).toFixed(2)} l S Q BT /Helv ${fs.toFixed(1)} Tf .55 .38 .05 rg 5 ${(h - fs - 3).toFixed(2)} Td ${font.encodeText(lab).toString()} Tj ET`;
+  const ap = ctx.register(ctx.flateStream(ops, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, w, h], Resources: { Font: { Helv: font.ref } } }));
+  const fd = { Type: 'Annot', Subtype: 'Widget', FT: 'Sig', T: L.PDFHexString.fromText(o.name), TU: L.PDFHexString.fromText(lab), F: 4, Rect: [a.x1, a.y1, a.x2, a.y2], P: page.ref, AP: { N: ap }, MK: {} };
+  if (o.req) fd.Ff = 2;
+  const ref = ctx.register(ctx.obj(fd));
+  const A = page.node.lookup(N('Annots')); if (A instanceof L.PDFArray) A.push(ref); else page.node.set(N('Annots'), ctx.obj([ref]));
+  const form = pdf.getForm(); form.acroForm.addField(ref);
+  const af = pdf.catalog.lookup(N('AcroForm'), L.PDFDict); const sf = af.lookup(N('SigFlags')); af.set(N('SigFlags'), L.PDFNumber.of((sf ? sf.asNumber() : 0) | 1));
+}
+// Empty signature fields, split into signature and initials placeholders
+async function sigPlaceholders(d) {
+  const L = PDFLib, N = L.PDFName.of; const out = [];
+  try {
+    const pdf = await PDFDocument.load(d.bytes, LOAD); const pageOf = new Map(pdf.getPages().map((p, i) => [p.ref.toString(), i]));
+    for (const f of pdf.getForm().getFields()) {
+      if (!(f instanceof L.PDFSignature) || f.acroField.dict.get(N('V'))) continue; const tu = f.acroField.dict.lookup(N('TU')); const lab = tu ? tu.decodeText() : '';
+      const init = /initial/i.test(f.getName() + ' ' + lab);
+      for (const w of f.acroField.getWidgets()) { const P = w.dict.get(N('P')); let pi = P ? pageOf.get(P.toString()) : undefined; if (pi === undefined) pdf.getPages().forEach((p, k) => { const A = p.node.lookup(N('Annots')); if (A instanceof L.PDFArray && A.asArray().some(r => { const o = pdf.context.lookup(r); return o === w.dict; })) pi = k; }); const r = w.getRectangle(); if (pi !== undefined) out.push({ name: f.getName(), init, page: pi, rect: r }); }
+    }
+  } catch (e) { console.warn(e); }
+  return out;
+}
+
+/* ---- initials on every page, and filling placeholders with your signature or initials ---- */
+S.initials = pref.get('initials', null);
+async function initialsPad() {
+  const keep = { sig: S.sig, author: S.author };
+  setTimeout(() => { $('#dlgTitle').textContent = 'Your initials'; const n = $('#sigName'); if (n) { n.value = (keep.author || '').split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase()).join('.') + ((keep.author || '').trim() ? '.' : ''); $('label[for="sigName"]').textContent = 'Your initials'; } $$('#dlgActions .btn').forEach(b => { if (b.textContent === 'Use signature') b.textContent = 'Use initials'; }); }, 0);
+  const ok = await signatureDialog();
+  if (ok) { S.initials = S.sig; pref.set('initials', S.initials); }
+  S.sig = keep.sig; S.author = keep.author; pref.set('sig', S.sig); pref.set('author', S.author);
+  return ok;
+}
+async function initialsDialog() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  const ph = await sigPlaceholders(d); const nI = ph.filter(p => p.init).length, nS = ph.length - nI;
+  const st = Object.assign({ where: 'br', size: 48, margin: 28, scope: 'all', skipFirst: false }, pref.get('initOpts', {}));
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+  const prev = () => S.initials ? `<img src="${S.initials.src}" alt="Your initials">` : '<span class="muted">No initials yet</span>';
+  body.innerHTML = `<div class="row" style="align-items:center;gap:10px"><div class="sigprev" id="inPrev" style="flex:1;min-height:54px">${prev()}</div><button type="button" class="btn" id="inNew">${S.initials ? 'Change' : 'Draw or type'}</button></div>
+    <div class="field"><label for="inWhere">Where</label><select id="inWhere" class="inp">${[['br', 'Bottom right'], ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['tr', 'Top right'], ['tl', 'Top left']].map(([v, l]) => `<option value="${v}"${st.where === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="row" style="gap:10px"><div class="field" style="flex:1"><label for="inSize">Width (pt)</label><input id="inSize" class="inp" type="number" min="16" max="200" value="${st.size}"></div><div class="field" style="flex:1"><label for="inMargin">From the edge (pt)</label><input id="inMargin" class="inp" type="number" min="0" max="200" value="${st.margin}"></div></div>
+    <div class="field"><label for="inScope">Pages</label><select id="inScope" class="inp"><option value="all"${st.scope === 'all' ? ' selected' : ''}>Every page</option><option value="sel"${st.scope === 'sel' ? ' selected' : ''}>Selected pages (${(d.sel && d.sel.size) || 1})</option><option value="notlast"${st.scope === 'notlast' ? ' selected' : ''}>Every page except the last</option></select></div>
+    <label class="chk"><input type="checkbox" id="inSkip"${st.skipFirst ? ' checked' : ''}> Skip the first page</label>
+    ${ph.length ? `<div class="au-tips" style="margin:0">This file has ${nS ? `${nS} signature placeholder${nS > 1 ? 's' : ''}` : ''}${nS && nI ? ' and ' : ''}${nI ? `${nI} initials placeholder${nI > 1 ? 's' : ''}` : ''}. <label class="chk" style="display:inline-flex"><input type="checkbox" id="inPh" checked> Fill them too</label></div>` : ''}
+    <p class="muted small" style="margin:0">Initials are added as markup you can move or delete, and become part of the pages when you save. They are a visual mark, not a digital signature.</p>`;
+  $('#inNew', body).onclick = async () => { $('#dlg').close(); await initialsPad(); initialsDialog(); };
+  const r = await modal({ title: 'Initials on every page', body, actions: [{ label: 'Cancel', value: null }, { label: 'Add initials', primary: true, value: 'ok', validate: () => { if (!S.initials) { toast('Draw or type your initials first'); return false; } return true; } }] });
+  if (!r) return;
+  Object.assign(st, { where: $('#inWhere', body).value, size: +$('#inSize', body).value || 48, margin: +$('#inMargin', body).value || 0, scope: $('#inScope', body).value, skipFirst: $('#inSkip', body).checked }); pref.set('initOpts', st);
+  const fillPh = ph.length && $('#inPh', body) && $('#inPh', body).checked;
+  if (fillPh && nS && !S.sig) { const ok = await signatureDialog(); if (!ok) return; }
+  let pages = st.scope === 'sel' ? [...(d.sel && d.sel.size ? d.sel : [d.cur])] : d.info.map((_, i) => i);
+  if (st.scope === 'notlast') pages = pages.filter(i => i !== d.info.length - 1); if (st.skipFirst) pages = pages.filter(i => i !== 0);
+  const phPages = new Set(fillPh ? ph.filter(p => p.init).map(p => p.page) : []);
+  snapshot(); let n = 0, m = 0; const asp = S.initials.aspect || 1.5;
+  for (const i of pages) {
+    if (phPages.has(i)) continue; // the placeholder on this page gets the initials instead
+    const inf = d.info[i]; const pg = inf.page; const vb = pg.view; const W = vb[2] - vb[0], H = vb[3] - vb[1];
+    const w = st.size, h = w / asp; const rot = inf.rot || 0; const vw = rot % 180 ? H : W, vh = rot % 180 ? W : H;
+    let x = st.where[1] === 'r' ? vw - st.margin - w : st.where[1] === 'l' ? st.margin : (vw - w) / 2; let y = st.where[0] === 't' ? st.margin : vh - st.margin - h;
+    // view (unrotated-looking) coordinates to PDF space via the page's own rotation
+    const vp = pg.getViewport({ scale: 1, rotation: rot }); const p1 = vp.convertToPdfPoint(x, y), p2 = vp.convertToPdfPoint(x + w, y + h);
+    d.annots[i].push({ type: 'sign', x1: Math.min(p1[0], p2[0]), y1: Math.min(p1[1], p2[1]), x2: Math.max(p1[0], p2[0]), y2: Math.max(p1[1], p2[1]), src: S.initials.src, opacity: 1 }); n++;
+  }
+  if (fillPh) for (const p of ph) {
+    const im = p.init ? S.initials : S.sig; if (!im) continue; const R = p.rect; const a = im.aspect || 3; let w = R.width * .9, h = w / a; const room = R.height * .52; if (h > room) { h = room; w = h * a; }
+    // sits on the placeholder's signing line, below its label
+    const x = R.x + (R.width - w) / 2, y = R.y + R.height * .2; d.annots[p.page].push({ type: 'sign', x1: x, y1: y, x2: x + w, y2: y + h, src: im.src, opacity: 1 }); m++;
+  }
+  redrawAll(); renderPanel();
+  toast(`Initials added to ${n} page${n === 1 ? '' : 's'}${m ? ` and ${m} placeholder${m === 1 ? '' : 's'} filled` : ''}. Save to keep them.`, 4200);
+}
+
+/* ---- email: share the file, or save it and open a new message ---- */
+async function emailDialog() {
+  const d = cur(); if (!d) { toast('Open a PDF first'); return; }
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+  const name = baseName(d) + '.pdf'; const last = pref.get('mailLast', { to: '' });
+  body.innerHTML = `<div class="field"><label for="emTo">To</label><input id="emTo" class="inp" type="email" multiple placeholder="name@example.com" value="${esc(last.to)}"></div>
+    <div class="field"><label for="emSub">Subject</label><input id="emSub" class="inp" value="${esc(baseName(d))}"></div>
+    <div class="field"><label for="emMsg">Message</label><textarea id="emMsg" class="inp" rows="4">Hello,\n\nPlease find ${esc(name)} attached.\n</textarea></div>
+    <label class="chk"><input type="checkbox" id="emZip"${d.bytes.length > 15e6 ? ' checked' : ''}> Compress it first if it is over 10 MB</label>
+    <p class="muted small" style="margin:0">${navigator.canShare ? 'Your system’s share sheet opens with the PDF attached. Pick Mail or another app.' : 'Quire saves the PDF, then opens a new email in your mail app. Attach the saved file there; browsers cannot attach files to an email by themselves.'}</p>`;
+  const r = await modal({ title: 'Send by email', body, actions: [{ label: 'Cancel', value: null }, { label: navigator.canShare ? 'Share…' : 'Save and write email', primary: true, value: 'ok' }] });
+  if (!r) return;
+  const to = $('#emTo', body).value.trim(), sub = $('#emSub', body).value, msg = $('#emMsg', body).value; pref.set('mailLast', { to });
+  busy('Preparing the PDF…'); let out;
+  try {
+    out = await buildOutput(d);
+    if ($('#emZip', body).checked && out.length > 10e6) { try { $('#busyMsg').textContent = 'Compressing…'; const pdf = await PDFDocument.load(out, LOAD); await recompressImages(pdf, { dpi: 150, q: .7 }); dedupeObjects(pdf); const c = await pdf.save({ useObjectStreams: true }); if (c.length < out.length) out = c; } catch {} }
+  } catch (e) { unbusy(); toast('Could not prepare the PDF: ' + e.message); return; }
+  unbusy();
+  const file = new File([out], name, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: sub, text: msg }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  await saveFile(name, out);
+  const href = `mailto:${encodeURIComponent(to).replace(/%40/g, '@').replace(/%2C/g, ',')}?subject=${encodeURIComponent(sub)}&body=${encodeURIComponent(msg + `\n(Attach ${name}, which Quire just saved.)`)}`;
+  const a = el('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; document.body.append(a); a.click(); a.remove();
+  toast(`Saved ${name}. Attach it to the email that just opened (${kb(out.length)}).`, 5200);
+}
 
 /* ================= compression and combine ================= */
 // Compression ideas from current optimisers: each image gets the codec that suits it (JPEG tuned by SSIM for photos,

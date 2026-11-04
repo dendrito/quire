@@ -153,3 +153,15 @@ Code: the "edit content" block just above `signature`. Hooks elsewhere are one l
 - **OCR:** "OCR layer" draws the invisible text (Tr 3/7) in teal. Proofread (`TASKS.ocrfix`) shows each OCR line's picture above an editable field. Corrected words keep their boxes on the scan (`ceOcrLine`, horizontal scaling Tz), using the GlyphLess font for any script.
 - **Desktop:** both `vendor.js` files bundle `@pdf-lib/fontkit` 1.1.1 (lazy-loaded, `FONTKIT_URL`). Electron already allows `local-fonts`, because non-media permissions pass.
 - Tested in Chromium with LibreOffice, reportlab, pdf-lib and synthetic OCR PDFs, checked with pdftotext and pdffonts. Not handled: Type 3 and vertical (CJK -V) fonts can be moved or deleted but not retyped; text inside form XObjects moves as one object.
+
+## PDF-XChange screenshot gaps (done, 4 Nov 2026)
+
+One block above "compression and combine", after merging vzqdhg d949056.
+- Snapshot (View tab, SNAP/snapTake): drag an area or click a page; copies a PNG at a chosen dpi, shows the text in that area, Save PNG. Esc leaves the mode. viewRender(d, i, scale) renders a page as the viewer shows it, with unsaved markup.
+- Loupe (LP/loupeToggle/loupeDraw): floating, draggable, resizable magnifier (2–8×) that follows the pointer, with a sharp re-render per page and a copy button. Position kept in pref 'loupeBox'.
+- Split view (SPL/splitBuild): second independent pane of the same document, side by side or stacked, own zoom and page box, Match, double-click a page to show it in the main view. Rebuilt by a buildViewer wrapper.
+- Audit space usage (Tools, auditSpace/auditDialog): bytes by category (images, fonts, content, annotations and forms, attachments, bookmarks, tags, metadata, thumbnails, colour profiles, structure, overhead), with object-stream members counted at their compressed share, largest pictures, fonts (embedded/subset/missing), tips and a CSV report. Encrypted files must be unlocked first.
+- Signature placeholder (Forms tool 'fsig', sigPlaceholder): an empty /Sig field with a "Sign here / Initial here: who" appearance, SigFlags 1. The Protect tab's Digital ID signing (sigPlaces) lists them as places to sign.
+- Initials on every page (Markup, initialsDialog): own initials pad (pref 'initials'), corner, size, margin, pages, skip first; also fills signature and initials placeholders with visual marks.
+- Send by email (Tools, emailDialog): share sheet with the PDF when the system has one, otherwise saves the PDF and opens a mailto message. mac/windows main.js now pass mailto: links to the system.
+- Not done: Replace fonts (needs the Edit tab's font machinery).
