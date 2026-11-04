@@ -652,6 +652,11 @@ function modal({ title, body, actions }) {
 }
 async function saveFile(filename, data) {
   const blob = data instanceof Blob ? data : new Blob([data]);
+  if (window.quireNative && window.quireNative.save) { // iPad and Android app: hand the file to the system share sheet
+    try { const r = await window.quireNative.save(filename, blob); if (r !== false) toast('Saved ' + filename); }
+    catch (e) { toast(/cancel/i.test((e && e.message) || '') ? 'Save cancelled' : 'Could not save: ' + ((e && e.message) || e)); }
+    return;
+  }
   const dl = await dlP;
   if (dl) {
     try { await dl.save({ filename, data: blob }); toast('Saved ' + filename); }

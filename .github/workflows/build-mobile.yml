@@ -1,0 +1,52 @@
+# Builds Quire Lite for Android tablets (an installable .apk) and checks that the iPad app compiles.
+# The iPad app is installed from Xcode on a Mac (see mobile/README.md), because iPads only run apps signed by Apple.
+name: Build iPad and Android apps
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/project-thread-oh7c7y']
+    paths: ['mobile/**', 'web/**', 'models/**', 'tools/editions*', 'branding/**', '.github/workflows/build-mobile.yml']
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/build-www.js && npx cap sync android
+      - name: Build the .apk
+        working-directory: mobile/android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - name: Name the .apk
+        run: mv android/app/build/outputs/apk/debug/app-debug.apk Quire-Lite-Android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Quire-lite-android
+          path: mobile/Quire-Lite-Android.apk
+          if-no-files-found: error
+  ipad:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/build-www.js && npx cap sync ios
+      - name: Compile for the iPad simulator (no signing)
+        working-directory: mobile/ios/App
+        run: xcodebuild -project App.xcodeproj -scheme App -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -30
