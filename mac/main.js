@@ -79,7 +79,7 @@ function createWindow() {
   win.loadURL('app://quire/index.html');
   // Links open in the default browser; the app window itself never navigates away.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) shell.openExternal(url);
+    if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event, url) => {
