@@ -1494,6 +1494,17 @@ const OCR_RTL = new Set(['ara', 'heb', 'fas', 'syr', 'urd', 'pus', 'snd', 'uig',
 const OCR_BUNDLED = new Set(VENDOR ? (window.QUIRE_OCR_LANGS || ['eng', 'deu', 'fra', 'spa', 'ita', 'por', 'nld', 'pol']) : []);
 const OCR_CACHE = 'quire-ocr'; // Tesseract.js looks up `${cachePath}/${code}.traineddata` in IndexedDB before it fetches anything
 const OCR_SRC = c => [`https://cdn.jsdelivr.net/npm/@tesseract.js-data/${c}@1.0.0/4.0.0_best_int/${c}.traineddata.gz`, `https://unpkg.com/@tesseract.js-data/${c}@1.0.0/4.0.0_best_int/${c}.traineddata.gz`];
+// "Most accurate": Tesseract's full-precision models (tessdata_best). About 4 to 5 times larger and slower, a few points
+// better on faded and damaged pages. Kept apart from the everyday models, under their own name in the same storage.
+const OCR_BEST_CACHE = 'quire-ocr-best';
+const OCR_SRC_BEST = c => [`https://cdn.jsdelivr.net/npm/@tesseract.js-data/${c}@1.0.0/4.0.0/${c}.traineddata.gz`, `https://unpkg.com/@tesseract.js-data/${c}@1.0.0/4.0.0/${c}.traineddata.gz`];
+async function ocrBestReady(langs, msg) {
+  let ks = []; try { ks = (await OCR_DB.keys()).map(String); } catch {}
+  for (const c of langs) { const key = `${OCR_BEST_CACHE}/${c}.traineddata`; if (ks.includes(key)) continue;
+    let b = null; for (const url of (VENDOR ? [VENDOR + 'tessdata-best/' + c + '.traineddata.gz'] : []).concat(OCR_SRC_BEST(c))) { try { const r = await fetch(url); if (!r.ok) continue; const u = new Uint8Array(await r.arrayBuffer()); if (u[0] === 31 && u[1] === 139 && u.length > 1000) { b = u; break; } } catch {} }
+    if (!b) return false; msg(`Saved the most accurate ${ocrName(c.replace(/_vert$/, ''))} model on this device`); await OCR_DB.put(key, b); }
+  return true;
+}
 const OCR_TOTAL = OCR_CAT.reduce((s, l) => s + l.mb, 0) + Object.values(OCR_VERT).reduce((s, v) => s + v, 0);
 // The same database and store idb-keyval (inside Tesseract.js) uses.
 const OCR_DB = {
@@ -1936,10 +1947,12 @@ const TASKS = {
       <div id="oLangs"><p class="muted small">Checking languages…</p></div>
       ${scopeHTML(d)}<label class="chk"><input type="checkbox" id="oSkip" ${O.skip ? 'checked' : ''}> Skip pages that already have text</label>
       <label class="chk" id="oFastL"${O.kind === 'hand' ? ' hidden' : ''}><input type="checkbox" id="oFast" ${O.fast ? 'checked' : ''}> Fast (less accurate: no clean-up, lower resolution)</label>
+      <label class="chk" id="oBestL"${O.kind === 'hand' ? ' hidden' : ''}><input type="checkbox" id="oBest" ${O.best ? 'checked' : ''}> Most accurate models, for faded or damaged pages (about 5 times bigger download, slower)</label>
       <button class="btn primary" id="oGo">Recognise text</button><div class="prog" hidden id="oPr"><i></i></div><p class="muted small" id="oMsg"></p>
       ${d.ocrNote && d.ocrNote.bytes === d.bytes ? `<div class="hint" style="margin:0">${d.ocrNote.n ? `Read ${plural(d.ocrNote.words, 'word')}. The engine was unsure of ${plural(d.ocrNote.n, 'word')}; they are marked in Proofread OCR text. <button type="button" class="btn sm" id="oProof" style="margin-top:6px">Proofread</button>` : `Read ${plural(d.ocrNote.words, 'word')}, all with good confidence.`}</div>` : ''}</section>`;
     bindClose(P);
     $('#oFast', P).onchange = e => { O.fast = e.target.checked; save(); };
+    $('#oBest', P).onchange = e => { O.best = e.target.checked; save(); };
     const pf = $('#oProof', P); if (pf) pf.onclick = () => { ED.proof = null; edProofOpen(d.ocrNote.page); if (ED.proof) ED.proof.only = true; };
     $('#oSkip', P).onchange = e => { O.skip = e.target.checked; save(); };
     const opts = (list, v) => list.map(c => `<option value="${esc(c)}"${c === v ? ' selected' : ''}>${esc(ocrName(c))}</option>`).join('');
@@ -1964,7 +1977,7 @@ const TASKS = {
       const dd = $('#oD', P); if (dd) dd.onchange = e => { O.dir = e.target.value; save(); };
       $('#oMan', P).onclick = openOcrLangs;
     };
-    $('#oK', P).onchange = e => { O.kind = e.target.value; save(); $('#oFastL', P).hidden = O.kind === 'hand'; (O.kind === 'hand' ? htrLoad() : ocrLoad()).then(fill); };
+    $('#oK', P).onchange = e => { O.kind = e.target.value; save(); $('#oFastL', P).hidden = $('#oBestL', P).hidden = O.kind === 'hand'; (O.kind === 'hand' ? htrLoad() : ocrLoad()).then(fill); };
     (O.kind === 'hand' ? htrLoad() : ocrLoad()).then(fill);
     $('#oGo', P).onclick = async () => {
       if (O.kind === 'hand') { await htrLoad(); const msg = m => { const n = $('#oMsg', P); if (n) n.textContent = m; }, bar = $('#oPr', P); bar.hidden = false; $('#oGo', P).disabled = true;
@@ -1982,8 +1995,9 @@ const TASKS = {
       const results = [];
       try {
         msg('Loading OCR engine…'); await loadScript(TESS_URL);
+        let best = O.best && !O.fast; if (best) { msg('Getting the most accurate models…'); best = await ocrBestReady(langs, msg); if (!best) toast('The most accurate models could not be downloaded, so the usual ones are used.', 5000); }
         msg(`Loading ${langs.map(c => ocrName(c.replace(/_vert$/, ''))).filter((v, k, a) => a.indexOf(v) === k).join(' and ')}…`);
-        const mk = () => Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: OCR_CACHE, cacheMethod: VENDOR ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))])
+        const mk = () => Promise.race([Tesseract.createWorker(langs.join('+'), 1, { ...TESS_OPTS, cachePath: best ? OCR_BEST_CACHE : OCR_CACHE, cacheMethod: VENDOR || best ? 'readOnly' : 'write' }), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 90000))])
           // Tesseract.js reads each page as one block by default; automatic layout finds columns and vertical CJK text.
           .then(async w => { await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' }); return w; });
         const workers = [await mk()];
@@ -8987,12 +9001,13 @@ async function pdfaDialog() {
 // text lines up, and numbers stored as numbers. Scanned pages need OCR first; the OCR text is used.
 Object.assign(IC, {
   toword: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 12l1.2 5 1.3-3.5 1.3 3.5 1.2-5"/>',
-  toexcel: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M9 12l4 5M13 12l-4 5"/>'
+  toexcel: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M9 12l4 5M13 12l-4 5"/>',
+  topptx: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M10 18v-6h2.2a1.8 1.8 0 010 3.6H10"/>'
 });
-Object.assign(ACTS, { toword: ['Convert to Word (.docx)', 'toword', () => cvDialog('docx')], toexcel: ['Convert to Excel (.xlsx)', 'toexcel', () => cvDialog('xlsx')] });
-Object.assign(RLBL, { toword: 'Word', toexcel: 'Excel' });
-Object.assign(CMD_KW, { toword: 'convert export docx word editable document microsoft office libreoffice pages', toexcel: 'convert export xlsx excel spreadsheet table tables csv numbers sheets' });
-RIB.tools.items = RIB.tools.items.flatMap(x => x === '@txt' ? ['@txt', '@toword', '@toexcel'] : [x]);
+Object.assign(ACTS, { toword: ['Convert to Word (.docx)', 'toword', () => cvDialog('docx')], toexcel: ['Convert to Excel (.xlsx)', 'toexcel', () => cvDialog('xlsx')], topptx: ['Convert to PowerPoint (.pptx)', 'topptx', () => cvDialog('pptx')] });
+Object.assign(RLBL, { toword: 'Word', toexcel: 'Excel', topptx: 'PowerPoint' });
+Object.assign(CMD_KW, { toword: 'convert export docx word editable document microsoft office libreoffice pages', toexcel: 'convert export xlsx excel spreadsheet table tables csv numbers sheets', topptx: 'convert export pptx powerpoint slides presentation keynote impress deck' });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@txt' ? ['@txt', '@toword', '@toexcel', '@topptx'] : [x]);
 
 const CV_RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 // ---- reading the page: text runs with font, size, bold, italic ----
@@ -9302,23 +9317,96 @@ async function cvXlsx(d, o, onStep) {
     return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), noText: pages.filter(P => !P.runs.length).map(P => P.i + 1) };
   } finally { doc.destroy(); }
 }
+// ---- PowerPoint: one slide per page; the page's drawing and pictures as a background with the text taken out, and the
+// text as editable text boxes in place (one per block of text, paragraphs with their alignment, indents and line spacing).
+// Scanned pages keep the scan; their OCR text goes on top, transparent, so it can be searched, copied and edited.
+async function cvPptx(d, o, onStep) {
+  const { doc, pages } = await cvRead(d, onStep, o.pages); await loadScript(JSZIP_URL); const z = new JSZip(); const X = s => xe(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  try {
+    const E = v => Math.round(v * 12700); const v0 = pages[0].view; let SW = v0[2] - v0[0], SH = v0[3] - v0[1];
+    const lim = (a, b) => { const k = Math.min(1, 4032 / Math.max(a, b)) /* PowerPoint's largest slide is 56 in */; return [Math.max(72, a * k), Math.max(72, b * k)]; }; [SW, SH] = lim(SW, SH);
+    const body = median(pages.flatMap(P => P.segs.flatMap(s => s.runs.map(r => r.size)))) || 11;
+    const slides = [];
+    for (const [n, P] of pages.entries()) {
+      onStep(`Making slide ${n + 1} of ${pages.length}…`);
+      const pw = P.view[2] - P.view[0], ph = P.view[3] - P.view[1], k = Math.min(SW / pw, SH / ph), ox = (SW - pw * k) / 2, oy = (SH - ph * k) / 2;
+      const sx = x => ox + (x - P.view[0]) * k, sy = y => oy + (P.view[3] - y) * k;
+      const scan = P.runs.length > 0 && P.runs.every(r => r.font && r.font.name === 'GlyphLessFont');
+      const rels = [], shapes = []; let id = 2;
+      // background: the page drawn without its text (text is drawn with fillText; it is switched off on this canvas)
+      if (o.background !== false || scan || !P.runs.length) {
+        const s = Math.min(o.dpi / 72 || 2, 3600 / Math.max(pw, ph)); const vp = P.pg.getViewport({ scale: s }); const c = el('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); if (!scan) { g.fillText = () => {}; g.strokeText = () => {}; }
+        await P.pg.render({ canvasContext: g, viewport: vp }).promise;
+        const name = `bg${n + 1}.jpeg`; z.file('ppt/media/' + name, await canvasBytes(c, 'image/jpeg', .85)); rels.push(`<Relationship Id="rId${rels.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${name}"/>`);
+        shapes.push(`<p:pic><p:nvPicPr><p:cNvPr id="${id++}" name="Page ${P.i + 1}" descr="Page ${P.i + 1}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId${rels.length + 1}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${E(ox)}" y="${E(oy)}"/><a:ext cx="${E(pw * k)}" cy="${E(ph * k)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`);
+        c.width = c.height = 0;
+      }
+      // text boxes
+      const blocks = P.segs.length ? cvXYCut(P.segs.slice()) : [];
+      const TL = Math.min(...P.segs.map(s => s.x0)), TR = Math.max(...P.segs.map(s => s.x1));
+      const rgb = (r) => r.font && r.font.color ? r.font.color : null;
+      for (const B of blocks) {
+        let x0 = Math.min(...B.map(s => s.x0)), x1 = Math.max(...B.map(s => s.x1)); const top = Math.max(...B.map(s => s.top)), bot = Math.min(...B.map(s => s.bot));
+        const ps = cvParas(B, body, { left: TL, right: TR });
+        // centred and right-aligned text gets a box across the text area, so it stays centred (or right-aligned) when edited
+        if (ps.every(p => p.align === 'center')) { x0 = Math.min(x0, TL); x1 = Math.max(x1, TR); } else if (ps.every(p => p.align === 'right')) x1 = Math.max(x1, TR);
+        let paras = ''; let lastY = null;
+        for (const p of ps) {
+          const al = { center: 'ctr', right: 'r', both: 'just', left: 'l' }[p.align] || 'l';
+          const bef = lastY == null ? 0 : Math.max(0, lastY - p.segs[0].y - (p.lineGap || p.size * 1.2)); lastY = p.segs[p.segs.length - 1].y;
+          const ln = p.lineGap ? `<a:lnSpc><a:spcPts val="${Math.round(p.lineGap * k * 100)}"/></a:lnSpc>` : '';
+          const L0 = p.segs.length > 1 ? Math.min(...p.segs.slice(1).map(s => s.x0)) : p.segs[0].x0, mar = al === 'ctr' || al === 'r' ? 0 : Math.max(0, L0 - x0), ind = al === 'ctr' || al === 'r' ? 0 : p.segs[0].x0 - L0;
+          const ppr = `<a:pPr algn="${al}" marL="${E(mar * k)}" indent="${E(ind * k)}"${p.rtl ? ' rtl="1"' : ''}>${ln}${bef > .5 ? `<a:spcBef><a:spcPts val="${Math.round(bef * k * 100)}"/></a:spcBef>` : ''}</a:pPr>`;
+          const runs = p.runs.map(r => { const t = (r.join || '') + r.text; if (!t) return ''; const sz = Math.max(100, Math.round((r.sup ? r.size * .65 : r.size) * k * 100)), col = rgb(r);
+            const fill = scan ? '<a:solidFill><a:srgbClr val="000000"><a:alpha val="0"/></a:srgbClr></a:solidFill>' : col ? `<a:solidFill><a:srgbClr val="${col}"/></a:solidFill>` : '';
+            return `<a:r><a:rPr lang="${X(o.lang || 'en')}" sz="${sz}"${r.font.bold ? ' b="1"' : ''}${r.font.italic ? ' i="1"' : ''}${r.sup ? ' baseline="30000"' : ''} dirty="0">${fill}<a:latin typeface="${X(r.font.family)}"/><a:cs typeface="${X(r.font.family)}"/></a:rPr><a:t>${X(t)}</a:t></a:r>`; }).join('');
+          paras += `<a:p>${ppr}${runs}</a:p>`;
+        }
+        if (!paras) continue;
+        const w = (x1 - x0) * k * 1.015 + 2, h = (top - bot) * k;
+        shapes.push(`<p:sp><p:nvSpPr><p:cNvPr id="${id++}" name="Text ${id}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${E(sx(x0))}" y="${E(sy(top))}"/><a:ext cx="${E(Math.min(w, SW - sx(x0)))}" cy="${E(h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="t"><a:noAutofit/></a:bodyPr><a:lstStyle/>${paras}</p:txBody></p:sp>`);
+      }
+      slides.push({ xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>${shapes.join('')}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`,
+        rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>${rels.join('')}</Relationships>` });
+    }
+    const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    const H = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships', PK = 'http://schemas.openxmlformats.org/package/2006/relationships';
+    const tree = '<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>';
+    z.file('[Content_Types].xml', `${H}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>${slides.map((_, j) => `<Override PartName="/ppt/slides/slide${j + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('')}</Types>`);
+    z.file('_rels/.rels', `${H}<Relationships xmlns="${PK}"><Relationship Id="rId1" Type="${R}/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`);
+    z.file('docProps/core.xml', `${H}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${X(baseName(d))}</dc:title><dc:creator>Quire PDF Studio</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</dcterms:created></cp:coreProperties>`);
+    z.file('ppt/presentation.xml', `${H}<p:presentation ${NS} saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>${slides.map((_, j) => `<p:sldId id="${256 + j}" r:id="rId${j + 3}"/>`).join('')}</p:sldIdLst><p:sldSz cx="${E(SW)}" cy="${E(SH)}"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`);
+    z.file('ppt/_rels/presentation.xml.rels', `${H}<Relationships xmlns="${PK}"><Relationship Id="rId1" Type="${R}/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="${R}/theme" Target="theme/theme1.xml"/>${slides.map((_, j) => `<Relationship Id="rId${j + 3}" Type="${R}/slide" Target="slides/slide${j + 1}.xml"/>`).join('')}</Relationships>`);
+    z.file('ppt/slideMasters/slideMaster1.xml', `${H}<p:sldMaster ${NS}>${tree}<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>`);
+    z.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', `${H}<Relationships xmlns="${PK}"><Relationship Id="rId1" Type="${R}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="${R}/theme" Target="../theme/theme1.xml"/></Relationships>`);
+    z.file('ppt/slideLayouts/slideLayout1.xml', `${H}<p:sldLayout ${NS} type="blank" preserve="1">${tree.replace('<p:cSld>', '<p:cSld name="Blank">')}<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`);
+    z.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', `${H}<Relationships xmlns="${PK}"><Relationship Id="rId1" Type="${R}/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>`);
+    const clr = (n, v) => `<a:${n}><a:srgbClr val="${v}"/></a:${n}>`, fill = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>', ln = w => `<a:ln w="${w}"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>`;
+    z.file('ppt/theme/theme1.xml', `${H}<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Quire"><a:themeElements><a:clrScheme name="Quire"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>${clr('dk2', '1F2937')}${clr('lt2', 'E5E7EB')}${clr('accent1', '2563EB')}${clr('accent2', 'DC2626')}${clr('accent3', '16A34A')}${clr('accent4', 'CA8A04')}${clr('accent5', '7C3AED')}${clr('accent6', '0891B2')}${clr('hlink', '2563EB')}${clr('folHlink', '7C3AED')}</a:clrScheme><a:fontScheme name="Quire"><a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Quire"><a:fillStyleLst>${fill}${fill}${fill}</a:fillStyleLst><a:lnStyleLst>${ln(6350)}${ln(12700)}${ln(19050)}</a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>${fill}${fill}${fill}</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`);
+    slides.forEach((s, j) => { z.file(`ppt/slides/slide${j + 1}.xml`, s.xml); z.file(`ppt/slides/_rels/slide${j + 1}.xml.rels`, s.rels); });
+    return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), noText: pages.filter(P => !P.runs.length).map(P => P.i + 1) };
+  } finally { doc.destroy(); }
+}
 async function cvDialog(kind) {
-  const d = cur(); if (!d) return; const word = kind === 'docx'; const last = pref.get('cv', {});
+  const d = cur(); if (!d) return; const word = kind === 'docx', ppt = kind === 'pptx'; const last = pref.get('cv', {});
   const ck = (id, label, on) => `<label class="chk"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:10px';
-  body.innerHTML = `<div class="field"><label for="cvPg">Pages</label><input id="cvPg" class="inp" placeholder="All ${d.info.length} pages, or e.g. 1-5, 8"></div>` + (word
+  body.innerHTML = `<div class="field"><label for="cvPg">Pages</label><input id="cvPg" class="inp" placeholder="All ${d.info.length} pages, or e.g. 1-5, 8"></div>` + (ppt
+    ? ck('cvBg', 'Keep the look of each page: its drawings and pictures sit behind the editable text', last.background ?? true) + `<p class="hint" style="margin:0">One slide per page. Text becomes text boxes you can edit, in the page's fonts, sizes and alignment. Scanned pages keep the scan, with their OCR text on top, invisible but searchable and editable.</p>`
+    : word
     ? ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvLay', 'Keep the page layout (margins, indents, spacing, alignment, columns)', last.layout ?? true) + ck('cvRun', 'Move running headers and page numbers into the Word header and footer', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
     : ck('cvOne', 'Everything on one sheet (otherwise one sheet per page)', last.oneSheet ?? false) + ck('cvNum', 'Store numbers as numbers (1.234,56 and 1,234.56 both understood)', last.numbers ?? true))
-    + `<p class="hint" style="margin:0">${word ? 'Makes an editable document that flows, like ABBYY and Acrobat do: paragraphs are joined across lines and columns, so it will not look exactly like the PDF.' : 'Columns are found from where text lines up on each page.'} Scanned pages need OCR first.</p>`;
-  const r = await modal({ title: word ? 'Convert to Word' : 'Convert to Excel', body, actions: [{ label: 'Cancel', value: null }, { label: 'Convert', primary: true, value: 'ok' }] });
+    + (ppt ? '' : `<p class="hint" style="margin:0">${word ? 'Makes an editable document that flows, like ABBYY and Acrobat do: paragraphs are joined across lines and columns, so it will not look exactly like the PDF.' : 'Columns are found from where text lines up on each page.'} Scanned pages need OCR first.</p>`);
+  const r = await modal({ title: word ? 'Convert to Word' : ppt ? 'Convert to PowerPoint' : 'Convert to Excel', body, actions: [{ label: 'Cancel', value: null }, { label: 'Convert', primary: true, value: 'ok' }] });
   if (!r) return;
   const pages = cvRange($('#cvPg', body).value, d.info.length); if (!pages.length) { toast('No pages in that range'); return; }
-  const o = word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, layout: $('#cvLay', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
+  const o = ppt ? { background: $('#cvBg', body).checked, lang: navigator.language || 'en' } : word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, layout: $('#cvLay', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
   pref.set('cv', { ...last, ...o }); o.pages = pages;
   busy('Converting…');
   try {
-    const res = await (word ? cvDocx : cvXlsx)(d, o, m => busy(m)); unbusy();
-    await saveFile(baseName(d) + (word ? '.docx' : '.xlsx'), res.blob);
+    const res = await (word ? cvDocx : ppt ? cvPptx : cvXlsx)(d, o, m => busy(m)); unbusy();
+    await saveFile(baseName(d) + (word ? '.docx' : ppt ? '.pptx' : '.xlsx'), res.blob);
     if (res.noText.length) toast(`${plural(res.noText.length, 'page')} had no text (${res.noText.slice(0, 8).join(', ')}${res.noText.length > 8 ? '…' : ''}). Run OCR on scans first.`, 7000);
   } catch (e) { console.error(e); toast('Conversion failed: ' + (e.message || e), 7000); } finally { unbusy(); }
 }

@@ -1,4 +1,4 @@
-# Reads a .docx or .xlsx written by Quire and prints facts about it as JSON, for run.js to check.
+# Reads a .docx, .xlsx or .pptx written by Quire and prints facts about it as JSON, for run.js to check.
 import json, sys, zipfile
 
 
@@ -32,5 +32,16 @@ def xlsx(path):
     return {'rows': [[('' if c.value is None else str(c.value)) for c in row] for row in ws.iter_rows()]}
 
 
+def pptx(path):
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    p = Presentation(path); sl = list(p.slides)
+    return {'slides': len(sl), 'width': p.slide_width.pt, 'height': p.slide_height.pt,
+            'textBoxes': [sum(1 for sh in s.shapes if sh.has_text_frame and sh.text_frame.text.strip()) for s in sl],
+            'pictures': [sum(1 for sh in s.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE) for s in sl],
+            'centered': sum(1 for s in sl for sh in s.shapes if sh.has_text_frame for q in sh.text_frame.paragraphs if q.alignment is not None and 'CENTER' in str(q.alignment)),
+            'text': '\n'.join(sh.text_frame.text for s in sl for sh in s.shapes if sh.has_text_frame)}
+
+
 f = sys.argv[1]
-print(json.dumps(docx(f) if f.endswith('.docx') else xlsx(f), ensure_ascii=False))
+print(json.dumps(docx(f) if f.endswith('.docx') else pptx(f) if f.endswith('.pptx') else xlsx(f), ensure_ascii=False))

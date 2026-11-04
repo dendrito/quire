@@ -1,6 +1,7 @@
 # Runs Quire's automatic tests on every change to the app or the tests, and on demand from the Actions tab.
 # Each test drives the real app in headless Chromium and checks the result with independent tools:
-# veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx and openpyxl (Word, Excel).
+# veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx, openpyxl and python-pptx plus LibreOffice
+# (Word, Excel, PowerPoint), and the experts' transcriptions of medieval charters (handwriting).
 # The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact.
 name: Tests
 on:
@@ -37,10 +38,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: System tools (poppler, Liberation fonts for the test scans)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils fonts-liberation
+      - name: System tools (poppler, Liberation fonts for the test scans, LibreOffice to open the PowerPoint files)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils fonts-liberation libreoffice-impress
       - name: Python packages
-        run: pip install -q reportlab pillow numpy python-docx openpyxl
+        run: pip install -q reportlab pillow numpy python-docx openpyxl python-pptx
       - name: veraPDF
         run: |
           mvn -q -f verapdf/pom.xml dependency:copy-dependencies -DoutputDirectory=lib

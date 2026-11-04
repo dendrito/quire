@@ -32,7 +32,7 @@ exports.open = async () => {
     for (const [re, f] of CDN) if (re.test(u)) return r.fulfill({ contentType: type(f), body: fs.readFileSync(NM + f) });
     if (u.startsWith('https://quire.test/v/')) {
       const rel = u.slice(21).split('?')[0]; let f = null;
-      const m = rel.match(/^tessdata\/(\w+)\.traineddata\.gz$/); if (m) f = `@tesseract.js-data/${m[1]}/4.0.0_best_int/${m[1]}.traineddata.gz`;
+      const m = rel.match(/^tessdata(-best)?\/(\w+)\.traineddata\.gz$/); if (m) f = `@tesseract.js-data/${m[2]}/${m[1] ? '4.0.0' : '4.0.0_best_int'}/${m[2]}.traineddata.gz`;
       const s = rel.match(/^fonts-sub\/(\w+?)_(\w+)\.ttf$/); if (s) f = `@expo-google-fonts/${s[1].toLowerCase()}/${s[2]}/${s[1]}_${s[2]}.ttf`;
       if (rel.startsWith('htr/')) { const h = path.join(HTR_DIR, rel.slice(4)); return fs.existsSync(h) ? r.fulfill({ contentType: type(h), body: fs.readFileSync(h) }) : r.fulfill({ status: 404, body: '' }); }
       if (!f) for (const [a, b] of Object.entries(VENDOR)) if (rel.startsWith(a)) f = b + rel.slice(a.length);

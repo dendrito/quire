@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word redaction htr)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx redaction htr)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
@@ -79,9 +79,9 @@ TESTS.pdfua = async () => {
 };
 
 // --- OCR accuracy on hard scans (share of words read, in order)
-const ocr = async (f, lang = 'por') => {
+const ocr = async (f, lang = 'por', more = {}) => {
   const p = await H.open(); await H.load(p, fx(f));
-  await p.evaluate(l => { pref.set('ocr', { lang: l, also: '', dir: 'h', skip: true }); S.ocr = null; openTask('ocr'); }, lang);
+  await p.evaluate(([l, m]) => { pref.set('ocr', { lang: l, also: '', dir: 'h', skip: true, ...m }); S.ocr = null; openTask('ocr'); }, [lang, more]);
   await p.waitForSelector('#oGo'); const n0 = await p.evaluate(() => cur().bytes.length); const t0 = Date.now();
   await p.click('#oGo');
   await p.waitForFunction(n => cur().bytes.length !== n || (document.querySelector('#oMsg') && /fail|could not|No text/i.test(document.querySelector('#oMsg').textContent)), n0, { timeout: 600000, polling: 500 });
@@ -95,6 +95,9 @@ TESTS.ocr = async () => {
     const { file, secs } = await ocr(f); const acc = lcs(fs.readFileSync(fx(f.replace(/pdf$/, 'txt')), 'utf8'), pdftotext(file));
     check(`${f}: at least ${min}% of words read`, acc >= min, `${acc.toFixed(1)}% in ${secs.toFixed(0)} s`);
   }
+  // the most accurate (full-precision) models on the faded page: 60.6% here against 58.2% with the everyday ones
+  const { file, secs } = await ocr('faded.pdf', 'por', { best: true }); const acc = lcs(fs.readFileSync(fx('faded.txt'), 'utf8'), pdftotext(file));
+  check(`faded.pdf with the most accurate models: at least ${OCR_MIN['faded.pdf'] + 2}% of words read`, acc >= OCR_MIN['faded.pdf'] + 2, `${acc.toFixed(1)}% in ${secs.toFixed(0)} s`);
 };
 
 // --- Excel from a scanned table
@@ -146,6 +149,24 @@ TESTS.redaction = async () => {
   check('redacted word gone from the text', !/SECRETNAME/.test(t), t.trim().split('\n')[0]);
   check('redacted word gone from the file bytes', !/SECRETNAME/.test(raw));
   check('words around it kept', /Name:/.test(t) && /Silva/.test(t) && /Keep this line intact please/.test(t));
+};
+
+// --- PowerPoint: a born-digital report and an OCR'd scan; slides open in python-pptx and LibreOffice, text is editable
+TESTS.pptx = async () => {
+  for (const [f, src] of [['report.pdf', fx('report.pdf')], ['book.pdf', out('ocr-book.pdf')]]) {
+    if (!fs.existsSync(src)) await ocr('book.pdf');
+    const p = await H.open(); await H.load(p, src); const file = out(f.replace(/pdf$/, 'pptx'));
+    fs.writeFileSync(file, await b64(p, async () => (await cvPptx(cur(), { pages: [...cur().info.keys()], background: true, lang: 'en' }, () => {})).blob));
+    const I = inspect(file), n = await p.evaluate(() => cur().info.length);
+    check(`${f}: one slide per page`, I.slides === n, `${I.slides} slides`);
+    check(`${f}: page look kept as a picture on every slide`, I.pictures.every(x => x === 1), I.pictures.join(','));
+    if (f === 'report.pdf') {
+      check(`${f}: text in editable text boxes`, I.textBoxes.every(x => x >= 5) && /committee reviewed the budget/.test(I.text) && /Lisbon, 4 November 2026/.test(I.text), I.textBoxes.join(','));
+      check(`${f}: headings stay centred`, I.centered >= 3, `${I.centered} centred paragraphs`);
+    } else check(`${f}: OCR text kept (invisible, editable)`, lcs(fs.readFileSync(fx('book.txt'), 'utf8'), I.text) > 90, I.text.slice(0, 60));
+    let ok = false; try { execFileSync('soffice', ['--headless', '--convert-to', 'pdf', '--outdir', OUT, file], { timeout: 120000, stdio: 'ignore' }); ok = fs.existsSync(file.replace(/pptx$/, 'pdf')); } catch {}
+    check(`${f}: LibreOffice opens it`, ok);
+  }
 };
 
 // --- Handwriting (paleography): medieval Portuguese charters from the iForal ground truth (fetched by the workflow, not
