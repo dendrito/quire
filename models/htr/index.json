@@ -48,6 +48,38 @@
     0.9218370318412781
    ],
    "bytes": 24903662
+  },
+  {
+   "id": "traprinq",
+   "name": "Portuguese Inquisition records, 16th–19th century (TraPrInq)",
+   "langs": "Portuguese",
+   "era": "1500–1900",
+   "about": "Trained on over 6,400 pages of Portuguese Inquisition trials (Lisbon, Coimbra, Évora) transcribed by the TraPrInq project. Made for Inquisition records.",
+   "file": "TraPrInq.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Weslley Oliveira (2024). TraPrInq - Transcription model to recognize Portuguese handwritten texts from the 16th to 19th centuries. Zenodo. https://doi.org/10.5281/zenodo.14538271",
+   "doi": "10.5281/zenodo.14538271",
+   "accuracy": [
+    102718,
+    0.9415917992591858
+   ],
+   "bytes": 90357784
+  },
+  {
+   "id": "geneapt",
+   "name": "Portuguese parish registers, 18th–19th century (GeneaPT)",
+   "langs": "Portuguese",
+   "era": "1700–1900",
+   "about": "Trained on baptism, marriage and burial registers from Portuguese parishes. Made for genealogy.",
+   "file": "GeneaPT_v6.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "GeneaPT (2026). GeneaPT – Kraken HTR model for Portuguese parish registers (18th–19th c.). Zenodo. https://doi.org/10.5281/zenodo.23733764",
+   "doi": "10.5281/zenodo.23733764",
+   "accuracy": [
+    0,
+    0
+   ],
+   "bytes": 90229619
   }
  ]
 }
