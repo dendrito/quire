@@ -27,10 +27,13 @@ if (process.argv.includes('--site')) {
   const page = (ed, html) => '<!doctype html><html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
     + `<title>Quire ${ed[0].toUpperCase() + ed.slice(1)}</title><meta name="description" content="A PDF editor that runs in your browser. Your files never leave your computer.">`
+    + '<link rel="icon" type="image/svg+xml" href="icon.svg"><link rel="apple-touch-icon" href="icon.png">'
     + '<style>body{margin:0}[hidden]{display:none!important}</style></head><body>' + html + '</body></html>';
   for (const ed of EDITIONS) {
     const dir = path.join(root, 'web/site', ed); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'index.html'), page(ed, build(src, ed, parts)));
+    fs.copyFileSync(path.join(root, 'branding/quire-icon.svg'), path.join(dir, 'icon.svg'));
+    fs.copyFileSync(path.join(root, 'mac/build/icon.png'), path.join(dir, 'icon.png'));
   }
   console.log('site: web/site/lite/index.html, web/site/pro/index.html');
 }
