@@ -7735,6 +7735,297 @@ async function pdfaDialog() {
   } catch (e) { console.error(e); toast('PDF/A conversion failed: ' + (e.message || e), 7000); } finally { unbusy(); }
 }
 
+/* ================= convert to Word and Excel ================= */
+// Rebuilds the document as an editable Word file: reading order across columns (XY-cut), paragraphs joined across
+// lines and hyphens, headings from font size, bold and italic, lists, tables from aligned columns, pictures, running
+// headers and page numbers left out. Excel gets one sheet per page (or one for all), with columns found from where
+// text lines up, and numbers stored as numbers. Scanned pages need OCR first; the OCR text is used.
+Object.assign(IC, {
+  toword: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 12l1.2 5 1.3-3.5 1.3 3.5 1.2-5"/>',
+  toexcel: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M9 12l4 5M13 12l-4 5"/>'
+});
+Object.assign(ACTS, { toword: ['Convert to Word (.docx)', 'toword', () => cvDialog('docx')], toexcel: ['Convert to Excel (.xlsx)', 'toexcel', () => cvDialog('xlsx')] });
+Object.assign(RLBL, { toword: 'Word', toexcel: 'Excel' });
+Object.assign(CMD_KW, { toword: 'convert export docx word editable document microsoft office libreoffice pages', toexcel: 'convert export xlsx excel spreadsheet table tables csv numbers sheets' });
+RIB.tools.items = RIB.tools.items.flatMap(x => x === '@txt' ? ['@txt', '@toword', '@toexcel'] : [x]);
+
+const CV_RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+// ---- reading the page: text runs with font, size, bold, italic ----
+async function cvPage(pg, opts = {}) {
+  const tc = await pg.getTextContent(); const ops = await pg.getOperatorList(); const view = pg.view;
+  const fontInfo = new Map(); const fi = id => { if (!fontInfo.has(id)) { let n = ''; try { const f = pg.commonObjs.get(id); n = (f && (f.name || f.loadedName)) || ''; } catch {} const st = tc.styles[id] || {}; const clean = n.replace(/^[A-Z]{6}\+/, ''); fontInfo.set(id, { name: clean, family: cvFamily(clean, st.fontFamily), bold: /bold|black|heavy|semibold|demi/i.test(clean), italic: /italic|oblique|-it\b|-ital/i.test(clean) }); } return fontInfo.get(id); };
+  const runs = [];
+  for (const it of tc.items) {
+    if (!it.str || !it.str.trim()) continue; const [a, b, c, d, e, f] = it.transform; // spaces come back from the gaps
+    if (Math.abs(b) > Math.abs(a) * .1 || Math.abs(c) > Math.abs(d) * .1) continue; // rotated text: skip (watermarks, spines)
+    const size = Math.abs(d) || Math.hypot(c, d) || 10; const F = fi(it.fontName);
+    runs.push({ x: e, y: f, w: it.width, h: size, size, text: it.str, font: F, sp: !it.str.trim() });
+  }
+  // pictures: where images are drawn (from the operator list), so they can be cut from the rendered page
+  const imgs = []; let m = [1, 0, 0, 1, 0, 0]; const stack = []; const O = pdfjsLib.OPS;
+  const mul = (p, q) => [p[0] * q[0] + p[1] * q[2], p[0] * q[1] + p[1] * q[3], p[2] * q[0] + p[3] * q[2], p[2] * q[1] + p[3] * q[3], p[4] * q[0] + p[5] * q[2] + q[4], p[4] * q[1] + p[5] * q[3] + q[5]];
+  for (let k = 0; k < ops.fnArray.length; k++) {
+    const fn = ops.fnArray[k], ar = ops.argsArray[k];
+    if (fn === O.save) stack.push(m.slice()); else if (fn === O.restore) m = stack.pop() || m;
+    else if (fn === O.transform) m = mul(ar, m);
+    else if (fn === O.paintFormXObjectBegin && ar && ar[0]) { stack.push(m.slice()); m = mul(ar[0], m); } else if (fn === O.paintFormXObjectEnd) m = stack.pop() || m;
+    else if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintJpegXObject || fn === O.paintImageXObjectRepeat) {
+      const xs = [m[4], m[4] + m[0], m[4] + m[2], m[4] + m[0] + m[2]], ys = [m[5], m[5] + m[1], m[5] + m[3], m[5] + m[1] + m[3]];
+      const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; if (box[2] - box[0] > 12 && box[3] - box[1] > 12) imgs.push(box);
+    }
+  }
+  return { view, runs, imgs };
+}
+function cvFamily(n, fam) {
+  if (/times|minion|garamond|georgia|serif(?!.*sans)|roman|book|palatino|caslon/i.test(n)) return /garamond/i.test(n) ? 'Garamond' : /georgia/i.test(n) ? 'Georgia' : /palatino/i.test(n) ? 'Palatino Linotype' : 'Times New Roman';
+  if (/courier|mono|consol/i.test(n)) return 'Courier New';
+  if (/arial|helvetica|sans|calibri|verdana|tahoma|segoe/i.test(n)) return /calibri/i.test(n) ? 'Calibri' : /verdana/i.test(n) ? 'Verdana' : 'Arial';
+  const base = n.replace(/[-,](Bold|Italic|Regular|Roman|Oblique|BoldItalic|Medium|Light|Semibold|MT|PS).*$/i, '').replace(/MT$|PS$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  return base && !/^(F\d+|T\d+|g_d|Glyph|Font)/i.test(base) ? base : (fam === 'serif' ? 'Times New Roman' : fam === 'monospace' ? 'Courier New' : 'Arial');
+}
+// ---- lines, blocks (XY-cut) and paragraphs ----
+function cvLines(runs) {
+  const rs = runs.slice().sort((p, q) => q.y - p.y || p.x - q.x); const lines = [];
+  for (const r of rs) {
+    let ln = null; for (let k = lines.length - 1; k >= 0 && k >= lines.length - 6; k--) { const L = lines[k]; if (Math.abs(L.y - r.y) <= Math.max(1.5, Math.min(L.size, r.size) * .35)) { ln = L; break; } }
+    if (!ln) { ln = { y: r.y, size: r.size, runs: [] }; lines.push(ln); } ln.runs.push(r); ln.size = Math.max(ln.size, r.size);
+  }
+  const out = [];
+  for (const L of lines) {
+    L.runs.sort((p, q) => p.x - q.x);
+    // split a line where there is a wide gap (columns, table cells)
+    let seg = null; const segs = [];
+    for (const r of L.runs) { if (r.sp && !seg) continue; const gap = seg ? r.x - (seg.x1) : 0; if (!seg || gap > Math.max(L.size * 1.6, 9)) { seg = { x0: r.x, x1: r.x + r.w, y: L.y, size: L.size, runs: [r] }; segs.push(seg); } else { seg.runs.push(r); seg.x1 = Math.max(seg.x1, r.x + r.w); } }
+    for (const s of segs) { s.runs = s.runs.filter((r, k, a) => !(r.sp && (k === 0 || k === a.length - 1))); if (s.runs.length) out.push(s); }
+  }
+  // right-to-left lines: runs are read from the right
+  for (const s of out) { const t = s.runs.map(r => r.text).join(''); if ((t.match(new RegExp(CV_RTL.source, 'g')) || []).length > t.replace(/\s/g, '').length * .3) { s.runs.reverse(); s.rtl = true; } }
+  for (const s of out) { s.text = cvJoinRuns(s.runs, s.size); s.top = s.y + s.size * .8; s.bot = s.y - s.size * .25; }
+  return out;
+}
+const cvGap = (p, r) => Math.max(r.x - (p.x + p.w), p.x - (r.x + r.w));
+function cvJoinRuns(runs, size) { let t = '', prev = null; for (const r of runs) { if (prev && cvGap(prev, r) > size * .18 && !/\s$/.test(t) && !/^\s/.test(r.text)) t += ' '; t += r.text; prev = r; } return t.replace(/\s+/g, ' ').trim(); }
+function cvXYCut(segs, depth = 0) {
+  if (segs.length <= 1 || depth > 30) return [segs];
+  const minH = Math.max(6, median(segs.map(s => s.size)) * .9);
+  // vertical cut: a vertical band no segment crosses, with segments on both sides
+  const xs = segs.map(s => [s.x0, s.x1]).sort((a, b) => a[0] - b[0]); let reach = xs[0][1], best = null;
+  for (let k = 1; k < xs.length; k++) { const gap = xs[k][0] - reach; if (gap > 10 && (!best || gap > best.gap)) best = { gap, x: reach + gap / 2 }; reach = Math.max(reach, xs[k][1]); }
+  // horizontal cut: the widest empty horizontal band
+  const ys = segs.map(s => [s.bot, s.top]).sort((a, b) => b[1] - a[1]); let low = ys[0][0], hb = null;
+  for (let k = 1; k < ys.length; k++) { const gap = low - ys[k][1]; if (gap > minH * .9 && (!hb || gap > hb.gap)) hb = { gap, y: low - gap / 2 }; low = Math.min(low, ys[k][0]); }
+  if (hb && (!best || hb.gap >= minH * 1.6)) { const A = segs.filter(s => s.bot > hb.y), B = segs.filter(s => s.bot <= hb.y); if (A.length && B.length) return [...cvXYCut(A, depth + 1), ...cvXYCut(B, depth + 1)]; }
+  if (best) { const A = segs.filter(s => s.x1 <= best.x), B = segs.filter(s => s.x0 >= best.x); if (A.length && B.length && A.length + B.length === segs.length) return [...cvXYCut(A, depth + 1), ...cvXYCut(B, depth + 1)]; }
+  if (hb) { const A = segs.filter(s => s.bot > hb.y), B = segs.filter(s => s.bot <= hb.y); if (A.length && B.length) return [...cvXYCut(A, depth + 1), ...cvXYCut(B, depth + 1)]; }
+  return [segs.sort((p, q) => q.y - p.y || p.x0 - q.x0)];
+}
+const median = a => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+// Table: three or more rows in a block whose segments start at the same x positions.
+function cvTable(block) {
+  const rows = []; for (const s of block.slice().sort((p, q) => q.y - p.y || p.x0 - q.x0)) { const r = rows[rows.length - 1]; if (r && Math.abs(r.y - s.y) < s.size * .5) r.cells.push(s); else rows.push({ y: s.y, cells: [s] }); }
+  const multi = rows.filter(r => r.cells.length >= 2); if (multi.length < 3 || multi.length < rows.length * .6) return null;
+  const cols = cvColumns(rows.flatMap(r => r.cells.map(c => c.x0)), median(block.map(s => s.size)) * 1.2); if (cols.length < 2 || cols.length > 30) return null;
+  const grid = rows.map(r => { const g = Array(cols.length).fill(''); for (const c of r.cells) { let k = 0; for (let j = 0; j < cols.length; j++) if (c.x0 >= cols[j] - 3) k = j; g[k] = (g[k] ? g[k] + ' ' : '') + c.text; } return g; });
+  return { cols, grid, rows };
+}
+// Tables across the whole page, found before reading order is worked out (column cuts would split them).
+// A table is three or more rows in a row with 2+ short cells starting at the same x positions.
+function cvFindTables(segs, body) {
+  const rows = []; for (const s of segs.slice().sort((p, q) => q.y - p.y || p.x0 - q.x0)) { const r = rows[rows.length - 1]; if (r && Math.abs(r.y - s.y) < s.size * .5) r.cells.push(s); else rows.push({ y: s.y, cells: [s] }); }
+  const words = c => c.text.split(/\s+/).length; const short = c => words(c) <= 6 && c.x1 - c.x0 < body * 16;
+  const out = []; let k = 0;
+  while (k < rows.length) {
+    if (rows[k].cells.length < 2 || !rows[k].cells.every(short)) { k++; continue; }
+    let j = k; const xs = rows[k].cells.map(c => c.x0);
+    while (j + 1 < rows.length && rows[j + 1].cells.length >= 2 && rows[j + 1].cells.every(short) && rows[j].y - rows[j + 1].y < body * 3.2 && rows[j + 1].cells.filter(c => xs.some(x => Math.abs(x - c.x0) < body * 1.5 || (c.x0 < x + 4 && c.x1 > x - 4))).length >= Math.min(2, rows[j + 1].cells.length)) j++;
+    const cand = rows.slice(k, j + 1).flatMap(r => r.cells); const avgW = cand.reduce((a, c) => a + words(c), 0) / cand.length;
+    if (j - k + 1 >= 3 && !(avgW > 3 && Math.max(...rows.slice(k, j + 1).map(r => r.cells.length)) === 2)) { const block = cand; const T = cvTable(block); if (T) out.push({ segs: new Set(block), T, y: rows[k].y + rows[k].cells[0].size }); }
+    k = j + 1;
+  }
+  return out;
+}
+function cvColumns(xs, tol) { const s = xs.slice().sort((a, b) => a - b); const cl = []; for (const x of s) { const c = cl[cl.length - 1]; if (c && x - c.max <= tol) { c.max = x; c.n++; } else cl.push({ min: x, max: x, n: 1 }); } return cl.filter(c => c.n >= 2 || cl.length <= 3).map(c => c.min); }
+function cvParas(block, body) {
+  const segs = block.slice().sort((p, q) => q.y - p.y || p.x0 - q.x0); const out = []; let cur_ = null;
+  const left = Math.min(...segs.map(s => s.x0)), right = Math.max(...segs.map(s => s.x1));
+  const lineGap = median(segs.slice(1).map((s, k) => segs[k].y - s.y).filter(g => g > 0)) || body * 1.2;
+  for (let k = 0; k < segs.length; k++) {
+    const s = segs[k], prev = segs[k - 1];
+    const list = /^\s*([•●▪◦‣\-–—*]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/.test(s.text);
+    const brk = !cur_ || list || Math.abs(s.size - cur_.size) > body * .15 || (prev && prev.y - s.y > lineGap * 1.3) || (prev && prev.x1 < right - Math.max(body * 4, (right - left) * .2) && !/[-‐]$/.test(prev.text)) || (s.x0 > left + body * .8 && prev && prev.x0 <= left + body * .5 && s.x0 - left < body * 6);
+    if (brk) { cur_ = { segs: [s], size: s.size, list, x0: s.x0 }; out.push(cur_); } else cur_.segs.push(s);
+  }
+  for (const p of out) {
+    p.runs = []; p.segs.forEach((s, k) => {
+      const next = p.segs[k + 1]; const hy = next && /[A-Za-zÀ-ÿ][-‐]$/.test(s.text) && /^[a-zà-ÿ]/.test(next.text);
+      s.runs.forEach((r, j) => { let t = r.text; if (hy && j === s.runs.length - 1) t = t.replace(/[-‐]\s*$/, ''); p.runs.push({ ...r, text: t, join: j === 0 && k > 0 ? (p.segs[k - 1]._hy ? '' : ' ') : (j > 0 && cvGap(s.runs[j - 1], r) > s.size * .18 ? ' ' : '') }); });
+      s._hy = hy;
+    });
+    p.text = p.runs.map(r => r.join + r.text).join('').replace(/\s+/g, ' ').trim();
+    p.rtl = (p.text.match(new RegExp(CV_RTL.source, 'g')) || []).length > p.text.length * .3;
+    p.center = Math.abs((p.segs[0].x0 + p.segs[0].x1) / 2 - (left + right) / 2) < body && p.segs.every(s => s.x0 > left + body * 2);
+  }
+  return out;
+}
+// Running headers/footers: the top or bottom line of a page that repeats (ignoring numbers) on most pages, and lone page numbers.
+function cvRunning(pages) {
+  const key = s => s.text.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().toLowerCase(); const count = new Map();
+  for (const P of pages) { const seen = new Set(); for (const s of P.edge) { const k = key(s); if (!seen.has(k)) { seen.add(k); count.set(k, (count.get(k) || 0) + 1); } } }
+  const many = Math.max(2, pages.length * .4);
+  return s => /^[\divxlcIVXLC#\s\-–—.|]{1,12}$/.test(s.text.trim()) || (count.get(key(s)) || 0) >= many;
+}
+
+// ---- building the documents ----
+async function cvRead(d, onStep, pagesWanted) {
+  const bytes = await buildOutput(d); const doc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes).slice(), isEvalSupported: false }).promise; const pages = [];
+  try {
+    for (const i of pagesWanted) {
+      onStep(`Reading page ${i + 1} of ${doc.numPages}…`); const pg = await doc.getPage(i + 1); const P = await cvPage(pg); P.i = i; P.pg = pg;
+      P.segs = cvLines(P.runs); const top = Math.max(...P.segs.map(s => s.top), -1e9), bot = Math.min(...P.segs.map(s => s.bot), 1e9);
+      P.edge = P.segs.filter(s => s.top >= top - s.size * 1.6 || s.bot <= bot + s.size * 1.6); pages.push(P);
+    }
+  } catch (e) { doc.destroy(); throw e; }
+  return { doc, pages };
+}
+async function cvDocx(d, o, onStep) {
+  const { doc, pages } = await cvRead(d, onStep, o.pages); await loadScript(JSZIP_URL); const z = new JSZip(); const media = [];
+  try {
+    const running = o.dropRunning && pages.length > 1 ? cvRunning(pages) : () => false;
+    const body = median(pages.flatMap(P => P.segs.flatMap(s => s.runs.map(r => r.size)))) || 11;
+    const sizes = [...new Set(pages.flatMap(P => P.segs.map(s => Math.round(s.size))).filter(s => s >= body * 1.2))].sort((a, b) => b - a);
+    const hLevel = sz => { const k = sizes.indexOf(Math.round(sz)); return sz >= body * 1.2 && k >= 0 ? Math.min(3, k + 1) : 0; };
+    let xml = ''; const X = s => xe(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    let pend = null; const flush = () => { if (!pend) return; const { p, h } = pend; pend = null; const allB = p.runs.every(r => r.font.bold || !r.text.trim());
+          const sty = h ? `<w:pStyle w:val="Heading${h}"/>` : '';
+          const ppr = `<w:pPr>${sty}${p.rtl ? '<w:bidi/>' : ''}${p.center ? '<w:jc w:val="center"/>' : ''}${p.list ? '<w:ind w:left="360" w:hanging="360"/>' : ''}</w:pPr>`;
+          // merge neighbouring runs with the same formatting
+          const merged = []; for (const r of p.runs) { const t = r.join + r.text; const L = merged[merged.length - 1]; if (L && L.font.family === r.font.family && L.font.bold === r.font.bold && L.font.italic === r.font.italic && Math.abs(L.size - r.size) < .6) L.text += t; else merged.push({ ...r, text: merged.length ? t : t.trimStart() }); }
+          xml += `<w:p>${ppr}${merged.map(r => h ? run({ ...r, font: { ...r.font, bold: allB ? false : r.font.bold } }, r.size) : run(r, o.keepSizes ? r.size : (Math.abs(r.size - body) < 1.2 ? body : r.size))).join('')}</w:p>`;
+    };
+
+    const run = (r, sz) => `<w:r><w:rPr><w:rFonts w:ascii="${X(r.font.family)}" w:hAnsi="${X(r.font.family)}" w:cs="${X(r.font.family)}"/>${r.font.bold ? '<w:b/>' : ''}${r.font.italic ? '<w:i/>' : ''}<w:sz w:val="${Math.round(sz * 2)}"/><w:szCs w:val="${Math.round(sz * 2)}"/></w:rPr><w:t xml:space="preserve">${X(r.text)}</w:t></w:r>`;
+    for (const [n, P] of pages.entries()) {
+      onStep(`Writing page ${n + 1} of ${pages.length}…`);
+      const segs = P.segs.filter(s => !(P.edge.includes(s) && running(s)));
+      const pw = P.view[2] - P.view[0], ph = P.view[3] - P.view[1];
+      const textArea = segs.reduce((a, s) => a + (s.x1 - s.x0) * s.size, 0);
+      const pics = o.images ? P.imgs.filter(b => !((b[2] - b[0]) * (b[3] - b[1]) > pw * ph * .6 && textArea > 0)).slice(0, 40) : [];
+      const tables = o.tables ? cvFindTables(segs, body) : []; const inTable = new Set(tables.flatMap(t => [...t.segs]));
+      const rest = segs.filter(s => !inTable.has(s));
+      const blocks = rest.length ? cvXYCut(rest) : []; const items = [];
+      for (const B of blocks) items.push({ y: Math.max(...B.map(s => s.top)), B });
+      for (const b of pics) items.push({ y: b[3], pic: b });
+      for (const t of tables) items.push({ y: t.y, T: t.T, extra: 1 });
+      items.sort((p, q) => { const pb = p.B, qb = q.B; if (pb && qb) return blocks.indexOf(pb) - blocks.indexOf(qb); return q.y - p.y; });
+      // keep blocks in XY-cut order, then slot pictures in by height
+      const ord = items.filter(x => x.B); for (const pi of items.filter(x => x.pic || x.extra)) { let k = ord.findIndex(x => x.y < pi.y); ord.splice(k < 0 ? ord.length : k, 0, pi); }
+      let canvas = null;
+      for (const it of ord) {
+        if (it.pic) {
+          if (!canvas) { const vp = P.pg.getViewport({ scale: 2 }); canvas = el('canvas'); canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height); const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height); await P.pg.render({ canvasContext: g, viewport: vp }).promise; canvas.vp = vp; }
+          const [x0, y0, x1, y1] = it.pic; const a = canvas.vp.convertToViewportPoint(x0, y1), b = canvas.vp.convertToViewportPoint(x1, y0);
+          const cx = Math.max(0, Math.min(a[0], b[0])), cy = Math.max(0, Math.min(a[1], b[1])), cw = Math.min(canvas.width - cx, Math.abs(b[0] - a[0])), ch = Math.min(canvas.height - cy, Math.abs(b[1] - a[1])); if (cw < 8 || ch < 8) continue;
+          const c2 = el('canvas'); c2.width = Math.round(cw); c2.height = Math.round(ch); c2.getContext('2d').drawImage(canvas, cx, cy, cw, ch, 0, 0, c2.width, c2.height);
+          const name = `image${media.length + 1}.${o.jpeg ? 'jpeg' : 'png'}`; media.push([name, await canvasBytes(c2, o.jpeg ? 'image/jpeg' : 'image/png', .88)]);
+          const wE = Math.round(Math.min(x1 - x0, 450) * 12700), hE = Math.round(wE * (ch / cw)); const id = media.length;
+          flush(); xml += `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${wE}" cy="${hE}"/><wp:docPr id="${id}" name="Picture ${id}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="${name}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImg${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${wE}" cy="${hE}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+          continue;
+        }
+        if (it.T) {
+          const T = it.T; const total = T.cols.length;
+          flush(); xml += `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(b => `<w:${b} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join('')}</w:tblBorders></w:tblPr><w:tblGrid>${T.cols.map(() => `<w:gridCol w:w="${Math.round(9000 / total)}"/>`).join('')}</w:tblGrid>`;
+          T.grid.forEach((g, ri) => { xml += `<w:tr>${g.map(c => `<w:tc><w:tcPr><w:tcW w:w="${Math.round(5000 / total)}" w:type="pct"/></w:tcPr><w:p><w:r><w:rPr>${ri === 0 && T.rows[0].cells.every(s => s.runs.every(r => r.font.bold)) ? '<w:b/>' : ''}<w:sz w:val="${Math.round(Math.min(body, 11) * 2)}"/></w:rPr><w:t xml:space="preserve">${X(c)}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`; });
+          xml += '</w:tbl><w:p/>'; continue;
+        }
+        for (const p of cvParas(it.B, body)) {
+          if (!p.text) continue; const h = o.headings ? hLevel(p.size) : 0;
+          // a paragraph that runs on into the next column or page is joined back together
+          if (pend && !h && !pend.h && !p.list && !/[.!?:;"”»)\]]\s*$/.test(pend.p.text) && /^[a-zà-ÿ]/.test(p.text) && Math.abs(p.size - pend.p.size) < 1) {
+            const hy = /[A-Za-zÀ-ÿ][-‐]$/.test(pend.p.text); if (hy) { const L = pend.p.runs[pend.p.runs.length - 1]; L.text = L.text.replace(/[-‐]\s*$/, ''); }
+            p.runs[0] = { ...p.runs[0], join: hy ? '' : ' ' }; pend.p.runs.push(...p.runs); pend.p.text += (hy ? '' : ' ') + p.text; continue;
+          }
+          flush(); pend = { p, h };
+        }
+      }
+      if (o.pageBreaks && n < pages.length - 1) flush(), xml += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+      P.pg.cleanup();
+    }
+    flush(); const P0 = pages[0]; const pw = P0 ? P0.view[2] - P0.view[0] : 595, ph = P0 ? P0.view[3] - P0.view[1] : 842; const tw = v => Math.round(v * 20);
+    const sect = `<w:sectPr><w:pgSz w:w="${tw(pw)}" w:h="${tw(ph)}"${pw > ph ? ' w:orient="landscape"' : ''}/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>`;
+    const fam = (() => { const c = new Map(); for (const P of pages) for (const r of P.runs) c.set(r.font.family, (c.get(r.font.family) || 0) + r.text.length); return [...c].sort((a, b) => b[1] - a[1])[0]?.[0] || 'Calibri'; })();
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    z.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`);
+    z.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`);
+    z.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xe(baseName(d))}</dc:title><dc:creator>${xe(S.author && S.author !== 'Me' ? S.author : '')}</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString().replace(/\.\d+Z/, 'Z')}</dcterms:created></cp:coreProperties>`);
+    z.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${media.map(([n], k) => `<Relationship Id="rImg${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${n}"/>`).join('')}</Relationships>`);
+    for (const [n, b] of media) z.file('word/media/' + n, b);
+    const hs = (k, sz) => `<w:style w:type="paragraph" w:styleId="Heading${k}"><w:name w:val="heading ${k}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${360 - k * 60}" w:after="120"/><w:outlineLvl w:val="${k - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr></w:style>`;
+    z.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${xe(fam)}" w:hAnsi="${xe(fam)}" w:cs="${xe(fam)}"/><w:sz w:val="${Math.round(body * 2)}"/><w:szCs w:val="${Math.round(body * 2)}"/><w:lang w:val="${xe((navigator.language || 'en-US'))}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>${hs(1, Math.round(Math.max(body * 1.8, 28)))}${hs(2, Math.round(Math.max(body * 1.5, 24)))}${hs(3, Math.round(Math.max(body * 1.25, 22)))}<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`);
+    z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${xml || '<w:p/>'}${sect}</w:body></w:document>`);
+    const noText = pages.filter(P => !P.runs.length).map(P => P.i + 1);
+    return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), noText, pictures: media.length };
+  } finally { doc.destroy(); }
+}
+// Decimal comma (1.234,56) or decimal point (1,234.56)? Decided once per file from the numbers in it.
+function cvNumStyle(texts) { let eu = 0, us = 0; for (const t of texts) { if (/\d,\d{1,2}(?!\d)/.test(t) || /\d\.\d{3}\.\d{3}/.test(t) || /\d\.\d{3},/.test(t)) eu++; if (/\d\.\d{1,2}(?!\d)/.test(t) || /\d,\d{3},\d{3}/.test(t) || /\d,\d{3}\./.test(t)) us++; } return eu > us ? 'eu' : us > eu ? 'us' : (/^(pt|es|fr|de|it|nl|ru|pl|tr|da|sv|nb|fi|cs|ro|id)/i.test(navigator.language || '') ? 'eu' : 'us'); }
+function cvNumber(s, style = 'us') {
+  const t = s.trim().replace(/\s+/g, ''); if (!/^[-+(]?[$€£R¥]*\$?[-+]?\d[\d.,']*%?\)?$/.test(t)) return null;
+  let v = t.replace(/^\((.*)\)$/, '-$1').replace(/[$€£¥]|R\$/g, ''); const pct = v.endsWith('%'); v = v.replace('%', '').replace(/'/g, '');
+  v = style === 'eu' ? v.replace(/\./g, '').replace(',', '.') : v.replace(/,/g, '');
+  if (/^[-+]?\d+(\.\d+)?$/.test(v) && !/^0\d/.test(v.replace(/^[-+]/, ''))) { const n = parseFloat(v); return pct ? n / 100 : n; }
+  return null;
+}
+async function cvXlsx(d, o, onStep) {
+  const { doc, pages } = await cvRead(d, onStep, o.pages); await loadScript(JSZIP_URL); const z = new JSZip();
+  try {
+    const sheets = []; const all = [];
+    for (const P of pages) {
+      const segs = P.segs; if (!segs.length) { if (!o.oneSheet) sheets.push({ name: 'Page ' + (P.i + 1), rows: [['(no text on this page: run OCR first)']] }); continue; }
+      const body = median(segs.map(s => s.size)) || 10; const cols = cvColumns(segs.map(s => s.x0), body * 1.2);
+      const rows = []; for (const s of segs.slice().sort((p, q) => q.y - p.y || p.x0 - q.x0)) { const r = rows[rows.length - 1]; if (r && Math.abs(r.y - s.y) < s.size * .5) r.cells.push(s); else rows.push({ y: s.y, cells: [s] }); }
+      const grid = rows.map(r => { const g = []; for (const c of r.cells) { let k = 0; for (let j = 0; j < cols.length; j++) if (c.x0 >= cols[j] - 3) k = j; g[k] = (g[k] ? g[k] + ' ' : '') + c.text; } return g; });
+      if (o.oneSheet) { if (all.length) all.push([]); all.push(...grid); } else sheets.push({ name: 'Page ' + (P.i + 1), rows: grid });
+      P.pg.cleanup();
+    }
+    if (o.oneSheet) sheets.push({ name: 'All pages', rows: all });
+    const colName = k => { let s = ''; k++; while (k) { const m = (k - 1) % 26; s = String.fromCharCode(65 + m) + s; k = Math.floor((k - 1) / 26); } return s; };
+    const X = s => xe(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    const style = cvNumStyle(sheets.flatMap(s => s.rows.flat()).filter(Boolean));
+    sheets.forEach((sh, k) => {
+      const width = []; let x = '';
+      sh.rows.forEach((r, ri) => { x += `<row r="${ri + 1}">`; for (let ci = 0; ci < r.length; ci++) { const v = r[ci]; if (v == null || v === '') continue; width[ci] = Math.max(width[ci] || 8, Math.min(60, String(v).length + 2)); const ref = colName(ci) + (ri + 1); const n = o.numbers ? cvNumber(String(v), style) : null; x += n !== null ? `<c r="${ref}"${/%\s*$/.test(v) ? ' s="1"' : ''}><v>${n}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${X(v)}</t></is></c>`; } x += '</row>'; });
+      z.file(`xl/worksheets/sheet${k + 1}.xml`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${width.length ? `<cols>${width.map((w, ci) => w ? `<col min="${ci + 1}" max="${ci + 1}" width="${w}" customWidth="1"/>` : '').join('')}</cols>` : ''}<sheetData>${x}</sheetData></worksheet>`);
+    });
+    z.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, k) => `<Override PartName="/xl/worksheets/sheet${k + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`);
+    z.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`);
+    z.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, k) => `<sheet name="${xe(s.name.slice(0, 31))}" sheetId="${k + 1}" r:id="rS${k + 1}"/>`).join('')}</sheets></workbook>`);
+    z.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, k) => `<Relationship Id="rS${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${k + 1}.xml"/>`).join('')}<Relationship Id="rSt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
+    z.file('xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="10" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`);
+    return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), noText: pages.filter(P => !P.runs.length).map(P => P.i + 1) };
+  } finally { doc.destroy(); }
+}
+async function cvDialog(kind) {
+  const d = cur(); if (!d) return; const word = kind === 'docx'; const last = pref.get('cv', {});
+  const ck = (id, label, on) => `<label class="chk"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
+  const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  body.innerHTML = `<div class="field"><label for="cvPg">Pages</label><input id="cvPg" class="inp" placeholder="All ${d.info.length} pages, or e.g. 1-5, 8"></div>` + (word
+    ? ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvRun', 'Leave out running headers and page numbers', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
+    : ck('cvOne', 'Everything on one sheet (otherwise one sheet per page)', last.oneSheet ?? false) + ck('cvNum', 'Store numbers as numbers (1.234,56 and 1,234.56 both understood)', last.numbers ?? true))
+    + `<p class="hint" style="margin:0">${word ? 'Makes an editable document that flows, like ABBYY and Acrobat do: paragraphs are joined across lines and columns, so it will not look exactly like the PDF.' : 'Columns are found from where text lines up on each page.'} Scanned pages need OCR first.</p>`;
+  const r = await modal({ title: word ? 'Convert to Word' : 'Convert to Excel', body, actions: [{ label: 'Cancel', value: null }, { label: 'Convert', primary: true, value: 'ok' }] });
+  if (!r) return;
+  const pages = cvRange($('#cvPg', body).value, d.info.length); if (!pages.length) { toast('No pages in that range'); return; }
+  const o = word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
+  pref.set('cv', { ...last, ...o }); o.pages = pages;
+  busy('Converting…');
+  try {
+    const res = await (word ? cvDocx : cvXlsx)(d, o, m => busy(m)); unbusy();
+    await saveFile(baseName(d) + (word ? '.docx' : '.xlsx'), res.blob);
+    if (res.noText.length) toast(`${plural(res.noText.length, 'page')} had no text (${res.noText.slice(0, 8).join(', ')}${res.noText.length > 8 ? '…' : ''}). Run OCR on scans first.`, 7000);
+  } catch (e) { console.error(e); toast('Conversion failed: ' + (e.message || e), 7000); } finally { unbusy(); }
+}
+function cvRange(s, n) { s = String(s || '').trim(); if (!s) return [...Array(n).keys()]; const out = new Set(); for (const part of s.split(/[,;\s]+/)) { const m = /^(\d+)?\s*-\s*(\d+)?$/.exec(part); if (m) { const a = +(m[1] || 1), b = +(m[2] || n); for (let k = Math.max(1, a); k <= Math.min(n, b); k++) out.add(k - 1); } else if (/^\d+$/.test(part) && +part >= 1 && +part <= n) out.add(+part - 1); } return [...out].sort((a, b) => a - b); }
+
 /* ================= signature ================= */
 async function signatureDialog() {
   const body = el('div'); body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
