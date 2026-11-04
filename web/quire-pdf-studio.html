@@ -9453,7 +9453,7 @@ async function a11yScan(d) {
   if (tagged) for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/StructElem' && String(o.get(N('S'))) === '/Figure') { figs++; if (!o.get(N('Alt')) && !o.get(N('ActualText'))) figsNoAlt++; }
   // text: image-only pages, unreadable characters, language guess
   let noText = 0, bad = 0, sample = '';
-  for (let i = 0; i < d.info.length; i++) { const tc = await pageText(d, i); const s = tc.items.map(it => it.str).join(' '); if (!s.trim()) noText++; if (/[�-]/.test(s)) bad++; if (sample.length < 20000) sample += s + ' '; }
+  for (let i = 0; i < d.info.length; i++) { const tc = await pageText(d, i); const s = tc.items.map(it => it.str).join(' '); if (!s.trim()) noText++; if (/[\uFFFD\uE000-\uF8FF]/.test(s)) bad++; if (sample.length < 20000) sample += s + ' '; }
   const guess = a11yLang(sample);
   const noEmb = new Set(); for (const [, o] of ctx.enumerateIndirectObjects()) if (o instanceof L.PDFDict && String(o.get(N('Type'))) === '/Font' && !/CIDFontType/.test(String(o.get(N('Subtype'))))) { try { if (!pdfaFontEmbedded(pdf, o)) noEmb.add(String(o.get(N('BaseFont')) || '?').replace(/^\/([A-Z]{6}\+)?/, '')); } catch {} }
   const C = [];
