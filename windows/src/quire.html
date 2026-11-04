@@ -9214,6 +9214,7 @@ async function cvRead(d, onStep, pagesWanted) {
   return { doc, pages };
 }
 async function cvDocx(d, o, onStep) {
+  if (o.exact) o = { ...o, dropRunning: false };
   const { doc, pages } = await cvRead(d, onStep, o.pages); await loadScript(JSZIP_URL); const z = new JSZip(); const media = [];
   try {
     const running = o.dropRunning && pages.length > 1 ? cvRunning(pages) : () => false;
@@ -9243,8 +9244,50 @@ async function cvDocx(d, o, onStep) {
     };
 
     const run = (r, sz) => `<w:r><w:rPr><w:rFonts w:ascii="${X(r.font.family)}" w:hAnsi="${X(r.font.family)}" w:cs="${X(r.font.family)}"/>${r.font.bold ? '<w:b/>' : ''}${r.font.italic ? '<w:i/>' : ''}<w:sz w:val="${Math.round(sz * 2)}"/><w:szCs w:val="${Math.round(sz * 2)}"/>${r.sup ? '<w:vertAlign w:val="superscript"/>' : ''}</w:rPr><w:t xml:space="preserve">${X(r.text)}</w:t></w:r>`;
+    // Exact copy (as ABBYY's "exact copy"): each page is its own section; what is drawn on the page (rules, tints,
+    // boxes, pictures) is one picture behind the text, and each block of text is a frame at its place on the page.
+    const tw0 = v => Math.round(v * 20), E = v => Math.round(v * 12700);
+    const pgSect = P => { const w = P.view[2] - P.view[0], h = P.view[3] - P.view[1]; return `<w:pgSz w:w="${tw0(w)}" w:h="${tw0(h)}"${w > h ? ' w:orient="landscape"' : ''}/><w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144" w:header="0" w:footer="0" w:gutter="0"/>`; };
+    const tiny = '<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>';
+    const exactPage = async (P, n) => {
+      const pw = P.view[2] - P.view[0], ph = P.view[3] - P.view[1];
+      const scan = P.runs.length > 0 && P.runs.every(r => r.font && r.font.name === 'GlyphLessFont');
+      let anchor = '';
+      if (o.images !== false && !scan) {
+        const sc = Math.min(2, 3000 / Math.max(pw, ph)); const vp = P.pg.getViewport({ scale: sc }); const c = el('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+        const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillText = () => {}; g.strokeText = () => {};
+        await P.pg.render({ canvasContext: g, viewport: vp }).promise;
+        const D = g.getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let k = 0; k < D.length; k += 16) if (D[k] + D[k + 1] + D[k + 2] < 720) ink++;
+        if (ink > D.length / 16 * .001) {
+          const name = `page${media.length + 1}.jpeg`; media.push([name, await canvasBytes(c, 'image/jpeg', .85)]); const id = media.length;
+          anchor = `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="1" locked="1" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="${E(pw)}" cy="${E(ph)}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="${id}" name="Page ${P.i + 1}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="${name}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImg${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${E(pw)}" cy="${E(ph)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+        }
+        c.width = c.height = 0;
+      }
+      xml += `<w:p><w:pPr>${tiny}</w:pPr>${anchor}</w:p>`;
+      for (const B of P.segs.length ? cvXYCut(P.segs.slice()) : []) {
+        const x0 = Math.min(...B.map(s => s.x0)), x1 = Math.max(...B.map(s => s.x1)), top = Math.max(...B.map(s => s.top));
+        // a little wider than the text, so a substitute font a shade wider does not push words onto a new line
+        const ps = cvParas(B, body, { left: x0, right: x1 }), just = ps.some(p => p.align === 'both');
+        const fw = Math.min(P.view[2] - x0, just ? x1 - x0 + 1.5 : (x1 - x0) * 1.08 + 6); // justified text fills the width exactly, as on the page
+        const frame = `<w:framePr w:w="${tw0(fw)}" w:x="${tw0(x0 - P.view[0])}" w:y="${tw0(P.view[3] - top)}" w:hAnchor="page" w:vAnchor="page" w:wrap="around"/>`;
+        let prevY = null;
+        for (const p of ps) {
+          if (!p.text) continue;
+          const lh = p.lineGap || p.size * 1.17, before = prevY == null ? 0 : Math.max(0, prevY - p.segs[0].y - lh); prevY = p.segs[p.segs.length - 1].y;
+          const ind = p.indent > 1 || Math.abs(p.first) > 1 ? `<w:ind w:left="${tw0(Math.max(0, p.indent))}"${p.first > 0 ? ` w:firstLine="${tw0(p.first)}"` : p.first < 0 ? ` w:hanging="${tw0(-p.first)}"` : ''}/>` : '';
+          const jc = p.align === 'center' || p.center ? 'center' : p.align === 'right' ? 'right' : p.align === 'both' ? 'both' : '';
+          // the page's own line breaks are kept (as ABBYY's exact copy does), so every line stays where it was
+          const merged = []; p.segs.forEach((sg, k) => sg.runs.forEach((r, j) => { const br = j === 0 && k > 0, t = (j > 0 && cvGap(sg.runs[j - 1], r) > sg.size * .18 ? ' ' : '') + r.text; const L = merged[merged.length - 1];
+            if (L && !br && L.font.family === r.font.family && L.font.bold === r.font.bold && L.font.italic === r.font.italic && Math.abs(L.size - r.size) < .6) L.text += t; else merged.push({ ...r, text: t, br }); }));
+          xml += `<w:p><w:pPr>${frame}${p.rtl ? '<w:bidi/>' : ''}<w:spacing w:before="${tw0(before)}" w:after="0" w:line="${tw0(lh)}" w:lineRule="exact"/>${ind}${jc ? `<w:jc w:val="${jc}"/>` : ''}</w:pPr>${merged.map(r => (r.br ? '<w:r><w:br/></w:r>' : '') + run(r, r.size)).join('')}</w:p>`;
+        }
+      }
+      if (n < pages.length - 1) xml += `<w:p><w:pPr>${tiny}<w:sectPr>${pgSect(P)}</w:sectPr></w:pPr></w:p>`;
+    };
     for (const [n, P] of pages.entries()) {
       onStep(`Writing page ${n + 1} of ${pages.length}…`);
+      if (o.exact) { await exactPage(P, n); P.pg.cleanup(); continue; }
       const segs = P.segs.filter(s => !(P.edge.includes(s) && running(s)));
       const pw = P.view[2] - P.view[0], ph = P.view[3] - P.view[1];
       const textArea = segs.reduce((a, s) => a + (s.x1 - s.x0) * s.size, 0);
@@ -9318,7 +9361,7 @@ async function cvDocx(d, o, onStep) {
     for (const [n, b] of media) z.file('word/media/' + n, b);
     const hs = (k, sz) => `<w:style w:type="paragraph" w:styleId="Heading${k}"><w:name w:val="heading ${k}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${360 - k * 60}" w:after="120"/><w:outlineLvl w:val="${k - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr></w:style>`;
     z.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${xe(fam)}" w:hAnsi="${xe(fam)}" w:cs="${xe(fam)}"/><w:sz w:val="${Math.round(body * 2)}"/><w:szCs w:val="${Math.round(body * 2)}"/><w:lang w:val="${xe((navigator.language || 'en-US'))}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>${hs(1, Math.round(Math.max(body * 1.8, 28)))}${hs(2, Math.round(Math.max(body * 1.5, 24)))}${hs(3, Math.round(Math.max(body * 1.25, 22)))}<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`);
-    z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${xml || '<w:p/>'}${sect2}</w:body></w:document>`);
+    z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${xml || '<w:p/>'}${o.exact ? `<w:sectPr>${pgSect(pages[pages.length - 1] || { view: [0, 0, 595, 842] })}</w:sectPr>` : sect2}</w:body></w:document>`);
     const noText = pages.filter(P => !P.runs.length).map(P => P.i + 1);
     return { blob: await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), noText, pictures: media.length };
   } finally { doc.destroy(); }
@@ -9439,13 +9482,13 @@ async function cvDialog(kind) {
   body.innerHTML = `<div class="field"><label for="cvPg">Pages</label><input id="cvPg" class="inp" placeholder="All ${d.info.length} pages, or e.g. 1-5, 8"></div>` + (ppt
     ? ck('cvBg', 'Keep the look of each page: its drawings and pictures sit behind the editable text', last.background ?? true) + `<p class="hint" style="margin:0">One slide per page. Text becomes text boxes you can edit, in the page's fonts, sizes and alignment. Scanned pages keep the scan, with their OCR text on top, invisible but searchable and editable.</p>`
     : word
-    ? ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvLay', 'Keep the page layout (margins, indents, spacing, alignment, columns)', last.layout ?? true) + ck('cvRun', 'Move running headers and page numbers into the Word header and footer', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
+    ? `<div class="field"><label for="cvMode">Layout</label><select id="cvMode" class="inp"><option value="flow">Flowing text, easy to edit (books, reports, letters)</option><option value="exact" ${last.exact ? 'selected' : ''}>Exact copy: text boxes where the text sits (magazines, leaflets, forms)</option></select></div>` + ck('cvHd', 'Headings from larger text', last.headings ?? true) + ck('cvTb', 'Tables from text in columns', last.tables ?? true) + ck('cvIm', 'Pictures', last.images ?? true) + ck('cvLay', 'Keep the page layout (margins, indents, spacing, alignment, columns)', last.layout ?? true) + ck('cvRun', 'Move running headers and page numbers into the Word header and footer', last.dropRunning ?? true) + ck('cvBr', 'Start each PDF page on a new page', last.pageBreaks ?? false)
     : ck('cvOne', 'Everything on one sheet (otherwise one sheet per page)', last.oneSheet ?? false) + ck('cvNum', 'Store numbers as numbers (1.234,56 and 1,234.56 both understood)', last.numbers ?? true))
     + (ppt ? '' : `<p class="hint" style="margin:0">${word ? 'Makes an editable document that flows, like ABBYY and Acrobat do: paragraphs are joined across lines and columns, so it will not look exactly like the PDF.' : 'Columns are found from where text lines up on each page.'} Scanned pages need OCR first.</p>`);
   const r = await modal({ title: word ? 'Convert to Word' : ppt ? 'Convert to PowerPoint' : 'Convert to Excel', body, actions: [{ label: 'Cancel', value: null }, { label: 'Convert', primary: true, value: 'ok' }] });
   if (!r) return;
   const pages = cvRange($('#cvPg', body).value, d.info.length); if (!pages.length) { toast('No pages in that range'); return; }
-  const o = ppt ? { background: $('#cvBg', body).checked, lang: navigator.language || 'en' } : word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, layout: $('#cvLay', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
+  const o = ppt ? { background: $('#cvBg', body).checked, lang: navigator.language || 'en' } : word ? { headings: $('#cvHd', body).checked, tables: $('#cvTb', body).checked, images: $('#cvIm', body).checked, layout: $('#cvLay', body).checked, dropRunning: $('#cvRun', body).checked, pageBreaks: $('#cvBr', body).checked, exact: $('#cvMode', body).value === 'exact' } : { oneSheet: $('#cvOne', body).checked, numbers: $('#cvNum', body).checked };
   pref.set('cv', { ...last, ...o }); o.pages = pages;
   busy('Converting…');
   try {
@@ -9820,7 +9863,7 @@ async function htrImport(files) {
   HTR.have = null; HTR.sess.clear(); await htrLoad(); return ids;
 }
 // how far above and below the baseline a line is cut, as a share of the gap to the next line
-const HTR_K = { top: .8, bot: .35, thr: .2, sep: .35, mean: .3 };
+const HTR_K = { top: .8, bot: .35, thr: .2, sep: .35, mean: .3, minConf: .5 };
 const htrSig = x => 1 / (1 + Math.exp(-x));
 // Baselines from the line finder's heat map, read column by column: in each column the ridges of the baseline map are line
 // candidates, and each is linked to the line it continues (within a cell and a half up or down, at most three columns back).
@@ -9887,7 +9930,7 @@ async function htrPage(d, i, readerId, msg) {
   const gaps = []; for (const l of lines) { let up = Infinity, dn = Infinity; for (const o of lines) { if (o === l || o.x1 < l.x0 || o.x0 > l.x1) continue; const x = (Math.max(l.x0, o.x0) + Math.min(l.x1, o.x1)) / 2, dy = l.yAt(x) - o.yAt(x); if (dy > 1 && dy < up) up = dy; if (dy < -1 && -dy < dn) dn = -dy; } l.up = up; l.dn = dn; if (up < Infinity) gaps.push(up); }
   gaps.sort((a, b) => a - b); const med = (gaps[gaps.length >> 1] || 12) * fy;
   lines = htrOrder(lines);
-  const words = [], text = [], mh = RM.height, pad = RM.pad ?? 16;
+  const words = [], text = [], lconf = [], mh = RM.height, pad = RM.pad ?? 16;
   for (let n = 0; n < lines.length; n++) {
     const l = lines[n]; if (msg) msg(n, lines.length);
     const up = Math.min(isFinite(l.up) ? l.up * fy : med, med * 1.4), dn = Math.min(isFinite(l.dn) ? l.dn * fy : med, med * 1.4);
@@ -9903,13 +9946,15 @@ async function htrPage(d, i, readerId, msg) {
     for (let y = 0; y < mh; y++) for (let x = 0; x < lw; x++) { const v = 1 - ld[(y * lw + x) * 4] / 255; for (let q = 0; q < rc; q++) li[q * mh * IW + y * IW + x + pad] = v; }
     // 3. read it
     const ro = await rd.s.run({ [rd.s.inputNames[0]]: new ort.Tensor('float32', li, [1, rc, mh, IW]) }); const pr = ro[rd.s.outputNames[0]]; const [, C, T] = pr.dims;
-    const chars = htrDecode(RM, pr.data, C, T); const s = chars.map(x => x.c).join('').replace(/\s+/g, ' ').trim().normalize('NFC'); if (!s) continue; text.push(s);
+    const chars = htrDecode(RM, pr.data, C, T); const s = chars.map(x => x.c).join('').replace(/\s+/g, ' ').trim().normalize('NFC'); const lc = chars.reduce((a, x) => a + x.p, 0) / Math.max(1, chars.length);
+    // ink showing through from the other side and specks read as a line come out unsure and nearly letterless: drop them
+    if (!s || lc < HTR_K.minConf || (s.match(/\p{L}/gu) || []).length < 2) continue; text.push(s); lconf.push(lc);
     const toX = t => xa + Math.max(0, Math.min(ws - 1, ((t + .5) * IW / T - pad) * hs / mh));
     let w = null; const flush = () => { if (!w) return; const x0 = toX(w.t0) - 1, x1 = toX(w.t1 + 1) + 1, h = top * .75; const o = vp.convertToPdfPoint(x0, yb(x0)), e = vp.convertToPdfPoint(x1, yb(x1)), u = vp.convertToPdfPoint(x0, yb(x0) - h); words.push({ text: w.t.normalize('NFC'), confidence: Math.round(w.p / w.n * 100), q: [o, e, u] }); w = null; };
     for (const x of chars) { if (/\s/.test(x.c)) { flush(); continue; } if (!w) w = { t: '', t0: x.t0, t1: x.t1, p: 0, n: 0 }; w.t += x.c; w.t1 = x.t1; w.p += x.p; w.n++; }
     flush();
   }
-  return { i, vp, words, lines: text };
+  return { i, vp, words, lines: text, conf: lconf };
 }
 function htrPanelHTML(O) {
   const rs = htrReaders(); if (!rs.some(r => r.id === O.reader)) O.reader = rs[0].id; const r = rs.find(x => x.id === O.reader);

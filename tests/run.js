@@ -113,8 +113,13 @@ TESTS.excel = async () => {
 };
 
 // --- Word: layout kept (alignment, indents, header/footer, footnote marks, columns), and a scanned page stays whole
-const docx = async (src, name) => { const p = await H.open(); await H.load(p, src); const file = out(name);
-  fs.writeFileSync(file, await b64(p, async () => { const d = cur(); return (await cvDocx(d, { headings: true, tables: true, images: true, dropRunning: true, pageBreaks: false, pages: [...d.info.keys()] }, () => {})).blob; })); return inspect(file); };
+const docx = async (src, name, extra = {}) => { const p = await H.open(); await H.load(p, src); const file = out(name);
+  fs.writeFileSync(file, await b64(p, async extra => { const d = cur(); return (await cvDocx(d, { headings: true, tables: true, images: true, dropRunning: true, pageBreaks: false, pages: [...d.info.keys()], ...extra }, () => {})).blob; }, extra)); return inspect(file); };
+// Where every word sits on the page (pdftotext -bbox), for checking that a layout was kept
+const wordBoxes = f => [...execFileSync('pdftotext', ['-bbox', f, '-']).toString().matchAll(/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="[\d.]+" yMax="[\d.]+">([^<]*)<\/word>/g)].map(m => ({ x: +m[1], y: +m[2], w: m[3] }));
+const placement = (orig, made) => { const A = wordBoxes(orig), B = wordBoxes(made); const by = new Map(); for (const b of B) (by.get(b.w) || by.set(b.w, []).get(b.w)).push(b);
+  const d = A.map(a => Math.min(...(by.get(a.w) || [{ x: 1e4, y: 1e4 }]).map(b => Math.hypot(a.x - b.x, a.y - b.y)))).sort((p, q) => p - q);
+  return { words: A.length, found: d.filter(v => v < 1e3).length, median: d[d.length >> 1], p90: d[Math.floor(d.length * .9)] }; };
 TESTS.word = async () => {
   const r = await docx(fx('report.pdf'), 'report.docx');
   check('report: justified paragraphs', r.justified >= 10, r.justified);
@@ -127,6 +132,15 @@ TESTS.word = async () => {
   check('report: page number became a PAGE field', r.footerPageField);
   check('report: page margins from the page (about 90 pt)', Math.abs(r.leftMargin - 90) < 12, r.leftMargin);
   check('report: all text there', lcs(pdftotext(fx('report.pdf')).replace(/Annual Report of the Library Society|^\d+$/gm, ''), r.text) > 98);
+  // Exact copy of a magazine page: every word within a few points of where it was, drawings kept behind the text
+  for (const [name, exact] of [['magazine-flow.docx', false], ['magazine.docx', true]]) {
+    const m = await docx(fx('magazine.pdf'), name, { exact, tables: !exact });
+    let pl = null; try { execFileSync('soffice', ['--headless', '--convert-to', 'pdf', '--outdir', OUT, out(name)], { timeout: 120000, stdio: 'ignore' }); pl = placement(fx('magazine.pdf'), out(name.replace(/docx$/, 'pdf'))); } catch (e) { pl = { error: String(e).slice(0, 80) }; }
+    if (!exact) { console.log(`  · flowing layout for comparison: words ${JSON.stringify(pl)}`); continue; }
+    { const want = pdftotext(fx('magazine.pdf')).split(/\s+/).filter(Boolean), have = new Set(m.text.split(/\s+/)); const got = want.filter(w => have.has(w)).length / want.length * 100; check('magazine (exact copy): all the words there', got > 99, got.toFixed(1) + '%'); }
+    check('magazine (exact copy): words where they were on the page (median under 4 pt, 90% under 12 pt)', pl.median < 4 && pl.p90 < 12, JSON.stringify(pl));
+    check('magazine (exact copy): one page, banner and picture kept behind the text', fs.existsSync(out('magazine.pdf')) && execFileSync('pdfinfo', [out('magazine.pdf')]).toString().match(/Pages:\s+(\d+)/)[1] === '1' && execFileSync('pdfimages', ['-list', out('magazine.pdf')]).toString().split('\n').length > 3);
+  }
   const c = await docx(fx('columns.pdf'), 'columns.docx');
   check('columns: two-column section', c.columns === 2, c.columns);
   const src = fs.existsSync(out('ocr-book.pdf')) ? out('ocr-book.pdf') : (await ocr('book.pdf')).file;
