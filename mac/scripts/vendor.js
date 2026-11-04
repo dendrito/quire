@@ -21,6 +21,8 @@ const copies = [
   ['pdfjs-dist/build/pdf.worker.min.js', 'pdfjs/pdf.worker.min.js'],
   ['pdf-lib/dist/pdf-lib.min.js', 'pdf-lib/pdf-lib.min.js'],
   ['jszip/dist/jszip.min.js', 'jszip/jszip.min.js'],
+  ['jsqr/dist/jsQR.js', 'jsqr/jsQR.js'],
+  ['qrcode-generator/qrcode.js', 'qrcode/qrcode.js'],
   ['@pdf-lib/fontkit/dist/fontkit.umd.min.js', 'fontkit/fontkit.umd.min.js'],
   ['node-forge/dist/forge.min.js', 'forge/forge.min.js'],
   ['tesseract.js/dist/tesseract.min.js', 'tesseract/tesseract.min.js'],
