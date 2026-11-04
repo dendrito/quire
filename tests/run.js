@@ -299,7 +299,7 @@ TESTS.htr = async () => {
 
 // --- Handwriting on Portuguese Inquisition trials: pages from the TraPrInq validation set (CC BY 4.0, committed by the
 // 'Inquisition reader scores' workflow), read with the default reader, TraPrInq, against the project's expert text
-const INQ = path.join(__dirname, 'fixtures', 'real', 'inq'), INQ_MAX = 25;
+const INQ = path.join(__dirname, 'fixtures', 'real', 'inq'), INQ_MAX = 24;
 TESTS.htr_inquisition = async () => {
   const pages = fs.existsSync(INQ) ? fs.readdirSync(INQ).filter(f => /\.pdf$/.test(f)).sort() : [];
   check('Inquisition test pages present', pages.length > 0, 'run the Inquisition reader scores workflow'); if (!pages.length) return;

@@ -46,7 +46,7 @@ for mid, rec in MODELS.items():
         path = model(rec)
         out = subprocess.run(['ketos', 'test', '-f', 'xml', '-m', path, *files], capture_output=True, text=True, timeout=5400)
         txt = out.stdout + out.stderr; rep = txt[txt.find('=== report'):][:600] if '=== report' in txt else txt[:2500]; print('====', mid, '\n', rep, file=sys.stderr)
-        acc = re.findall(r'([\d.]+)%\s+Accuracy', txt) or re.findall(r'[Aa]ccuracy[^\d\n]*([\d.]+)\s*%', txt); chars = re.findall(r'(\d+)\s+Characters', txt)
+        acc = re.findall(r'([\d.]+)%\s+Character Accuracy\s*$', txt, re.M) or re.findall(r'([\d.]+)%\s+Accuracy', txt) or re.findall(r'[Aa]ccuracy[^\d\n]*([\d.]+)\s*%', txt); chars = re.findall(r'(\d+)\s+Characters', txt)
         res[mid] = {'cer': round(100 - float(acc[0]), 2) if acc else None, 'chars': int(chars[0]) if chars else None}
     except Exception as e:
         res[mid] = {'error': str(e)}
