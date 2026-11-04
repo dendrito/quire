@@ -1357,7 +1357,7 @@ async function renderThumbs() {
   const items = d.info.map((inf, i) => {
     const t = el('div', 'thumb', `<canvas></canvas><span class="n">${i + 1}</span>`); t.dataset.i = i; t.draggable = true;
     const vp = inf.page.getViewport({ scale: Math.min(W / inf.vp1.width, 168 / inf.vp1.height) });
-    const c = t.querySelector('canvas'); c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px'; c.width = Math.ceil(vp.width * dpr()); c.height = Math.ceil(vp.height * dpr());
+    const c = t.querySelector('canvas'); c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px'; c.width = c.height = 0;
     t.onclick = e => {
       if (e.ctrlKey || e.metaKey) { d.sel.has(i) && d.sel.size > 1 ? d.sel.delete(i) : d.sel.add(i); }
       else if (e.shiftKey) { const a = Math.min(d.cur, i), b = Math.max(d.cur, i); d.sel = new Set(); for (let k = a; k <= b; k++) d.sel.add(k); }
@@ -1368,10 +1368,27 @@ async function renderThumbs() {
     t.ondragover = e => { if (e.dataTransfer.types.includes('text/x-quire-page')) { e.preventDefault(); t.classList.add('drop'); } };
     t.ondragleave = () => t.classList.remove('drop');
     t.ondrop = e => { const from = e.dataTransfer.getData('text/x-quire-page'); t.classList.remove('drop'); if (from !== '') { e.preventDefault(); e.stopPropagation(); movePage(+from, i); } };
-    T.append(t); return { c, vp: inf.page.getViewport({ scale: vp.scale * dpr() }), page: inf.page };
+    T.append(t); return { t, c, i, vp: inf.page.getViewport({ scale: vp.scale * dpr() }), page: inf.page, done: false };
   });
   markThumbs();
-  for (const it of items) { if (job !== thumbJob) return; try { await it.page.render({ canvasContext: it.c.getContext('2d'), viewport: it.vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise; } catch {} }
+  // Thumbnails are drawn only as they come near the visible part of the list, one at a time, nearest first, and the
+  // pictures of ones scrolled far away are let go: a 1,000-page book no longer holds 1,000 pictures in memory.
+  if (T._io) T._io.forEach(o => o.disconnect());
+  const near = new Set(); let running = false;
+  const draw = async () => {
+    if (running) return; running = true;
+    try {
+      while (job === thumbJob) {
+        const top = T.scrollTop + T.clientHeight / 2;
+        const it = [...near].filter(x => !x.done).sort((a, b) => Math.abs(a.t.offsetTop - top) - Math.abs(b.t.offsetTop - top))[0]; if (!it) break;
+        it.done = true; it.c.width = Math.ceil(it.vp.width); it.c.height = Math.ceil(it.vp.height);
+        try { await it.page.render({ canvasContext: it.c.getContext('2d'), viewport: it.vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise; } catch {}
+      }
+    } finally { running = false; }
+  };
+  const see = new IntersectionObserver(es => { if (job !== thumbJob) return; for (const e of es) { const it = items[+e.target.dataset.i]; e.isIntersecting ? near.add(it) : near.delete(it); } draw(); }, { root: T, rootMargin: '900px 0px' });
+  const drop = new IntersectionObserver(es => { for (const e of es) { const it = items[+e.target.dataset.i]; if (!e.isIntersecting) { near.delete(it); if (it.done) { it.done = false; it.c.width = it.c.height = 0; } } } }, { root: T, rootMargin: '4000px 0px' });
+  T._io = [see, drop]; for (const it of items) { see.observe(it.t); drop.observe(it.t); }
 }
 function markThumbs() { const d = cur(); if (!d) return; $$('.thumb').forEach(t => { const i = +t.dataset.i; t.classList.toggle('sel', d.sel.has(i)); t.classList.toggle('cur', i === d.cur); }); const c = $(`.thumb[data-i="${d.cur}"]`); if (c) { const T = $('#thumbs'); if (c.offsetTop < T.scrollTop || c.offsetTop + c.offsetHeight > T.scrollTop + T.clientHeight) T.scrollTop = c.offsetTop - 40; } }
 const ZOOMS = [.25, .5, .75, 1, 1.25, 1.5, 2, 3, 4];
@@ -1798,11 +1815,13 @@ async function ocrRetry(worker, c, data) {
       const ws = ln.words.filter(w => w.text.trim()); let best = null, bs = ws.reduce((s, w) => s + w.confidence, 0) / ws.length + 3;
       const b = ln.bbox, pad = Math.round((b.y1 - b.y0) * .25), x0 = Math.max(0, b.x0 - pad), y0 = Math.max(0, b.y0 - pad), cw = Math.min(c.width - x0, b.x1 - b.x0 + pad * 2), ch = Math.min(c.height - y0, b.y1 - b.y0 + pad * 2);
       if (cw < 8 || ch < 8) continue; const k = el('canvas'); k.width = cw; k.height = ch; k.getContext('2d').drawImage(c, x0, y0, cw, ch, 0, 0, cw, ch);
-      for (const v of ocrLineVariants(k)) { const { data: d2 } = await worker.recognize(v.c); const w2 = (d2.words || []).filter(w => w.text.trim()); if (!w2.length) continue;
+      // each variant is also read with Sauvola's local thresholding, which follows faint and uneven ink better than one
+      // threshold for the whole line (faded test page 60.6% -> 62.5% of words when used for whole pages; here only weak lines)
+      const vs = ocrLineVariants(k); for (const v of [...vs, ...vs.map(v => ({ ...v, sauvola: true }))]) { if (v.sauvola !== worker._sv) { await worker.setParameters({ thresholding_method: v.sauvola ? '2' : '0' }); worker._sv = !!v.sauvola; } const { data: d2 } = await worker.recognize(v.c); const w2 = (d2.words || []).filter(w => w.text.trim()); if (!w2.length) continue;
         const sc = w2.reduce((s, w) => s + w.confidence, 0) / w2.length; if (sc > bs) { bs = sc; best = w2.map(w => ({ text: w.text, confidence: w.confidence, bbox: { x0: x0 + w.bbox.x0 / v.f, x1: x0 + w.bbox.x1 / v.f, y0: y0 + w.bbox.y0 / v.f, y1: y0 + w.bbox.y1 / v.f } })); } }
       if (best) ln.words = best;
     }
-  } finally { await worker.setParameters({ tessedit_pageseg_mode: '3' }); }
+  } finally { await worker.setParameters({ tessedit_pageseg_mode: '3', thresholding_method: '0' }); worker._sv = false; }
   return data;
 }
 
@@ -9976,14 +9995,19 @@ async function htrFile(id, ext, onp) {
   throw new Error(`Could not download the ${id} model (${err && err.message || err})`);
 }
 async function htrSession(id, onp) {
-  if (HTR.sess.has(id)) return HTR.sess.get(id);
+  if (HTR.sess.has(id)) { const v = HTR.sess.get(id); HTR.sess.delete(id); HTR.sess.set(id, v); return v; } // most recently used last
   if (!window.ort) { await loadScript(HTR_ORT + 'ort.wasm.min.js'); }
   ort.env.wasm.wasmPaths = HTR_ORT; ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
   const meta = JSON.parse(await htrFile(id, '.json')); const bytes = await htrFile(id, '.onnx', onp);
   const s = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
   if (meta.c2l) { meta.l2c = new Map(); meta.lens = new Set(); for (const [ch, ls] of Object.entries(meta.c2l)) { meta.l2c.set(ls.join(','), ch); meta.lens.add(ls.length); } meta.lens = [...meta.lens].sort((a, b) => b - a); }
-  const v = { s, meta }; HTR.sess.set(id, v); if (HTR.have) HTR.have.add(id); return v;
+  const v = { s, meta }; HTR.sess.set(id, v); if (HTR.have) HTR.have.add(id);
+  // A reader takes 100-300 MB once loaded. Keep the line finder and the two readers used last; let go of the rest
+  // (Automatic mode tries up to nine readers, which used to stay loaded together).
+  for (const [k, o] of HTR.sess) { if (HTR.sess.size <= HTR_KEEP) break; if (k === 'blla' || k === id) continue; HTR.sess.delete(k); try { await o.s.release(); } catch {} }
+  return v;
 }
+const HTR_KEEP = 3;
 // Import a reader converted with tools/htr/convert.py (an .onnx file and its .json), for hands the bundled readers miss.
 async function htrImport(files) {
   const by = {}; for (const f of files) { const m = f.name.match(/^(.*)\.(onnx|json)$/i); if (m) (by[m[1]] = by[m[1]] || {})[m[2].toLowerCase()] = f; }
@@ -10046,8 +10070,11 @@ function htrDecode(meta, probs, C, T) {
 // runs of digits (written left to right) kept as they are
 const htrRtl = t => [...t].reverse().join('').replace(/[0-9.,]+/g, m => [...m].reverse().join(''));
 // lim: read only that many lines, spread over the page (used to choose a reader); every line's confidence is in r.all
-async function htrPage(d, i, readerId, msg, lim) {
-  const seg = await htrSession('blla'), rd = await htrSession(readerId), SM = seg.meta, RM = rd.meta;
+// Automatic mode reads one page with several readers: the page picture and its lines are found once and reused.
+const HTR_LINES = { key: null, v: null };
+async function htrLines(d, i, seg) {
+  const K = HTR_LINES.key; if (K && K.d === d && K.i === i && K.bytes === d.bytes) return HTR_LINES.v;
+  const SM = seg.meta;
   const pg = d.info[i].page, v1 = pg.getViewport({ scale: 1 });
   const scale = Math.min(4.2, 2600 / Math.max(v1.height, 1), 4000 / Math.max(v1.width, 1));
   const { c, vp } = await renderToCanvas(d, i, scale); const W = c.width, H = c.height;
@@ -10061,7 +10088,12 @@ async function htrPage(d, i, readerId, msg, lim) {
   const so = await seg.s.run({ [seg.s.inputNames[0]]: new ort.Tensor('float32', inp, [1, chn, sh, sw]) }); const ht = so[seg.s.outputNames[0]];
   const [, , H4, W4] = ht.dims, bl = ((SM.class_mapping || {}).baselines || { default: 2 }), ch = Object.values(bl)[0];
   const fx = W / W4, fy = H / H4;
-  const ax = (SM.class_mapping || {}).aux || {}; let lines = htrBaselines(ht.data, H4, W4, ch, [ax._start_separator ?? 0, ax._end_separator ?? 1]).filter(b => (b.x1 - b.x0) * fx > H * .012);
+  const ax = (SM.class_mapping || {}).aux || {}; const lines = htrBaselines(ht.data, H4, W4, ch, [ax._start_separator ?? 0, ax._end_separator ?? 1]).filter(b => (b.x1 - b.x0) * fx > H * .012);
+  HTR_LINES.key = { d, i, bytes: d.bytes }; HTR_LINES.v = { c, vp, W, H, gray, lines, fx, fy }; return HTR_LINES.v;
+}
+async function htrPage(d, i, readerId, msg, lim) {
+  const seg = await htrSession('blla'), rd = await htrSession(readerId), SM = seg.meta, RM = rd.meta;
+  const found = await htrLines(d, i, seg); const { c, vp, W, H, gray, fx, fy } = found; let lines = found.lines;
   if (!lines.length) return { i, vp, words: [], lines: [] };
   // line height from the gap to the neighbouring lines
   const gaps = []; for (const l of lines) { let up = Infinity, dn = Infinity; for (const o of lines) { if (o === l || o.x1 < l.x0 || o.x0 > l.x1) continue; const x = (Math.max(l.x0, o.x0) + Math.min(l.x1, o.x1)) / 2, dy = l.yAt(x) - o.yAt(x); if (dy > 1 && dy < up) up = dy; if (dy < -1 && -dy < dn) dn = -dy; } l.up = up; l.dn = dn; if (up < Infinity) gaps.push(up); }
@@ -10132,6 +10164,7 @@ async function htrGo(P, d, O, ui) {
       results.push(res); done++; bar.firstChild.style.width = (done / idx.length * 100) + '%';
     }
   } catch (e) { console.error(e); stop('Handwriting recognition failed: ' + (e && e.message || e)); return; }
+  finally { HTR_LINES.key = HTR_LINES.v = null; } // the last page's picture and lines
   const n = results.reduce((s, r) => s + r.words.length, 0);
   if (!n) { stop('No writing was found on those pages.'); return; }
   const ok = await editBytes(`Handwriting read on ${plural(results.filter(r => r.words.length).length, 'page')}`, async pdf => { const font = ocrFont(pdf); for (const r of results) ocrLayer(pdf, font, r, false); }, 'Adding text layer…');

@@ -29,3 +29,8 @@ VERAPDF=$PWD/verapdf/vera node run.js          # or only some groups: node run.j
 ```
 
 `out/report.md` has the table; `out/` also keeps every file the tests wrote.
+
+## Speed and memory benchmark
+
+`node bench.js [lite|pro|full|file.html ...] [--no-ocr]` (default `lite`) measures start-up, a 300-page file (first page on screen, memory, rotate, save, thumbnail memory) and OCR speed and accuracy on the test pages, and writes `out/bench-<edition>.json`. Memory is given for the page's script and for the whole browser (Linux PSS). It needs the same setup as `run.js` and `python3 fixtures/make.py`.
+

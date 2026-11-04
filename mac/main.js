@@ -84,7 +84,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      sandbox: true
+      sandbox: true,
+      // long jobs (batch actions, OCR of a whole book) keep full speed while the window is minimised or behind others
+      backgroundThrottling: false
     }
   });
   win.loadURL('app://quire/index.html');
@@ -104,7 +106,12 @@ app.whenReady().then(() => {
     const { pathname } = new URL(request.url);
     const file = path.normalize(path.join(APP_DIR, decodeURIComponent(pathname)));
     if (!file.startsWith(APP_DIR + path.sep)) return new Response('Not found', { status: 404 });
-    return net.fetch(pathToFileURL(file).toString());
+    // Cross-origin isolation lets the handwriting reader use several processor cores (it needs SharedArrayBuffer).
+    // "credentialless" still lets the app download OCR languages and handwriting readers from other sites.
+    return net.fetch(pathToFileURL(file).toString()).then(r => {
+      const h = new Headers(r.headers); h.set('Cross-Origin-Opener-Policy', 'same-origin'); h.set('Cross-Origin-Embedder-Policy', 'credentialless');
+      return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+    });
   });
 
   // Media access is limited to the camera (for the scanner); the microphone stays off. Other permissions keep Electron's defaults.

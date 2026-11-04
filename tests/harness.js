@@ -19,6 +19,7 @@ const HTR_DIR = process.env.HTR_DIR || path.join(ROOT, 'models', 'htr');
 const type = f => /\.js$/.test(f) ? 'application/javascript' : /\.m?js$/.test(f) ? 'application/javascript' : /\.wasm$/.test(f) ? 'application/wasm' : /\.json$/.test(f) ? 'application/json' : /\.ttf$/.test(f) ? 'font/ttf' : 'application/octet-stream';
 
 let browser = null;
+// QUIRE_COI=1 serves the page cross-origin isolated, as the Mac and Windows apps do (several cores for handwriting).
 // app: the HTML to load (default web/quire-pdf-studio.html, or QUIRE_APP), e.g. one of the web/dist edition builds
 exports.open = async (app = process.env.QUIRE_APP || APP) => {
   if (!browser) browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -29,7 +30,7 @@ exports.open = async (app = process.env.QUIRE_APP || APP) => {
   p.on('pageerror', e => p.errs.push(String(e))); p.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) p.errs.push(m.text()); });
   await p.route('**/*', r => {
     const u = r.request().url();
-    if (u === 'https://quire.test/') return r.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta charset="utf-8"><style>[hidden]{display:none!important}</style></head><body>' + fs.readFileSync(app, 'utf8') + '</body></html>' });
+    if (u === 'https://quire.test/') return r.fulfill({ contentType: 'text/html', headers: process.env.QUIRE_COI ? { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'credentialless' } : {}, body: '<!doctype html><html><head><meta charset="utf-8"><style>[hidden]{display:none!important}</style></head><body>' + fs.readFileSync(app, 'utf8') + '</body></html>' });
     for (const [re, f] of CDN) if (re.test(u)) return r.fulfill({ contentType: type(f), body: fs.readFileSync(NM + f) });
     // a timestamp server for the signature tests (exports.tsa turns a request into a reply)
     if (u.startsWith('https://tsa.quire.test/')) { const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'POST' };
