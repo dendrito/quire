@@ -77,6 +77,16 @@ Index → **Library**, or Ctrl+Shift+F (`libOpen`, block "library search" above 
 - Tested in Chromium with two generated books: stemming, ranking, fuzzy, phrase, prefix, exclusions, all exports (docx opened as XML, md, bib, ris), merge with bookmarks, open at page, phone layout, Zotero desktop and web calls against mocks. Not tried yet: a real Zotero app or account, a large real library, `showDirectoryPicker` with a real folder.
 - Not built yet: live Google Docs (needs a Google Cloud OAuth client ID from the owner), Mendeley API, EPUB.
 
+## PDF-XChange features, batches 1 and 2 (done, 4 Nov 2026)
+
+Each lives in its own block in web/quire-pdf-studio.html, above "compression and combine":
+- **reading & review** (commit 3eb54f2): text layer and Select text tool (C), selection bar, underline/strikeout, Link tool (K) writing real Link annotations, Links panel, print dialog, View ribbon tab (back/forward, single/two/book, rotate view), comments list.
+- **forms**: field tools fradio/fdrop/flist/fdate/fbutton (FFIELD set), addFormField + fieldDialog, the rewritten Fill form panel (TASKS.form) with date pickers, radio groups, reset, Edit fields (rename/required/read-only/delete), import/export data (formDataIn/formDataOut: XFDF, FDF, JSON, CSV), formMerge (one copy per CSV row, zip or one PDF), detectFields (underscores, box characters, ruled lines and hollow squares on rendered pages).
+- **read aloud, statistics, compare**: speakText/stopSpeaking redefined (sentence chunks, voice picked by guessLang), TASKS.read, TASKS.stats (counts, reading time, keywords), TASKS.compare (Myers word diff with page positions; pixel diff for scans), cmpMark adds highlights/notes or boxes as ordinary markup.
+- **password protection**: md5, rc4, hash2B (ISO 32000-2 alg. 2.B) via WebCrypto; encryptPdf writes AES-256 (V5 R6); decryptPdf unlocks R2-R6 (RC4, AESV2, AESV3) with the user or owner password. Files whose objects sit in encrypted object streams can't be unlocked yet (pdf-lib parses them before we can decrypt).
+- **recent files, images, sanitize, background**: recent files in IndexedDB 'quire-recent' (copies of the last 10 files under 40 MB, sample excluded), shown on the empty screen; exportImages (PNG/JPEG/WebP, dpi, range, greyscale, zip); sanitizeDialog (scan then remove metadata, scripts/actions, attachments, private data, comments, links, fields, bookmarks, layers); bgDialog adds a colour under the content, or multiplied over scans, marked with %QuireBG so Remove finds it.
+- Tests: scratchpad t13 to t17 (forms, merge/detect, read/stats/compare, encryption checked with pypdf, misc).
+
 ## Mac camera permission (done)
 
 `package.json` has `NSCameraUsageDescription`; `main.js` allows only video media and answers `ask-camera` with `systemPreferences.askForMediaAccess('camera')`; `preload.js` exposes `askCamera`, which the scanner calls before `getUserMedia`.
