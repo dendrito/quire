@@ -43,6 +43,17 @@ ipcMain.handle('ask-camera', async () => {
 
 // Send to Zotero: pass items to the Zotero app on this computer through its connector server (the one the Zotero browser
 // button uses). It runs here, in the main process, so the renderer's offline block stays as it is and Zotero sees a local client.
+// Trusted timestamp for a digital signature (RFC 3161): sends the 32-byte hash of the signature to the timestamp server the
+// user chose and returns its signed answer. Runs here so the renderer's offline block stays as it is.
+ipcMain.handle('timestamp', async (_event, url, req) => {
+  try {
+    if (!/^https?:\/\/[^\s/]+/i.test(String(url)) || !(req instanceof Uint8Array) || req.length > 512) return { error: 'Not a timestamp request.' };
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/timestamp-query' }, body: req, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { error: `The timestamp server answered ${r.status}.` };
+    return { bytes: new Uint8Array(await r.arrayBuffer()) };
+  } catch (e) { return { error: 'The timestamp server could not be reached: ' + String(e && e.message || e) }; }
+});
+
 ipcMain.handle('zotero-save', async (_event, items) => {
   const base = 'http://127.0.0.1:23119/connector/';
   const H = { 'Content-Type': 'application/json', 'X-Zotero-Connector-API-Version': '3' };
@@ -73,7 +84,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      sandbox: true
+      sandbox: true,
+      // long jobs (batch actions, OCR of a whole book) keep full speed while the window is minimised or behind others
+      backgroundThrottling: false
     }
   });
   win.loadURL('app://quire/index.html');
@@ -93,7 +106,12 @@ app.whenReady().then(() => {
     const { pathname } = new URL(request.url);
     const file = path.normalize(path.join(APP_DIR, decodeURIComponent(pathname)));
     if (!file.startsWith(APP_DIR + path.sep)) return new Response('Not found', { status: 404 });
-    return net.fetch(pathToFileURL(file).toString());
+    // Cross-origin isolation lets the handwriting reader use several processor cores (it needs SharedArrayBuffer).
+    // "credentialless" still lets the app download OCR languages and handwriting readers from other sites.
+    return net.fetch(pathToFileURL(file).toString()).then(r => {
+      const h = new Headers(r.headers); h.set('Cross-Origin-Opener-Policy', 'same-origin'); h.set('Cross-Origin-Embedder-Policy', 'credentialless');
+      return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+    });
   });
 
   // Media access is limited to the camera (for the scanner); the microphone stays off. Other permissions keep Electron's defaults.
@@ -102,13 +120,15 @@ app.whenReady().then(() => {
   });
   session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => permission !== 'media' || !details || !details.mediaType || details.mediaType === 'video');
 
-  // Offline guarantee: refuse every request that would leave this computer. The one exception is downloading an OCR
-  // language the user picked in the language manager (a read-only GET of a public model file; nothing is sent).
-  const OCR_DOWNLOAD = /^https:\/\/(cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@tesseract\.js-data\/[a-z_]+@1\.0\.0\/4\.0\.0_best_int\/[a-z_]+\.traineddata\.gz$/;
+  // Offline guarantee: refuse every request that would leave this computer. The exceptions are read-only GETs of public
+  // model files the user asked for (nothing is sent): an OCR language from the language manager, the most accurate OCR
+  // models, and a handwriting reader the app does not bundle (Quire Lite bundles only a few).
+  const OCR_DOWNLOAD = /^https:\/\/(cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@tesseract\.js-data\/[a-z_]+@1\.0\.0\/4\.0\.0(_best_int)?\/[a-z_]+\.traineddata\.gz$/;
+  const HTR_DOWNLOAD = /^https:\/\/(cdn\.jsdelivr\.net\/gh\/dendrito\/quire@|raw\.githubusercontent\.com\/dendrito\/quire\/)[0-9a-f]{40}\/models\/htr\/[a-z0-9-]+\.(onnx|json)$/;
   // Estante, the owner's own Calibre server, runs on this computer; Send to Estante may reach its API there.
   const ESTANTE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/api\//;
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const blocked = /^(https?|wss?|ftp):/i.test(details.url) && !(details.method === 'GET' && OCR_DOWNLOAD.test(details.url)) && !ESTANTE.test(details.url);
+    const blocked = /^(https?|wss?|ftp):/i.test(details.url) && !(details.method === 'GET' && (OCR_DOWNLOAD.test(details.url) || HTR_DOWNLOAD.test(details.url))) && !ESTANTE.test(details.url);
     if (blocked) console.warn('Blocked network request:', details.url);
     callback({ cancel: blocked });
   });

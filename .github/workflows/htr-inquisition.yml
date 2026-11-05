@@ -1,0 +1,27 @@
+# Scores every manuscript reader on Portuguese Inquisition pages it was not trained on (TraPrInq validation set,
+# CC BY 4.0) and commits three of those pages as test fixtures. Runs when the script changes, or by hand.
+name: Inquisition reader scores
+on:
+  workflow_dispatch:
+  push:
+    paths: ['tools/htr/eval_inquisition.py', '.github/workflows/htr-inquisition.yml']
+permissions:
+  contents: write
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu torch kraken pillow
+      - run: python tools/htr/eval_inquisition.py
+      - name: Commit the pages and scores
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add -f tests/fixtures/real/inq
+          git diff --cached --quiet && echo "no change" && exit 0
+          git commit -m "Inquisition test pages and reader scores (tools/htr/eval_inquisition.py)"
+          for i in 1 2 3 4; do git pull --rebase -q && git push && break; sleep $((i*5)); done

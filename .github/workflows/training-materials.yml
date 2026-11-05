@@ -1,0 +1,25 @@
+# Builds period word lists for handwriting training from public-domain Portuguese dictionaries (tools/htr/materials.py).
+name: Training materials
+on:
+  workflow_dispatch:
+  push:
+    paths: ['tools/htr/materials.py', '.github/workflows/training-materials.yml']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python tools/htr/materials.py
+      - name: Commit the word lists
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add training/lexicon
+          git diff --cached --quiet && echo "no change" && exit 0
+          git commit -m "Training materials: period word lists (tools/htr/materials.py)"
+          for i in 1 2 3 4; do git pull --rebase -q && git push && break; sleep $((i*5)); done

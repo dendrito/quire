@@ -1,0 +1,26 @@
+# Fetches the free manuscript-reading (paleography) models from Zenodo, converts them to ONNX for the app and
+# commits them to models/htr/ on the same branch. Runs when the converter changes, or by hand.
+name: Manuscript models
+on:
+  workflow_dispatch:
+  push:
+    paths: ['tools/htr/**', '.github/workflows/htr-models.yml']
+permissions:
+  contents: write
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu torch kraken onnx onnxruntime
+      - run: python tools/htr/build.py
+      - name: Commit the models
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add models/htr
+          git diff --cached --quiet && echo "no change" && exit 0
+          git commit -m "Manuscript models converted from Zenodo (tools/htr/build.py)"
+          for i in 1 2 3 4; do git pull --rebase -q && git push && break; sleep $((i*5)); done

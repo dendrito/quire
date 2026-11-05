@@ -1,0 +1,62 @@
+{
+ "made_by": "tools/htr/materials.py",
+ "kept_words": 239801,
+ "min_count": 3,
+ "sources": [
+  {
+   "key": "bluteau",
+   "name": "Rafael Bluteau, Vocabulario Portuguez e Latino (1712-1728)",
+   "archive_org": [
+    "002994-10-completo",
+    "bub_gb_n7sOBRumqOcC",
+    "bub_gb_wFd6AvENzikC",
+    "002994-07-completo",
+    "002994-01-completo",
+    "002994-02-completo",
+    "002994-06-completo",
+    "002994-09-completo",
+    "002994-05-completo",
+    "002994-02-completo_202608",
+    "002994-04-completo",
+    "bub_gb_MCIlQdcLRAMC",
+    "b30414581_0005",
+    "b30414581_0003",
+    "b30414581_0010",
+    "b30414581_0009",
+    "b30414581_0006",
+    "b30414581_0001"
+   ],
+   "words": 11181216,
+   "distinct": 929578,
+   "licence": "public domain"
+  },
+  {
+   "key": "morais",
+   "name": "Antonio de Morais Silva, Diccionario da Lingua Portugueza (1789)",
+   "archive_org": [
+    "bub_gb_4FkSAAAAIAAJ",
+    "diccionariodalin00mora"
+   ],
+   "words": 1033099,
+   "distinct": 211202,
+   "licence": "public domain"
+  },
+  {
+   "key": "tycho-brahe",
+   "url": "https://www.tycho.iel.unicamp.br/corpus/",
+   "reachable": false,
+   "error": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1010)>"
+  },
+  {
+   "key": "post-scriptum",
+   "url": "http://ps.clul.ul.pt/",
+   "reachable": true
+  },
+  {
+   "key": "teitok-ps",
+   "url": "https://teitok.clul.ul.pt/postscriptum/",
+   "reachable": false,
+   "error": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'teitok.clul.ul.pt'. (_ssl.c:1010)>"
+  }
+ ]
+}
