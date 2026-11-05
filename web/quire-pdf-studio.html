@@ -324,6 +324,29 @@ fieldset.ff-radio legend{padding:0;margin-bottom:4px;width:100%}
 #busy .card{padding:14px 18px;border-radius:14px;display:flex;align-items:center;gap:12px;max-width:80vw;font-weight:500}
 .spin{width:16px;height:16px;border:2px solid var(--hover2);border-top-color:var(--fg);border-radius:50%;animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
+/* phones (iPhone, Android): room for the notch, toolbars that scroll instead of stacking, dialogs and panels as sheets */
+#app,#org,#sfit,#scan,#lib,#reader{padding-top:env(safe-area-inset-top,0px);box-sizing:border-box}
+#org,#sfit,#scan,#lib{grid-template-columns:minmax(0,1fr)}
+.org-grid,.sc-body{padding-bottom:max(12px,env(safe-area-inset-bottom,0px))}
+.segs button{white-space:nowrap}
+@media (max-width:760px){
+  .org-top{gap:8px 10px;padding-top:8px;padding-bottom:8px}
+  .org-top h2{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .org-acts,.sf-ctl{order:3;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .org-acts::-webkit-scrollbar,.sf-ctl::-webkit-scrollbar{display:none}
+  .sf-f{flex:none}
+  dialog{width:calc(100vw - 16px);max-width:none;max-height:calc(100dvh - 16px - env(safe-area-inset-top,0px));overflow:auto;padding:18px 16px max(16px,env(safe-area-inset-bottom,0px));border-radius:16px}
+  dialog:has(.imgdlg),dialog:has(.olm){width:calc(100vw - 16px)}
+  #dlgActions{position:sticky;bottom:calc(-1 * max(16px,env(safe-area-inset-bottom,0px)));background:var(--solid);padding:10px 0 max(4px,env(safe-area-inset-bottom,0px));margin-top:8px;flex-wrap:wrap}
+  .panel{bottom:calc(62px + env(safe-area-inset-bottom,0px));max-height:min(62%,calc(100% - 140px))}
+}
+@media (max-width:480px){#bRedo,#bInfo{display:none}.top{gap:2px}.top .tabs{min-width:96px}}
+@media (pointer:coarse){
+  .icon-btn{min-width:38px;min-height:38px}
+  .btn.sm{height:34px;padding:0 12px}
+  input[type=checkbox],input[type=radio]{width:20px;height:20px}
+}
+@media (pointer:coarse) and (max-width:760px){.inp,select.inp,textarea.inp{font-size:16px}}
 @media (prefers-reduced-motion:reduce){.spin{animation-duration:3s}.panel,#toast{animation:none}.main{transition:none}}
 dialog{border:0;border-radius:18px;background:var(--solid);color:var(--fg);padding:22px;width:min(460px,calc(100vw - 32px));box-sizing:border-box;box-shadow:0 24px 64px rgba(0,0,0,.28),0 0 0 1px var(--line)}
 dialog::backdrop{background:rgba(0,0,0,.28);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
