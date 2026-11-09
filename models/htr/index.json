@@ -162,6 +162,22 @@
    "bytes": 16158100
   },
   {
+   "id": "hooker",
+   "name": "19th-century English handwriting (Joseph Hooker letters)",
+   "langs": "English",
+   "era": "1830–1910",
+   "about": "Letters and notes in 19th-century English handwriting.",
+   "file": "JosephHookerHTR.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Schaefer, John, Litvine, Alexis (2023). Joseph Hooker HTR Model. Zenodo. https://doi.org/10.5281/zenodo.8038689",
+   "doi": "10.5281/zenodo.8038689",
+   "accuracy": [
+    9756,
+    -1.0
+   ],
+   "bytes": 16214245
+  },
+  {
    "id": "sephardi",
    "name": "Medieval Hebrew, Sephardi bookhand",
    "langs": "Hebrew",
@@ -192,6 +208,22 @@
     0.8699910640716553
    ],
    "bytes": 20131371
+  },
+  {
+   "id": "fraktur",
+   "name": "German Fraktur print",
+   "langs": "German",
+   "era": "1600–1940",
+   "about": "Books and newspapers printed in Fraktur.",
+   "file": "fraktur_all_2.mlmodel",
+   "licence": "cc-zero",
+   "cite": "Benjamin Kiessling (2022). Preliminary Fraktur model. Zenodo. https://doi.org/10.5281/zenodo.7089018",
+   "doi": "10.5281/zenodo.7089018",
+   "accuracy": [
+    21054,
+    0.9706684947013855
+   ],
+   "bytes": 16498153
   }
  ]
 }
