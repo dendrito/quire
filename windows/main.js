@@ -93,7 +93,7 @@ ipcMain.handle('scanner-scan', async (_event, opts = {}) => {
     }, 15 * 60 * 1000);
     // Only files inside our own temporary folder are read back.
     const pages = (r.files || []).filter(f => path.dirname(path.resolve(f)) === out).map(f => new Uint8Array(fs.readFileSync(f)));
-    return { ok: !!r.ok, error: r.error || '', warning: r.warning || '', pages };
+    return { ok: !!r.ok, error: r.error || '', warning: r.warning || '', simplex: !!r.simplex, pages };
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }

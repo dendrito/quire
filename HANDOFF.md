@@ -36,6 +36,15 @@ Open it with **Scan** in the top bar, the camera button on the Pages toolbar, or
 - **PDF:** page size "Match each scan" (210 mm or Letter wide), A4 or Letter. Create PDF opens a new tab; "Add to <document>" inserts after the current page.
 - Everything is non-destructive until Create PDF: each page keeps `{src, quad, rot, filter, margins}`.
 
+## Batches and two-sided feeding (done, 9 Nov 2026)
+
+Code: the `/* --- batches --- */` block in the batch scanner section (names `scBatch*`, `scSides*`, `scCollate`, `SC_SIDES`). Test group `scanner` (a stand-in scanner).
+
+- **Sides** (side panel and the scanner card, scanner and camera): One-sided; Both sides in one pass (feeder, scanner does it); Fronts, then turn the stack over (backs come last sheet first); Fronts, then backs from sheet 1; Front then back, sheet by sheet. For the two-pass orders, **Turning the stack over**: like a book page, or top over bottom (backs turned 180°; Straighten keeps that turn unless the text clearly says otherwise). **Leave out blank backs** (ink under 0.1% of the page; kept aside, not deleted).
+- Two-pass flow: on a feeder, the fronts pass ends with "turn the stack over, press Scan backs", and the backs pass asks for one back per front. On flatbed/camera, **Scan backs** switches over. Each back slots after its front as it arrives.
+- **Batches:** every page carries `{batch, side, k}`. Each batch keeps its own source, sides, turn and blank setting. Changing the source or the kind of feeding when the batch has pages starts a new batch; New batch does it by hand. The strip shows a label per batch; clicking it re-sorts the batch (other order, other turn, blanks in or out) or removes it.
+- WIA: `list` reads Document Handling Capabilities (3086) into `caps {feeder, flatbed, duplex}`, which hides "Both sides in one pass" on a scanner without it. A driver that refuses duplex returns `simplex: true`; Quire then switches the batch to turning the stack over. "Both sides" is no longer a paper source (old prefs and presets are converted). Not yet tried on the Brother.
+
 ## Crop margins (done)
 
 Pages toolbar, crop button. **Set margins** (top/bottom/left/right in mm, in or pt, linkable, or drag the dashed edges on the page) or **Trim white space** (renders each page, finds where the content ends and keeps a border). Scope: all, selected or current page. It sets each page's CropBox, so the margins are hidden rather than deleted; **Remove crop** restores them. Works on rotated pages.

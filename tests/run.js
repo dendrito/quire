@@ -1,6 +1,6 @@
 // Quire's automatic tests. Each one drives the real app in headless Chromium and checks the result with independent
 // tools: veraPDF for PDF/A and PDF/UA, poppler's pdftotext for OCR and redaction, python-docx and openpyxl for Word
-// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition editions memory)
+// and Excel. Run from this folder:  node run.js [name ...]     (names: signatures pdfa pdfua ocr excel word pptx protect compare bigfile bigfile_edit redaction htr htr_inquisition editions memory scanner)
 // Needs: npm install, python3 fixtures/make.py, pip install python-docx openpyxl, poppler-utils, and veraPDF on
 // VERAPDF (a command) for the PDF/A and PDF/UA tests.
 const fs = require('fs'), path = require('path'), { execFileSync, spawnSync } = require('child_process');
@@ -347,6 +347,77 @@ TESTS.editions = async () => {
     check(`${ed}: no errors while loading and switching tabs`, !p.errs.length, p.errs.slice(0, 3).join(' | '));
     await p.context().close();
   }
+};
+
+// --- scanner: batches and two-sided feeding with a stand-in scanner. A one-sided feeder with the stack turned over
+// (backs come last sheet first), blank backs left out, backs upside down, re-sorting a batch afterwards, a second batch
+// with other settings, a scanner that does both sides, and one whose driver refuses two-sided scanning.
+TESTS.scanner = async () => {
+  const p = await H.open();
+  const r = await p.evaluate(async () => { const w = ms => new Promise(r => setTimeout(r, ms));
+    // a page's width says which sheet and side it is: 400 + 10 * sheet (+ 5 for a back)
+    const page = async (sheet, back, blank) => { const c = document.createElement('canvas'); c.width = 400 + sheet * 10 + (back ? 5 : 0); c.height = 560;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.fillStyle = '#000';
+      if (!blank) for (let y = 60; y < 500; y += 22) x.fillRect(50, y, c.width - 100 - (y % 3) * 20, 9);
+      return new Uint8Array(await (await new Promise(res => c.toBlob(res, 'image/jpeg', .9))).arrayBuffer()); };
+    const queue = [], calls = [];
+    window.quireDesktop = Object.assign(window.quireDesktop || {}, { scanner: {
+      list: async () => ({ ok: true, devices: [{ id: 'd1', name: 'Stand-in scanner', caps: { feeder: true, flatbed: true, duplex: true } }] }),
+      scan: async o => { calls.push(o); return queue.shift() || { ok: false, error: 'empty' }; } } });
+    const id = pg => { const v = pg.src.width - 400; return (v % 10 ? 'B' : 'F') + Math.floor(v / 10); };
+    const strip = () => SC.pages.map(id).join(' ');
+    pref.set('scanSource', 'scanner'); SC.src = 'scanner'; SC.auto.straight = SC.auto.margins = false; SC.limit = 0;
+    scOpen(); await scHwList(true); await w(50);
+    const H = SC.hw; H.source = 'feeder'; H.native = false; H.more = 'no'; H.sides = 'flip'; H.axis = 'top'; H.skipBlank = true; scBatchSync(true);
+    const out = {};
+    // batch 1: fronts, then the stack turned over top to bottom: backs arrive last sheet first; sheet 1's back is blank
+    queue.push({ ok: true, pages: [await page(0), await page(1), await page(2)] });
+    await scHwScan(false); out.afterFronts = strip(); out.phase = SC.batches[0].phase; out.max1 = calls[0].max; out.src1 = calls[0].source;
+    queue.push({ ok: true, pages: [await page(2, 1), await page(1, 1, 1), await page(0, 1)] });
+    await scHwScan(false); out.flip = strip(); out.max2 = calls[1].max; out.done = SC.batches[0].phase; out.held = SC.batches[0].hold.map(id).join(' ');
+    out.rot = SC.pages.map(pg => pg.rot).join(' ');
+    // fix the batch afterwards: the backs were really fed from the first sheet, and the stack turned like a book page
+    const b1 = SC.batches[0]; b1.sides = 'same'; b1.axis = 'book'; scCollate(b1); out.same = strip(); out.rot2 = SC.pages.map(pg => pg.rot).join(' ');
+    b1.sides = 'flip'; b1.skipBlank = false; scCollate(b1); out.unskip = strip();
+    // batch 2: flatbed, one-sided, two pages; it goes after batch 1 and gets its own label
+    H.source = 'flatbed'; H.sides = 'one'; scBatchSync(true);
+    queue.push({ ok: true, pages: [await page(7)] }); await scHwScan(false); queue.push({ ok: true, pages: [await page(8)] }); await scHwScan(false);
+    out.two = strip(); out.labels = [...document.querySelectorAll('#scStrip .sc-bh b')].map(b => b.textContent).join(', ');
+    out.src3 = calls[2].source;
+    // batch 3: a scanner that reads both sides at once (front, back, front, back)
+    H.source = 'feeder'; H.sides = 'duplex'; scBatchSync(true);
+    queue.push({ ok: true, pages: [await page(20), await page(20, 1), await page(21), await page(21, 1)] }); await scHwScan(false);
+    out.dup = strip(); out.src4 = calls[4].source; out.dupSides = SC.batches.filter(scBatchUsed).map(b => b.sides).join(' ');
+    // batch 4: the driver refuses two-sided scanning: Quire carries on with the stack turned over
+    scBatchFinish(); H.axis = 'book';
+    queue.push({ ok: true, simplex: true, warning: 'x', pages: [await page(30), await page(31)] }); await scHwScan(false);
+    const b4 = SC.batches[SC.batches.length - 1]; out.fallback = [b4.sides, b4.phase, b4.nf, H.sides].join(' ');
+    queue.push({ ok: true, pages: [await page(31, 1), await page(30, 1)] }); await scHwScan(false); out.fb = strip();
+    // the PDF has every page in the strip
+    const bytes = await scBuildPdf(); out.pdfPages = (await PDFDocument.load(bytes)).getPageCount(); out.stripN = SC.pages.length;
+    // the side panel offers the two-sided choices, and a scanner without two-sided scanning hides that one
+    out.opts = [...document.querySelectorAll('#scSidesSel option')].map(o => o.value).join(' ');
+    SC.hw.devices[0].caps.duplex = false; H.sides = 'duplex'; scBatchSync(true); out.noDup = [...document.querySelectorAll('#scSidesSel option')].map(o => o.value).join(' ') + ' / ' + scSides();
+    // the camera gets the same choices (photograph all fronts, then all backs)
+    scSetSrc('camera'); H.sides = 'flip'; scBatchSync(true); out.cam = document.querySelector('#scSidesSel').value;
+    await scClose(true);
+    return out;
+  });
+  check('flip: fronts scanned first, Quire waits for the backs', r.afterFronts === 'F0 F1 F2' && r.phase === 'backs' && r.src1 === 'feeder', `${r.afterFronts} · ${r.phase}`);
+  check('flip: the backs pass asks for one back per front', r.max2 === 3, r.max2);
+  check('flip: every back lands after its front, blank back left out', r.flip === 'F0 B0 F1 F2 B2' && r.held === 'B1' && r.done === 'done', `${r.flip} · held ${r.held}`);
+  check('flip: backs turned top over bottom are turned round', r.rot === '0 180 0 0 180', r.rot);
+  check('a batch can be re-sorted afterwards (backs from the first sheet, turned like a book page)', r.same === 'F0 B2 F1 F2 B0' && r.rot2 === '0 0 0 0 0', `${r.same} · ${r.rot2}`);
+  check('turning off "leave out blank backs" brings the blank back', r.unskip === 'F0 B0 F1 B1 F2 B2', r.unskip);
+  check('a second batch with other settings goes after the first, each with its label', r.two === 'F0 B0 F1 B1 F2 B2 F7 F8' && r.labels === 'Batch 1, Batch 2' && r.src3 === 'flatbed', `${r.two} · ${r.labels}`);
+  check('a scanner that reads both sides: asked for two-sided, order kept', r.dup.endsWith('F7 F8 F20 B20 F21 B21') && r.src4 === 'duplex' && r.dupSides === 'flip one duplex', `${r.dup} · ${r.src4} · ${r.dupSides}`);
+  check('driver without two-sided: falls back to turning the stack over', r.fallback === 'flip backs 2 flip' && r.fb.endsWith('F30 B30 F31 B31'), `${r.fallback} · ${r.fb}`);
+  check('the PDF has every page of every batch', r.pdfPages === r.stripN && r.stripN === 16, `${r.pdfPages} of ${r.stripN}`);
+  check('side panel offers every way of feeding', r.opts === 'one duplex flip same each', r.opts);
+  check('a scanner without two-sided hides that choice', r.noDup === 'one flip same each / flip', r.noDup);
+  check('the camera offers the same choices', r.cam === 'flip', r.cam);
+  check('no errors', !p.errs.length, p.errs.slice(0, 3).join(' | '));
+  await p.context().close();
 };
 
 // --- memory: thumbnails are drawn only near view and let go far away; undo copies stay under their cap; pdf.js reads in

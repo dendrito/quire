@@ -404,6 +404,8 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
 .sc-tile.on img{box-shadow:0 0 0 2px var(--accent),0 2px 8px rgba(0,0,0,.12)}
 .sc-tile.on .n{color:var(--accent)}
 .sc-tile.drop{box-shadow:-2px 0 0 var(--accent)}
+.sc-bh{flex:none;align-self:stretch;display:flex;flex-direction:column;justify-content:center;gap:2px;max-width:96px;padding:6px 8px;margin-left:4px;border:0;border-left:2px solid var(--accent);border-radius:0 8px 8px 0;background:var(--accent-soft);color:var(--fg);font-family:inherit;font-size:10.5px;font-weight:500;line-height:1.25;text-align:left;cursor:pointer}
+.sc-bh:first-child{margin-left:0}.sc-bh b{font-size:11.5px;font-weight:600;color:var(--accent)}.sc-bh span{color:var(--muted)}.sc-bh:hover{filter:brightness(.97)}
 .sc-tile .camb{height:84px;width:62px;border-radius:6px;display:grid;place-items:center;box-shadow:inset 0 0 0 1.5px var(--line);color:var(--muted)}
 .sc-tile .camb svg{width:22px;height:22px}
 .sc-tile.on .camb{box-shadow:inset 0 0 0 2px var(--accent);color:var(--accent)}
@@ -10489,8 +10491,12 @@ const SC = {
   // Document scanner (desktop app on Windows): settings are remembered between sessions.
   hw: { devices: null, device: pref.get('hwDevice', ''), source: pref.get('hwSource', 'flatbed'), dpi: pref.get('hwDpi', 300), color: pref.get('hwColor', 'color'),
     paper: pref.get('hwPaper', 'auto'), more: pref.get('hwMore', 'ask'), wait: pref.get('hwWait', 5), native: pref.get('hwNative', false), preset: pref.get('hwPreset', ''),
+    // Two-sided originals: how the sheets go through (see SC_SIDES), how the stack is turned over, and whether blank backs are left out.
+    sides: pref.get('hwSides', 'one'), axis: pref.get('hwAxis', 'book'), skipBlank: pref.get('hwSkipBlank', true),
     busy: false, err: '', waitUntil: 0, waitTimer: 0 }
 };
+// 'Both sides' used to be a paper source; it is now Feeder plus the two-sided setting.
+if (SC.hw.source === 'duplex') { SC.hw.source = 'feeder'; SC.hw.sides = 'duplex'; pref.set('hwSource', 'feeder'); pref.set('hwSides', 'duplex'); }
 const scHasHw = () => !!(window.quireDesktop && window.quireDesktop.scanner);
 // With a document scanner available it is the main source and the camera stays off until chosen.
 const scUseHw = () => scHasHw() && SC.src !== 'camera';
@@ -10508,7 +10514,7 @@ function scCheckLimit() {
   scBar(); scState(); scMsg();
 }
 function scSetSrc(v) {
-  SC.src = v; pref.set('scanSource', v); SC.timerOn = false; SC.armed = true; SC.stable = 0;
+  SC.src = v; pref.set('scanSource', v); SC.timerOn = false; SC.armed = true; SC.stable = 0; scBatchSync();
   if (scUseHw()) { scStopCam(); SC.err = ''; } else if (!SC.stream && !SC.starting) scStartCam();
   scSelect(-1);
 }
@@ -10684,16 +10690,25 @@ function scMsg() {
     const H = SC.hw; const d = H.devices && H.devices.find(x => x.id === H.device); const fe = H.source !== 'flatbed' && !H.native;
     M.hidden = false;
     if (H.waitUntil) { const left = Math.max(1, Math.ceil((H.waitUntil - performance.now()) / 1000)); M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>Next page in ${left} s</h3><p style="margin:0;line-height:1.5">Turn to the next page and put it on the glass. ${SC.limit > 0 ? `${scCountTxt()} pages` : `${SC.pages.length} page${SC.pages.length === 1 ? '' : 's'} so far`}.</p><div class="row" style="justify-content:center"><button class="btn" data-sc="hwStop">Stop</button><button class="btn primary" data-sc="hwScan">Scan now</button></div></div>`; return; }
-    M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>${esc(d ? d.name : H.devices && !H.devices.length ? 'No scanner found' : 'Document scanner')}</h3>
-      ${SC.limit > 0 ? `<p class="hint" style="margin:0">${scCountTxt()} pages</p>` : ''}<p style="margin:0;line-height:1.5">${H.devices && !H.devices.length ? esc(H.err || 'Check that the scanner is switched on and connected, then press Refresh on the right.') : fe ? (SC.limit > 0 ? `Load your pages in the feeder, then press Scan. Quire stops when the feeder is empty or at ${SC.limit} pages.` : 'Load your pages in the feeder, then press Scan. Quire scans until the feeder is empty.') : 'Put a page on the glass and press Scan, or press Space. Repeat for each page.'}</p>
+    const ob = scOpenBatch(), sides = ob && scBatchUsed(ob) ? ob.sides : scSides(), tp = scTwoPass(sides), backs = tp && ob && ob.phase === 'backs';
+    const turn = H.axis === 'top' ? 'turn the stack over top to bottom' : 'turn the stack over like a book page';
+    const say = H.devices && !H.devices.length ? esc(H.err || 'Check that the scanner is switched on and connected, then press Refresh on the right.')
+      : backs ? (fe ? `${plural(ob.nf, 'front')} scanned. Now ${sides === 'flip' ? `${turn}, without reordering it,` : 'take the stack in its original order, back side up,'} and put it in the feeder again. Press Scan backs: Quire puts each back after its front.`
+        : `${plural(ob.nf, 'front')} scanned. Now the backs: ${sides === 'flip' ? 'start with the last sheet (it is still on the glass: just turn it over)' : 'start again from the first sheet'}. ${ob.nf - ob.nb} to go.`)
+      : fe ? (tp ? 'Load the stack in the feeder and press Scan to read all the fronts. Quire then asks you to turn it over for the backs.' : sides === 'duplex' ? 'Load your pages in the feeder, then press Scan. The scanner reads both sides of every sheet.' : SC.limit > 0 ? `Load your pages in the feeder, then press Scan. Quire stops when the feeder is empty or at ${SC.limit} pages.` : 'Load your pages in the feeder, then press Scan. Quire scans until the feeder is empty.')
+      : tp ? 'Put the front of each sheet on the glass and press Scan, or press Space. When all the fronts are done, press Scan backs.' : sides === 'each' ? 'Scan the front of a sheet, then turn it over and scan its back. Press Space to scan.' : 'Put a page on the glass and press Scan, or press Space. Repeat for each page.';
+    const sOpts = SC_SIDES.filter(([v]) => scSidesOk(v)).map(([v, l]) => `<option value="${v}"${v === scSides() ? ' selected' : ''}>${l}</option>`).join('');
+    M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>${backs ? `Batch ${ob.no}: the backs` : esc(d ? d.name : H.devices && !H.devices.length ? 'No scanner found' : 'Document scanner')}</h3>
+      ${SC.limit > 0 ? `<p class="hint" style="margin:0">${scCountTxt()} pages</p>` : ''}<p style="margin:0;line-height:1.5">${say}</p>
+      <div class="sc-quick"><label>Sides <select id="scQSides" class="inp">${sOpts}</select></label></div>
       <div class="sc-quick"><label>Pages to scan <input id="scQLim" class="inp" type="number" min="0" max="2000" step="1" placeholder="All" value="${SC.limit || ''}"></label>
       ${fe ? '' : `<label>Between pages <select id="scQMore" class="inp">${SC_MORE.map(([v, l]) => `<option value="${v}"${H.more === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>${H.more === 'wait' ? `<label>Wait <input id="scQWait" class="inp" type="number" min="1" max="600" step="1" value="${H.wait}"> s</label>` : ''}`}</div>
       <div class="sc-quick"><label><input type="checkbox" id="scQAuS" ${SC.auto.straight ? 'checked' : ''}> Straighten</label><label><input type="checkbox" id="scQAuM" ${SC.auto.margins ? 'checked' : ''}> Detect margins</label><label><input type="checkbox" id="scQAuO" ${SC.auto.ocr ? 'checked' : ''}> OCR</label></div>
-      <div class="row" style="justify-content:center"><button class="btn primary" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}>${H.busy ? 'Scanning…' : fe ? 'Scan all pages' : 'Scan page'}</button><button class="btn" data-sc="useCam">${svg('camera')}Use camera instead</button></div></div>`;
+      <div class="row" style="justify-content:center"><button class="btn primary" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}>${H.busy ? 'Scanning…' : backs ? (fe ? 'Scan backs' : 'Scan a back') : fe ? (tp ? 'Scan fronts' : 'Scan all pages') : 'Scan page'}</button>${tp && ob && ob.phase === 'fronts' && ob.nf && !fe ? '<button class="btn" data-sc="backs">Scan backs</button>' : ''}${backs ? '<button class="btn" data-sc="batchEnd">Finish batch</button>' : `<button class="btn" data-sc="useCam">${svg('camera')}Use camera instead</button>`}</div></div>`;
     const ql = $('#scQLim', M); if (ql) ql.onchange = () => scLimSet(ql.value);
     const qm = $('#scQMore', M); if (qm) qm.onchange = () => { hwSet('more', qm.value); scSide(); scMsg(); };
     const qw = $('#scQWait', M); if (qw) qw.onchange = () => { hwSet('wait', scWaitVal(qw.value)); scSide(); scMsg(); };
-    scAutoWire(M);
+    scAutoWire(M); scSidesWire(M);
     return;
   }
   M.hidden = !live || !(txt || SC.starting);
@@ -10732,6 +10747,8 @@ function scState(st) {
   const L = { search: ['', 'Looking for a page'], found: ['ok', SC.mode === 'manual' ? 'Page found. Press Space to capture' : 'Page found'], hold: ['hold', 'Hold still…'], next: ['ok', 'Captured. Turn to the next page'], limit: ['ok', 'Page limit reached'] }[SC.state] || ['', 'Looking for a page'];
   if (scLeft() === 0 && SC.state !== 'limit') L.splice(0, 2, 'ok', 'Page limit reached');
   if (SC.limit > 0) L[1] += ` · ${scCountTxt()}`;
+  const ob = scOpenBatch(); if (ob && scTwoPass(ob.sides) && scBatchUsed(ob)) L[1] += ob.phase === 'backs' ? ` · backs: ${ob.nb} of ${ob.nf}` : ` · fronts: ${ob.nf}`;
+  else if (ob && ob.sides === 'each' && scBatchUsed(ob)) L[1] += (ob.nf + ob.nb) % 2 ? ' · now the back' : ' · next front';
   if (SC.mode === 'timer' && !SC.timerOn) L[1] = SC.live ? 'Page found. Start the timer or press Space' : 'Looking for a page';
   n.className = 'sc-state ' + L[0]; n.innerHTML = `<i></i>${esc(L[1])}`;
 }
@@ -10789,13 +10806,15 @@ function scTiltQuad(c, deg) {
   return [[-w, -h], [w, -h], [w, h], [-w, h]].map(([x, y]) => [cx + x * co - y * s, cy + x * s + y * co]);
 }
 function scStraighten(pg) {
+  // base: the turn a back gets because its stack was turned over top to bottom; kept unless the text clearly says otherwise
+  const base = pg.flipRot || 0;
   if (pg.flat) { pg.quad = scFull(pg.src); pg.white = false; } pg.rot = 0;
-  const sk = scSkew(scInk(scWarp(pg, 1000))); if (!sk) return false;
+  const sk = scSkew(scInk(scWarp(pg, 1000))); if (!sk) { pg.rot = base; return false; }
   if (pg.flat && sk.deg) { pg.quad = scTiltQuad(pg.src, sk.deg); pg.white = true; }
   const u = scUpright(scInk(scRotate(scWarp(pg, 1600), sk.side ? 90 : 0)));
   // Turn only on clear evidence: Latin text gives a ratio near 3 upright and 1/3 upside down; other scripts sit near 1 and are left alone.
-  pg.rot = !u ? 0 : sk.side ? (u > 1.5 ? 90 : u < 1 / 1.5 ? 270 : 0) : (u < 1 / 1.8 ? 180 : 0);
-  return !!(pg.rot || (pg.flat && sk.deg));
+  pg.rot = !u ? base : sk.side ? (u > 1.5 ? 90 : u < 1 / 1.5 ? 270 : base) : (u < 1 / 1.8 ? 180 : u > 1.8 ? 0 : base);
+  return !!(pg.rot !== base || (pg.flat && sk.deg));
 }
 // Margins that trim the scan to its content and leave a border of SC.auto.pad mm.
 function scFindMargins(pg) {
@@ -10836,10 +10855,16 @@ function scAdd(c, hint, opts = {}) {
   let r = null; if (!opts.flat) { try { r = scDetect(c, 420); } catch {} }
   const q = r && r.conf > .72 ? r.quad : hint;
   const pg = { id: ++SC.seq, src: c, quad: q || scFull(c), found: !!q || !!opts.flat, flat: !!opts.flat || !q, rot: 0, filter: opts.filter || SC.filter, margins: null };
+  // which batch and which side of the sheet this is (a retake keeps the place of the page it replaces)
+  const b = SC.retake ? SC.batches.find(x => x.id === SC.retake.batch) : scBatch();
+  if (SC.retake && b) Object.assign(pg, { batch: b.id, side: SC.retake.side, k: SC.retake.k }); else if (b) scTag(b, pg);
+  pg.flipRot = b && pg.side === 'b' && scTwoPass(b.sides) && b.axis === 'top' ? 180 : 0; pg.rot = pg.flipRot;
   if (SC.auto.straight || SC.auto.margins) scAutoFix(pg);
+  if (b && pg.side === 'b') { try { pg.blank = scIsBlank(pg); } catch (e) { pg.blank = false; } }
   scThumb(pg);
-  if (SC.insertAt != null) { SC.pages.splice(Math.min(SC.insertAt, SC.pages.length), 0, pg); SC.insertAt = null; } else SC.pages.push(pg);
-  scStrip(); scSide(); scBar(); scCheckLimit();
+  if (SC.insertAt != null) { SC.pages.splice(Math.min(SC.insertAt, SC.pages.length), 0, pg); SC.insertAt = null; SC.retake = null; }
+  else { SC.pages.push(pg); if (b && b.sides !== 'one') scCollate(b); if (b) scBatchCheck(b); }
+  scStrip(); scSide(); scBar(); scMsg(); scCheckLimit();
 }
 async function scImport() {
   const f = await pickFile('#scIn'); if (!f || !f.length) return; const before = SC.pages.length; busy('Reading photos…');
@@ -10854,6 +10879,137 @@ async function scImport() {
   if (SC.pages.length > before && (SC.err || !SC.stream)) scSelect(before);
 }
 
+/* --- batches: each stack keeps its own settings, and two-sided originals are put back in reading order --- */
+// How the two sides of each sheet reach Quire:
+//   one    one-sided originals
+//   duplex the scanner reads both sides in one pass (front, back, front, back…)
+//   flip   all the fronts, then the stack is turned over and fed again, so the backs come last sheet first
+//   same   all the fronts, then all the backs from the first sheet
+//   each   front, then back, of each sheet in turn (a flatbed or camera)
+const SC_SIDES = [['one', 'One-sided'], ['duplex', 'Both sides in one pass'], ['flip', 'Fronts, then turn the stack over'], ['same', 'Fronts, then backs from sheet 1'], ['each', 'Front then back, sheet by sheet']];
+const SC_SIDES_SHORT = { one: 'one-sided', duplex: 'both sides at once', flip: 'stack turned over', same: 'backs in the same order', each: 'front then back' };
+const SC_SIDES_HINT = {
+  one: 'Each sheet is scanned on one side.',
+  duplex: 'The scanner reads the front and the back of every sheet in one pass.',
+  flip: 'Scan all the fronts. Then turn the whole stack over and scan the backs: they come out last sheet first, and Quire puts each one after its front.',
+  same: 'Scan all the fronts, then the backs starting again from the first sheet. Quire puts each back after its front.',
+  each: 'Scan the front of a sheet, then its back, then the next sheet.'
+};
+const SC_AXIS = [['book', 'Like a book page'], ['top', 'Top over bottom']];
+const scTwoPass = s => s === 'flip' || s === 'same';
+// Batches with the same kind of feeding can be re-sorted into each other; any other change starts a new batch.
+const scKind = s => scTwoPass(s) ? 'pass' : s;
+SC.batches = []; SC.bseq = 0; SC.retake = null;
+const scDev = () => { const H = SC.hw; return H.devices && H.devices.find(x => x.id === H.device); };
+// Whether a two-sided option can be used with the current source and scanner.
+function scSidesOk(v) {
+  if (v !== 'duplex') return true;
+  const H = SC.hw; if (!scUseHw() || H.source !== 'feeder' || H.native) return false;
+  const d = scDev(); return !(d && d.caps && d.caps.duplex === false);
+}
+// The two-sided setting in effect: a scanner that can't read both sides falls back to turning the stack over.
+const scSides = () => scSidesOk(SC.hw.sides) ? SC.hw.sides : 'flip';
+const scSrcKey = () => scUseHw() ? (SC.hw.native ? 'dialog' : SC.hw.source) : 'camera';
+const SC_SRC_NAME = { flatbed: 'Flatbed', feeder: 'Feeder', dialog: 'Scanner', camera: 'Camera' };
+function scBatchSet(b) { const H = SC.hw; Object.assign(b, { sides: scSides(), axis: H.axis, skipBlank: H.skipBlank, src: scSrcKey(), dpi: H.dpi, color: H.color }); return b; }
+const scBatchPages = b => SC.pages.filter(p => p.batch === b.id);
+const scBatchUsed = b => scBatchPages(b).length + b.hold.length > 0;
+function scNewBatch() { const b = scBatchSet({ id: ++SC.bseq, no: SC.batches.filter(scBatchUsed).length + 1, phase: 'fronts', nf: 0, nb: 0, hold: [] }); SC.batches.push(b); return b; }
+// The batch that new pages go into: the open one, or a new one with the current settings.
+function scBatch() {
+  let b = SC.batches[SC.batches.length - 1];
+  if (b && b.phase !== 'done' && !scBatchUsed(b)) { scBatchSet(b); b.no = SC.batches.filter(x => x !== b && scBatchUsed(x)).length + 1; b.nf = b.nb = 0; b.phase = 'fronts'; }
+  if (!b || b.phase === 'done') b = scNewBatch(); return b;
+}
+const scOpenBatch = () => { const b = SC.batches[SC.batches.length - 1]; return b && b.phase !== 'done' ? b : null; };
+// Front or back, and its number in that pass.
+function scTag(b, pg) {
+  const two = b.sides === 'duplex' || b.sides === 'each';
+  pg.batch = b.id; pg.side = b.sides === 'one' ? 'f' : two ? ((b.nf + b.nb) % 2 ? 'b' : 'f') : b.phase === 'backs' ? 'b' : 'f';
+  pg.k = pg.side === 'b' ? b.nb++ : b.nf++;
+}
+// A back with (almost) no ink: nothing but paper, specks or faint show-through.
+function scIsBlank(pg) {
+  const { M, W, H } = scInk(scRender(pg, 700)); const mx = Math.round(W * .06), my = Math.round(H * .06); let n = 0, t = 0;
+  for (let y = my; y < H - my; y++) for (let x = mx; x < W - mx; x++) { t++; n += M[y * W + x]; }
+  return t > 0 && n / t < .001;
+}
+// Put a batch's pages in reading order where the batch sits in the strip, turn its backs the right way up, and set blank backs aside.
+function scCollate(b) {
+  const selPg = SC.pages[SC.sel]; const at = SC.pages.findIndex(p => p.batch === b.id);
+  const all = scBatchPages(b).concat(b.hold); b.hold = [];
+  for (const p of all) { const want = p.side === 'b' && scTwoPass(b.sides) && b.axis === 'top' ? 180 : 0; if ((p.flipRot || 0) !== want) { p.rot = (p.rot - (p.flipRot || 0) + want + 360) % 360; p.flipRot = want; scThumb(p); } }
+  let order = all;
+  if (scTwoPass(b.sides)) {
+    // sheet number of each page: fronts in the order scanned; backs in the same order, or the other way round when the stack was turned over
+    const sheet = p => p.side !== 'b' ? p.k : b.sides === 'flip' ? b.nf - 1 - p.k : p.k; const byK = (a, c) => a.k - c.k;
+    order = all.filter(p => p.side !== 'b' || (sheet(p) >= 0 && sheet(p) < b.nf)).sort((a, c) => sheet(a) - sheet(c) || (a.side === 'b') - (c.side === 'b') || byK(a, c));
+    order = order.concat(all.filter(p => !order.includes(p)).sort(byK)); // more backs than fronts: at the end
+  } else if (b.sides !== 'one') order = all.slice().sort((a, c) => (a.side === 'b' ? 2 * a.k + 1 : 2 * a.k) - (c.side === 'b' ? 2 * c.k + 1 : 2 * c.k));
+  if (b.skipBlank && b.sides !== 'one') { b.hold = order.filter(p => p.side === 'b' && p.blank); order = order.filter(p => !b.hold.includes(p)); }
+  SC.pages = SC.pages.filter(p => p.batch !== b.id); SC.pages.splice(at < 0 ? SC.pages.length : Math.min(at, SC.pages.length), 0, ...order);
+  if (SC.sel !== -1) SC.sel = selPg && SC.pages.includes(selPg) ? SC.pages.indexOf(selPg) : Math.min(SC.sel, SC.pages.length - 1);
+}
+// Backs of a turned-over stack are finished once there is one for every front.
+function scBatchCheck(b) {
+  if (!scTwoPass(b.sides) || b.phase !== 'backs' || b.nb < b.nf) return;
+  b.phase = 'done'; scCollate(b);
+  toast(`Batch ${b.no} done: ${plural(scBatchPages(b).length, 'page')} in reading order${b.hold.length ? `, ${plural(b.hold.length, 'blank back')} left out` : ''}.`, 5000);
+}
+function scBackPhase(b) {
+  if (!b || !b.nf) { toast('Scan the fronts first'); return; }
+  b.phase = 'backs'; SC.timerOn = false; scSide(); scMsg(); scState();
+}
+// A setting changed: an empty batch takes it, a batch with pages is re-sorted, or finished when the kind of feeding or the source changes.
+function scBatchSync(quiet) {
+  const b = scOpenBatch(); if (!b) { scSide(); scMsg(); return; }
+  if (!scBatchUsed(b)) scBatchSet(b);
+  else if (scKind(scSides()) !== scKind(b.sides) || scSrcKey() !== b.src) { b.phase = 'done'; if (!quiet) toast(`Batch ${b.no} finished. The next pages start batch ${b.no + 1} with the new settings.`, 5000); }
+  else { const was = JSON.stringify([b.sides, b.axis, b.skipBlank]); scBatchSet(b); if (was !== JSON.stringify([b.sides, b.axis, b.skipBlank])) { scCollate(b); scStrip(); } }
+  scSide(); scMsg(); scBar(); scState();
+}
+function scBatchOpt(key, v) { hwSet(key, v); scBatchSync(); }
+function scBatchFinish() { const b = scOpenBatch(); if (!b || !scBatchUsed(b)) { toast('This batch has no pages yet'); return; } b.phase = 'done'; scCollate(b); scStrip(); scSide(); scMsg(); toast(`Batch ${b.no} finished. Set up the next stack and scan.`); }
+const scBatchName = b => `Batch ${b.no} · ${SC_SRC_NAME[b.src] || 'Scan'}, ${SC_SIDES_SHORT[b.sides]}`;
+// The settings of the batch being scanned: shown in the side panel.
+function scSidesSection() {
+  const H = SC.hw, b = scOpenBatch(), used = b && scBatchUsed(b), sides = scSides(), no = b ? b.no : SC.batches.filter(scBatchUsed).length + 1;
+  const opts = SC_SIDES.filter(([v]) => scSidesOk(v)).map(([v, l]) => `<option value="${v}"${v === sides ? ' selected' : ''}>${l}</option>`).join('');
+  const d = scDev(); const noDup = scUseHw() && H.source === 'feeder' && !H.native && d && d.caps && d.caps.duplex === false;
+  let st = '';
+  if (used && scTwoPass(b.sides)) st = `<p class="hint" style="margin:0"><b>${b.phase === 'backs' ? 'Scanning the backs' : 'Scanning the fronts'}</b> · ${plural(b.nf, 'front')}, ${plural(b.nb, 'back')}${b.phase === 'backs' && b.nf > b.nb ? `, ${b.nf - b.nb} to go` : ''}</p>`
+    + (b.phase === 'fronts' ? `<button class="btn" data-sc="backs" ${b.nf ? '' : 'disabled'} style="align-self:flex-start">All fronts done: scan the backs</button>` : '');
+  else if (used) st = `<p class="hint" style="margin:0">${plural(scBatchPages(b).length, 'page')} in this batch${b.hold.length ? `, ${plural(b.hold.length, 'blank back')} left out` : ''}.</p>`;
+  return `<section class="sec" id="scSides"><div class="task-h"><h3>Batch ${no}</h3>${used ? '<button class="btn ghost" data-sc="batchNew" type="button">New batch</button>' : ''}</div>
+    <div class="field"><label for="scSidesSel">Sides</label><select id="scSidesSel" class="inp">${opts}</select></div>
+    <p class="hint" style="margin:0">${SC_SIDES_HINT[sides]}${noDup ? ' This scanner can’t read both sides in one pass.' : ''}</p>
+    ${scTwoPass(sides) ? `<span class="lbl">Turning the stack over</span><div class="segs" id="scAxis">${SC_AXIS.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === H.axis ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <p class="hint" style="margin:0">${H.axis === 'top' ? 'Turning top over bottom leaves the backs upside down, so Quire turns them round.' : 'Turning it like a book page keeps the backs upright.'}</p>` : ''}
+    ${sides !== 'one' ? `<label class="chk"><input type="checkbox" id="scSkipB" ${H.skipBlank ? 'checked' : ''}> Leave out blank backs</label>` : ''}
+    ${st}${used ? '<p class="hint" style="margin:0">Each batch keeps its own settings. Change them for the next stack with New batch. Click a batch’s label in the strip to fix its order.</p>' : ''}</section>`;
+}
+function scSidesWire(R) {
+  const s = $('#scSidesSel', R); if (s) s.onchange = () => scBatchOpt('sides', s.value);
+  const q = $('#scQSides', R); if (q) q.onchange = () => scBatchOpt('sides', q.value);
+  const a = $('#scAxis', R); if (a) a.onclick = e => { const b = e.target.closest('button'); if (b) scBatchOpt('axis', b.dataset.v); };
+  const k = $('#scSkipB', R); if (k) k.onchange = () => scBatchOpt('skipBlank', k.checked);
+}
+// Fix a batch after scanning: change how its sheets went through (it is re-sorted), or remove it.
+async function scBatchEdit(id) {
+  const b = SC.batches.find(x => x.id === id); if (!b) return; const pass = scTwoPass(b.sides);
+  const box = el('div'); box.innerHTML = `<p class="hint" style="margin:0 0 10px">${plural(scBatchPages(b).length, 'page')}${b.hold.length ? ` and ${plural(b.hold.length, 'blank back')} left out` : ''} · ${SC_SRC_NAME[b.src] || 'Scan'}${b.src === 'camera' ? '' : `, ${b.dpi} dpi`}</p>
+    ${pass ? `<div class="field"><label for="sbS">The backs were scanned</label><select id="sbS" class="inp"><option value="flip"${b.sides === 'flip' ? ' selected' : ''}>After turning the stack over (last sheet first)</option><option value="same"${b.sides === 'same' ? ' selected' : ''}>From the first sheet again</option></select></div>
+    <div class="field"><label for="sbA">The stack was turned</label><select id="sbA" class="inp">${SC_AXIS.map(([v, l]) => `<option value="${v}"${v === b.axis ? ' selected' : ''}>${l}${v === 'top' ? ' (backs upside down)' : ''}</option>`).join('')}</select></div>`
+    : `<p style="margin:0 0 8px">${SC_SIDES.find(x => x[0] === b.sides)[1]}.</p>`}
+    ${b.sides !== 'one' ? `<label class="chk"><input type="checkbox" id="sbB" ${b.skipBlank ? 'checked' : ''}> Leave out blank backs</label>` : ''}`;
+  const r = await modal({ title: scBatchName(b), body: box, actions: [{ label: 'Remove batch', danger: true, value: 'del' }, { label: 'Cancel', value: null }, ...(b.sides !== 'one' ? [{ label: 'Apply', primary: true, value: 'ok' }] : [])] });
+  if (r === 'del') { const n = scBatchPages(b).length; SC.pages = SC.pages.filter(p => p.batch !== b.id); b.hold = []; b.phase = 'done'; SC.batches = SC.batches.filter(x => x !== b); SC.batches.forEach((x, i) => x.no = i + 1); scSelect(-1); toast(`Removed ${plural(n, 'page')}`); return; }
+  if (r !== 'ok') return;
+  if (pass) { b.sides = $('#sbS').value; b.axis = $('#sbA').value; }
+  const bb = $('#sbB'); if (bb) b.skipBlank = bb.checked;
+  scCollate(b); scStrip(); scSide(); scBar(); scDraw(); toast(`Batch ${b.no} re-sorted`);
+}
+
 /* --- document scanner (Windows app): pages come from the scanner already flat, so edge finding is skipped --- */
 async function scHwList(force) {
   if (!scHasHw() || (SC.hw.devices && !force)) return;
@@ -10861,20 +11017,22 @@ async function scHwList(force) {
   try { const r = await window.quireDesktop.scanner.list(); SC.hw.devices = (r && r.devices) || []; SC.hw.err = r && !r.ok ? r.error || '' : ''; }
   catch (e) { SC.hw.err = 'Could not reach Windows scanning.'; }
   if (SC.hw.devices.length && !SC.hw.devices.some(d => d.id === SC.hw.device)) SC.hw.device = SC.hw.devices[0].id;
-  scSide(); scMsg();
+  scBatchSync(true);
 }
-const HW_KEYS = ['device', 'source', 'dpi', 'color', 'paper', 'more', 'wait', 'native'];
-const HW_PREF = { device: 'hwDevice', source: 'hwSource', dpi: 'hwDpi', color: 'hwColor', paper: 'hwPaper', more: 'hwMore', wait: 'hwWait', native: 'hwNative' };
+const HW_KEYS = ['device', 'source', 'dpi', 'color', 'paper', 'more', 'wait', 'native', 'sides', 'axis', 'skipBlank'];
+const HW_PREF = { device: 'hwDevice', source: 'hwSource', dpi: 'hwDpi', color: 'hwColor', paper: 'hwPaper', more: 'hwMore', wait: 'hwWait', native: 'hwNative', sides: 'hwSides', axis: 'hwAxis', skipBlank: 'hwSkipBlank' };
 const hwPresets = () => pref.get('hwPresets', {});
 function hwSet(key, v) { SC.hw[key] = v; pref.set(HW_PREF[key], v); if (SC.hw.preset) { SC.hw.preset = ''; pref.set('hwPreset', ''); } }
 // One pass of the scanner: a flatbed page, every page in the feeder, or whatever the scanner's own window returns.
 async function scHwOnce(dialog) {
-  const H = SC.hw; const feeder = H.source !== 'flatbed' && !dialog;
-  busy(dialog ? 'Waiting for the scanner window…' : feeder ? 'Scanning every page in the feeder…' : 'Scanning…');
-  const before = SC.pages.length; let r = null;
+  const H = SC.hw; const feeder = H.source !== 'flatbed' && !dialog; const b = scBatch(); const backs = scTwoPass(b.sides) && b.phase === 'backs';
+  busy(dialog ? 'Waiting for the scanner window…' : feeder ? (backs ? 'Scanning the backs…' : b.sides === 'duplex' ? 'Scanning both sides of every page in the feeder…' : 'Scanning every page in the feeder…') : 'Scanning…');
+  const before = SC.pages.length, nb0 = b.nb, hold0 = b.hold.length; let r = null;
   try {
-    const left = scLeft();
-    r = await window.quireDesktop.scanner.scan({ device: H.device, source: H.source, dpi: H.dpi, color: H.color, paper: H.paper, dialog: !!dialog, max: left === Infinity || left === 0 ? 0 : left });
+    let left = scLeft(); if (backs && feeder) left = Math.min(left, Math.max(1, b.nf - b.nb)); // one back for each front
+    r = await window.quireDesktop.scanner.scan({ device: H.device, source: feeder && b.sides === 'duplex' ? 'duplex' : H.source, dpi: H.dpi, color: H.color, paper: H.paper, dialog: !!dialog, max: left === Infinity || left === 0 ? 0 : left });
+    // A driver that refused two-sided scanning returned fronts only: carry on by turning the stack over.
+    if (r && r.simplex && b.sides === 'duplex') { b.sides = 'flip'; H.sides = 'flip'; pref.set('hwSides', 'flip'); r.warning = ''; r.toFlip = true; }
     for (const bytes of (r && r.pages) || []) {
       const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
       try { const img = await loadImg(url); const k = Math.min(1, 3400 / Math.max(img.naturalWidth, img.naturalHeight)); const c = cnv(img.naturalWidth * k, img.naturalHeight * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); scAdd(c, null, { flat: true, filter: H.color === 'color' ? SC.filter : H.color === 'grey' ? 'grey' : 'bw' }); }
@@ -10884,7 +11042,13 @@ async function scHwOnce(dialog) {
     if (r && !r.ok && r.error) toast(r.error, 6000); else if (r && r.warning) toast(r.warning, 6000);
   } catch (e) { toast('The scan did not work: ' + (e && e.message || e)); r = null; }
   finally { unbusy(); }
-  return { got: SC.pages.length - before, ok: !!(r && r.ok), feeder };
+  const got = SC.pages.length - before + b.hold.length - hold0; // blank backs set aside count as scanned
+  // A turned-over stack: after the feeder's fronts pass come the backs; after the backs pass the batch is done.
+  if (feeder && scTwoPass(b.sides) && got > 0) {
+    if (b.phase === 'fronts') { scBackPhase(b); toast(r && r.toFlip ? 'This scanner can’t read both sides in one pass, so it scanned the fronts. Turn the stack over and press Scan backs.' : `${plural(b.nf, 'front')} scanned. Turn the stack over and press Scan backs.`, 7000); }
+    else if (b.phase === 'backs' && b.nb > nb0) { b.nb = Math.max(b.nb, b.nf); scBatchCheck(b); } // the feeder is empty: fronts without a back stay as they are
+  }
+  return { got, ok: !!(r && r.ok), feeder };
 }
 // Scan, then for a flatbed offer the next page the way the settings say: ask, wait a few seconds, or stop.
 async function scHwScan(dialog) {
@@ -10894,9 +11058,13 @@ async function scHwScan(dialog) {
   try {
     while (SC.open) {
       const r = await scHwOnce(dialog || H.native); total += r.got;
-      if (!r.ok || !r.got || r.feeder || H.more === 'no' || scLeft() === 0) break;
+      const ob = scOpenBatch();
+      if (!r.ok || !r.got || r.feeder || H.more === 'no' || scLeft() === 0 || !ob) break;
       if (H.more === 'wait') { H.busy = false; scSide(); scBar(); scStrip(); scHwCountdown(); return; }
-      const go = await modal({ title: 'Scan another page?', body: `<p style="margin:0">${total} page${total > 1 ? 's' : ''} scanned so far. Put the next page on the glass.</p>`, actions: [{ label: 'Done', value: null }, { label: 'Scan next page', primary: true, value: 'go' }] });
+      const tp = scTwoPass(ob.sides), ea = ob.sides === 'each' && (ob.nf + ob.nb) % 2;
+      const go = await modal({ title: ea ? 'Scan the back?' : 'Scan another page?', body: `<p style="margin:0">${total} page${total > 1 ? 's' : ''} scanned so far. ${ea ? 'Turn the sheet over on the glass.' : tp && ob.phase === 'backs' ? `Put the next back on the glass (${ob.nf - ob.nb} to go).` : 'Put the next page on the glass.'}</p>`,
+        actions: [{ label: 'Done', value: null }, ...(tp && ob.phase === 'fronts' ? [{ label: 'All fronts done: scan backs', value: 'backs' }] : []), { label: ea ? 'Scan the back' : 'Scan next page', primary: true, value: 'go' }] });
+      if (go === 'backs') { scBackPhase(ob); continue; }
       if (go !== 'go') break;
     }
   } finally { H.busy = false; scSide(); scBar(); scStrip(); scMsg(); }
@@ -10916,10 +11084,11 @@ async function scHwSavePreset() {
   H.preset = name; pref.set('hwPreset', name); scSide(); toast(`Preset “${name}” saved`);
 }
 function scHwUsePreset(name) {
-  const H = SC.hw; const ps = hwPresets()[name]; if (!ps) return;
+  const H = SC.hw; const ps = Object.assign({}, hwPresets()[name]); if (!hwPresets()[name]) return;
+  if (ps.source === 'duplex') { ps.source = 'feeder'; ps.sides = 'duplex'; } // presets saved before two-sided became its own setting
   for (const k of HW_KEYS) if (ps[k] !== undefined) { H[k] = ps[k]; pref.set(HW_PREF[k], ps[k]); }
   if (H.devices && H.devices.length && !H.devices.some(d => d.id === H.device)) toast('The scanner in this preset isn’t connected, so the current one is used.', 5000);
-  H.preset = name; pref.set('hwPreset', name); scSide(); scMsg();
+  H.preset = name; pref.set('hwPreset', name); scBatchSync();
 }
 function scHwSection() {
   if (!scHasHw()) return '';
@@ -10928,16 +11097,18 @@ function scHwSection() {
   const names = Object.keys(hwPresets());
   const devs = H.devices === null ? '' : !H.devices.length ? `<p class="hint">${esc(H.err || 'No scanner found. Check that it is switched on and connected, then press Refresh.')}</p>`
     : `<div class="field"><label for="scHwDev">Scanner</label><select id="scHwDev" class="inp">${opt(H.devices.map(d => [d.id, d.name || 'Scanner']), H.device)}</select></div>`;
-  const fb = H.source === 'flatbed';
+  const fb = H.source === 'flatbed'; const d = scDev(); const noFeed = d && d.caps && d.caps.feeder === false;
+  const ob = scOpenBatch(); const backs = ob && scTwoPass(ob.sides) && ob.phase === 'backs';
   return `<section class="sec" id="scHw"><div class="task-h"><h3>Document scanner</h3><button class="btn ghost" data-sc="hwRefresh" type="button">Refresh</button></div>
     <div class="field"><label for="scHwPre">Preset</label><div class="row" style="gap:6px;flex-wrap:nowrap"><select id="scHwPre" class="inp" style="flex:1;min-width:0"><option value="">${names.length ? 'Current settings' : 'No presets yet'}</option>${opt(names.map(n => [n, n]), H.preset)}</select><button class="btn" data-sc="hwSavePre" type="button">Save…</button>${H.preset ? `<button class="btn ghost" data-sc="hwDelPre" type="button" aria-label="Delete preset">Delete</button>` : ''}</div></div>
     ${devs}
-    <span class="lbl">Paper from</span>${seg('scHwSrc', [['flatbed', 'Flatbed'], ['feeder', 'Feeder'], ['duplex', 'Both sides']], H.source)}
+    <span class="lbl">Paper from</span>${seg('scHwSrc', [['flatbed', 'Flatbed'], ['feeder', 'Feeder']], H.source)}
+    ${noFeed ? '<p class="hint" style="margin:0">This scanner has no document feeder.</p>' : ''}
     <div class="grid2"><div class="field"><label for="scHwPap">Paper size</label><select id="scHwPap" class="inp">${opt([['auto', 'Scanner default'], ['a4', 'A4'], ['letter', 'Letter'], ['legal', 'Legal'], ['a5', 'A5']], H.paper)}</select></div>
     <div class="field"><label for="scHwDpi">Resolution</label><select id="scHwDpi" class="inp">${opt([[150, '150 dpi · small'], [200, '200 dpi'], [300, '300 dpi · OCR'], [400, '400 dpi'], [600, '600 dpi · photos']], H.dpi)}</select></div></div>
     <span class="lbl">Colour</span>${seg('scHwCol', [['color', 'Colour'], ['grey', 'Grey'], ['bw', 'B&W']], H.color)}
     <label class="chk"><input type="checkbox" id="scHwNat" ${H.native ? 'checked' : ''}> Always use the scanner’s own window</label>
-    <button class="btn primary sc-wide" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}><span>${H.busy ? 'Scanning…' : fb || H.native ? 'Scan page' : 'Scan all pages in feeder'}</span></button>
+    <button class="btn primary sc-wide" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}><span>${H.busy ? 'Scanning…' : fb || H.native ? (backs ? 'Scan a back' : 'Scan page') : backs ? 'Scan backs' : 'Scan all pages in feeder'}</span></button>
     ${H.native ? '' : `<button class="btn ghost" data-sc="hwDialog" type="button" ${H.busy ? 'disabled' : ''}>Scanner’s own settings…</button>`}
     <p class="hint">${H.native ? 'Each scan opens the scanner maker’s window, with every option its driver has.' : fb ? 'Put a page on the glass and press Scan page.' : 'Load the pages in the feeder. Quire scans until it is empty.'} Set how many pages and the wait between them under Batch above.</p></section>`;
 }
@@ -10945,11 +11116,12 @@ function scHwWire(P) {
   if (!scHasHw()) return; const H = SC.hw;
   const dv = $('#scHwDev', P); if (dv) dv.onchange = () => { hwSet('device', dv.value); scSide(); scMsg(); };
   const sg = (id, key) => { const e0 = $('#' + id, P); if (e0) e0.onclick = e => { const b = e.target.closest('button'); if (!b) return; hwSet(key, b.dataset.v); scSide(); scMsg(); }; };
-  sg('scHwSrc', 'source'); sg('scHwCol', 'color');
+  sg('scHwCol', 'color');
+  const so = $('#scHwSrc', P); if (so) so.onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.source) scBatchOpt('source', b.dataset.v); };
   const sel = (id, key, num) => { const e0 = $('#' + id, P); if (e0) e0.onchange = () => { hwSet(key, num ? +e0.value : e0.value); scSide(); scMsg(); }; };
   sel('scHwDpi', 'dpi', true); sel('scHwPap', 'paper'); sel('scHwMore', 'more');
   const wr = $('#scHwWait', P); if (wr) wr.onchange = () => { hwSet('wait', scWaitVal(wr.value)); scSide(); scMsg(); };
-  const nt = $('#scHwNat', P); if (nt) nt.onchange = () => { hwSet('native', nt.checked); scSide(); scMsg(); };
+  const nt = $('#scHwNat', P); if (nt) nt.onchange = () => scBatchOpt('native', nt.checked);
   const pr = $('#scHwPre', P); if (pr) pr.onchange = () => { if (pr.value) scHwUsePreset(pr.value); else { H.preset = ''; pref.set('hwPreset', ''); scSide(); } };
   if (H.devices === null) scHwList();
 }
@@ -11038,11 +11210,11 @@ function scSide() {
   if (live) {
     const hint = { manual: 'Press <span class="kbd">Space</span> or the round button to capture each page.', timer: `Shoots a page every ${SC.timer} seconds while the timer runs. Turn the page between shots. <span class="kbd">Space</span> still captures at any time.`, auto: 'Hold the camera over a page. Quire captures it as soon as the page is still, then waits for you to turn to the next one.' }[SC.mode];
     if (scHasHw()) h += `<section class="sec"><span class="lbl">Scan with</span>${seg('scSrcSeg', [['scanner', 'Scanner'], ['camera', 'Camera']], scUseHw() ? 'scanner' : 'camera')}</section>`;
-    if (scUseHw()) h += scBatchSection() + scHwSection() + `<section class="sec"><button class="btn" data-sc="import">${svg('images')}Import photos</button></section>`;
+    if (scUseHw()) h += scSidesSection() + scBatchSection() + scHwSection() + `<section class="sec"><button class="btn" data-sc="import">${svg('images')}Import photos</button></section>`;
     else h += `<section class="sec"><h3>Capture</h3>${seg('scModeSeg', [['manual', 'Manual'], ['timer', 'Timer'], ['auto', 'Auto']], SC.mode)}<p class="hint">${hint}</p>
       ${SC.mode === 'timer' ? rangeRow('scTimerR', 'Interval', SC.timer, 2, 15, 1, v => v + ' s') : ''}
       ${SC.devices.length > 1 ? `<div class="field"><label for="scDev">Camera</label><select id="scDev" class="inp">${SC.devices.map((d, k) => `<option value="${esc(d.deviceId)}"${d.deviceId === SC.deviceId ? ' selected' : ''}>${esc(d.label || 'Camera ' + (k + 1))}</option>`).join('')}</select></div>` : ''}
-      <button class="btn" data-sc="import">${svg('images')}Import photos</button></section>` + scBatchSection();
+      <button class="btn" data-sc="import">${svg('images')}Import photos</button></section>` + scSidesSection() + scBatchSection();
     h += `<section class="sec"><h3>New pages</h3><span class="lbl">Filter</span>${seg('scFilt', SC_FILTERS, SC.filter)}</section>` + scCleanSection(true);
   } else {
     h += `<section class="sec"><div class="task-h"><h3>Page ${SC.sel + 1} of ${n}</h3></div><p class="hint">${pg.found ? 'Page edges found. Drag a corner to adjust it.' : 'No page edges found. Drag the corners onto the page’s corners.'}</p>
@@ -11061,7 +11233,7 @@ function scSide() {
   P.innerHTML = h; if (live && scUseHw()) scHwWire(P); else if (live && scHasHw() && SC.hw.devices === null) scHwList();
   const lm = $('#scLim', P); if (lm) lm.onchange = () => scLimSet(lm.value);
   const ld = $('#scLimDo', P); if (ld) ld.onchange = () => { SC.limitDone = ld.value; pref.set('scanLimitDone', SC.limitDone); scSide(); };
-  scAutoWire(P);
+  scAutoWire(P); scSidesWire(P);
   const ss = $('#scSrcSeg', P); if (ss) ss.onclick = e => { const b = e.target.closest('button'); if (!b || b.dataset.v === (scUseHw() ? 'scanner' : 'camera')) return; scSetSrc(b.dataset.v); };
   const ms = $('#scModeSeg', P); if (ms) ms.onclick = e => { const b = e.target.closest('button'); if (!b) return; SC.mode = b.dataset.v; pref.set('scanMode', SC.mode); SC.timerOn = false; SC.armed = true; SC.stable = 0; scSide(); scBar(); scState(); };
   const tr = $('#scTimerR', P); if (tr) tr.oninput = () => { SC.timer = +tr.value; pref.set('scanTimer', SC.timer); $('#scTimerR-o', P).textContent = SC.timer + ' s'; };
@@ -11082,7 +11254,7 @@ function scBar() {
     B.hidden = !n; B.innerHTML = n ? `<button class="btn" data-sc="review">Review ${n}</button>` : '';
   } else if (SC.sel === -1) {
     B.hidden = !!SC.err && !n;
-    B.innerHTML = `${SC.err ? `<button class="btn" data-sc="import">${svg('images')}Import photos</button>` : `${SC.mode === 'timer' ? `<button class="btn" data-sc="timer">${SC.timerOn ? 'Pause timer' : 'Start timer'}</button>` : ''}<button class="shutter" data-sc="shoot" data-tip="Capture" data-key="Space" aria-label="Capture page"></button>`}${n ? `<button class="btn" data-sc="review">Review ${n}</button>` : ''}`;
+    B.innerHTML = `${SC.err ? `<button class="btn" data-sc="import">${svg('images')}Import photos</button>` : `${SC.mode === 'timer' ? `<button class="btn" data-sc="timer">${SC.timerOn ? 'Pause timer' : 'Start timer'}</button>` : ''}<button class="shutter" data-sc="shoot" data-tip="Capture" data-key="Space" aria-label="Capture page"></button>`}${(() => { const ob = scOpenBatch(); return ob && scTwoPass(ob.sides) && ob.phase === 'fronts' && ob.nf ? '<button class="btn" data-sc="backs">Scan backs</button>' : ''; })()}${n ? `<button class="btn" data-sc="review">Review ${n}</button>` : ''}`;
   } else {
     B.hidden = false;
     B.innerHTML = `<div class="segs" id="scShow"><button type="button" data-v="corners" class="${SC.show === 'corners' ? 'on' : ''}">Corners</button><button type="button" data-v="result" class="${SC.show === 'result' ? 'on' : ''}">Result</button></div><span class="vsep"></span>
@@ -11092,8 +11264,14 @@ function scBar() {
 }
 function scStrip() {
   const T = scE('scStrip'); if (!T) return;
-  T.innerHTML = SC.pages.map((pg, k) => `<button class="sc-tile${k === SC.sel ? ' on' : ''}" data-k="${k}" draggable="true" aria-label="Page ${k + 1}"><img src="${pg.thumb}" alt=""><span class="n">${k + 1}</span></button>`).join('')
+  // A label opens each batch once there is more than one, or when its pages have fronts and backs.
+  const used = SC.batches.filter(scBatchUsed), lab = used.length > 1 || used.some(b => b.sides !== 'one'); let last = null;
+  T.innerHTML = SC.pages.map((pg, k) => { const b = pg.batch !== last && lab ? SC.batches.find(x => x.id === pg.batch) : null; last = pg.batch;
+    const head = b ? `<button class="sc-bh" data-b="${b.id}" title="${esc(scBatchName(b))}. Click to change its order or remove it."><b>Batch ${b.no}</b><span>${esc(SC_SRC_NAME[b.src] || 'Scan')}</span><span>${esc(SC_SIDES_SHORT[b.sides])}</span>${b.hold.length ? `<span>${plural(b.hold.length, 'blank')} out</span>` : ''}</button>` : '';
+    const two = pg.batch && SC.batches.some(x => x.id === pg.batch && x.sides !== 'one');
+    return head + `<button class="sc-tile${k === SC.sel ? ' on' : ''}" data-k="${k}" draggable="true" aria-label="Page ${k + 1}${two ? (pg.side === 'b' ? ', back' : ', front') : ''}"><img src="${pg.thumb}" alt=""><span class="n">${k + 1}${two ? (pg.side === 'b' ? ' · back' : ' · front') : ''}</span></button>`; }).join('')
     + `<button class="sc-tile${SC.sel === -1 ? ' on' : ''}" data-k="-1" aria-label="${scUseHw() ? 'Scanner' : SC.err ? 'Add pages' : 'Camera'}"><span class="camb">${svg(scUseHw() ? 'scanner' : SC.err ? 'plus' : 'camera')}</span><span class="n">${scUseHw() ? 'Scanner' : SC.err ? 'Add' : 'Camera'}</span></button>`;
+  $$('.sc-bh', T).forEach(h => h.onclick = () => scBatchEdit(+h.dataset.b));
   $$('.sc-tile', T).forEach(t => {
     const k = +t.dataset.k;
     t.onclick = () => { if (k === -1 && SC.err && !scUseHw()) { scImport(); return; } scSelect(k); };
@@ -11125,6 +11303,8 @@ function scAct(a) {
     case 'make': scFinish(false); break;
     case 'add': scFinish(true); break;
     case 'hwScan': scHwScan(false); break;
+    case 'backs': scBackPhase(scOpenBatch()); scBar(); break;
+    case 'batchNew': case 'batchEnd': scBatchFinish(); break;
     case 'hwDialog': scHwScan(true); break;
     case 'hwRefresh': scHwList(true); break;
     case 'useCam': scHwStop(); scSetSrc('camera'); break;
@@ -11137,7 +11317,7 @@ function scAct(a) {
     case 'rotl': scRot(-90); break;
     case 'rotr': scRot(90); break;
     case 'del': scDelete(SC.sel); break;
-    case 'retake': SC.insertAt = SC.sel; SC.pages.splice(SC.sel, 1); scSelect(-1); toast(scUseHw() ? 'Scan the replacement page' : 'Capture the replacement page'); break;
+    case 'retake': SC.insertAt = SC.sel; if (pg.batch) SC.retake = { batch: pg.batch, side: pg.side, k: pg.k }; SC.pages.splice(SC.sel, 1); scSelect(-1); toast(scUseHw() ? 'Scan the replacement page' : 'Capture the replacement page'); break;
     case 'edges': { let r = null; try { r = scDetect(pg.src, 480); } catch {} if (r && r.conf > .6) { pg.quad = r.quad; pg.found = true; SC.show = 'corners'; scThumb(pg); scStrip(); scSide(); scBar(); scDraw(); } else toast('No page edges found. Drag the corners instead.'); break; }
     case 'full': pg.quad = scFull(pg.src); SC.show = 'corners'; scThumb(pg); scStrip(); scBar(); scDraw(); break;
     case 'filterAll': for (const p of SC.pages) if (p.filter !== pg.filter) { p.filter = pg.filter; scThumb(p); } SC.filter = pg.filter; pref.set('scanFilter', SC.filter); scStrip(); toast('Filter applied to every page'); break;
@@ -11186,7 +11366,7 @@ async function scClose(force) {
     const n = SC.pages.length; const r = await modal({ title: 'Discard scanned pages?', body: `<p style="margin:0">${n} scanned page${n > 1 ? 's' : ''} will be lost. Use Create PDF to keep ${n > 1 ? 'them' : 'it'}.</p>`, actions: [{ label: 'Keep scanning', value: null }, { label: 'Discard', danger: true, value: 'x' }] });
     if (!r) return;
   }
-  scHwStop(); SC.open = false; SC.timerOn = false; SC.drag = null; scStopCam(); scE('scan').hidden = true; SC.pages = []; SC.sel = -1; SC.insertAt = null; SC.err = '';
+  scHwStop(); SC.open = false; SC.timerOn = false; SC.drag = null; scStopCam(); scE('scan').hidden = true; SC.pages = []; SC.sel = -1; SC.insertAt = null; SC.err = ''; SC.batches = []; SC.retake = null;
 }
 async function scBuildPdf() {
   const nd = await PDFDocument.create(); nd.setTitle('Scan ' + today()); nd.setCreator('Quire PDF Studio'); nd.setProducer('Quire PDF Studio');
