@@ -10899,13 +10899,13 @@ async function scImport() {
 //   same   all the fronts, then all the backs from the first sheet
 //   each   front, then back, of each sheet in turn (a flatbed or camera)
 // Asked as two plain questions: are the pages printed on one side or both, and (for both) how will you scan the backs?
-const SC_SIDES = [['one', 'Printed on one side'], ['duplex', 'The scanner does both sides'], ['flip', 'Fronts first, then flip the pile'], ['same', 'Fronts first, then backs in order'], ['each', 'Flip each sheet as I go']];
-const SC_SIDES_SHORT = { one: 'one side', duplex: 'both sides by the scanner', flip: 'fronts, then pile flipped', same: 'fronts, then backs', each: 'sheet by sheet' };
+const SC_SIDES = [['one', 'Printed on one side'], ['duplex', 'The scanner does both sides'], ['flip', 'Fronts, then backs in reverse order'], ['same', 'Fronts, then backs in the same order'], ['each', 'Flip each sheet as I go']];
+const SC_SIDES_SHORT = { one: 'one side', duplex: 'both sides by the scanner', flip: 'backs in reverse', same: 'backs in same order', each: 'sheet by sheet' };
 const SC_SIDES_HINT = {
   one: 'Only the front of each sheet has anything on it.',
   duplex: 'Put the pile in the feeder once. Quire gets the front and the back of every sheet.',
-  flip: 'Scan the whole pile. When the fronts are done, Quire asks you to flip the pile over and scan it again. Every back ends up right after its own front.',
-  same: 'Scan the front of every sheet. Then start again from the first sheet and scan the backs in the same order.',
+  flip: 'Feed the pile for the fronts (pages 1, 3, 5…). Then put the pile back in the feeder just as it came out, turned over, so the backs go through last sheet first (…6, 4, 2). Quire puts every page in the right place.',
+  same: 'Scan the fronts (pages 1, 3, 5…). Then start again from the first sheet and scan the backs (2, 4, 6…).',
   each: 'Scan a front, turn that sheet over and scan its back, then go on to the next sheet.'
 };
 const SC_AXIS = [['book', 'Sideways'], ['top', 'Top to bottom']];
@@ -11020,7 +11020,7 @@ function scSidesWire(R) {
 async function scBatchEdit(id) {
   const b = SC.batches.find(x => x.id === id); if (!b) return; const pass = scTwoPass(b.sides);
   const box = el('div'); box.innerHTML = `<p class="hint" style="margin:0 0 10px">${plural(scBatchPages(b).length, 'page')}${b.hold.length ? ` and ${plural(b.hold.length, 'blank back')} left out` : ''} · ${SC_SRC_NAME[b.src] || 'Scan'}${b.src === 'camera' ? '' : `, ${b.dpi} dpi`}</p>
-    ${pass ? `<div class="field"><label for="sbS">How were the backs scanned?</label><select id="sbS" class="inp"><option value="flip"${b.sides === 'flip' ? ' selected' : ''}>After flipping the whole pile over</option><option value="same"${b.sides === 'same' ? ' selected' : ''}>Again from the first sheet, same order</option></select></div>
+    ${pass ? `<div class="field"><label for="sbS">How were the backs scanned?</label><select id="sbS" class="inp"><option value="flip"${b.sides === 'flip' ? ' selected' : ''}>In reverse order (last sheet first)</option><option value="same"${b.sides === 'same' ? ' selected' : ''}>In the same order (first sheet first)</option></select></div>
     <div class="field"><label for="sbA">How was the pile flipped?</label><select id="sbA" class="inp">${SC_AXIS.map(([v, l]) => `<option value="${v}"${v === b.axis ? ' selected' : ''}>${l}${v === 'top' ? ' (backs upside down)' : ''}</option>`).join('')}</select></div>`
     : `<p style="margin:0 0 8px">${SC_SIDES.find(x => x[0] === b.sides)[1]}.</p>`}
     ${b.sides !== 'one' ? `<label class="chk"><input type="checkbox" id="sbB" ${b.skipBlank ? 'checked' : ''}> Leave out blank backs</label>` : ''}`;
