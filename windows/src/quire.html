@@ -10488,7 +10488,7 @@ const SC = {
   stream: null, video: null, devices: [], deviceId: pref.get('scanDevice', ''), err: '', starting: false,
   live: null, prevQ: null, stable: 0, armed: true, lastSig: null, lastShot: 0, lastDet: 0, raf: 0, state: '',
   timerOn: false, timerNext: 0, drag: null, fit: null,
-  // Document scanner (desktop app on Windows): settings are remembered between sessions.
+  // Document scanner (desktop apps: WIA on Windows, Image Capture on the Mac): settings are remembered between sessions.
   hw: { devices: null, device: pref.get('hwDevice', ''), source: pref.get('hwSource', 'flatbed'), dpi: pref.get('hwDpi', 300), color: pref.get('hwColor', 'color'),
     paper: pref.get('hwPaper', 'auto'), more: pref.get('hwMore', 'ask'), wait: pref.get('hwWait', 5), native: pref.get('hwNative', false), preset: pref.get('hwPreset', ''),
     // Two-sided originals: how the sheets go through (see SC_SIDES), how the stack is turned over, and whether blank backs are left out.
@@ -11010,12 +11010,15 @@ async function scBatchEdit(id) {
   scCollate(b); scStrip(); scSide(); scBar(); scDraw(); toast(`Batch ${b.no} re-sorted`);
 }
 
-/* --- document scanner (Windows app): pages come from the scanner already flat, so edge finding is skipped --- */
+/* --- document scanner (Windows and Mac apps): pages come from the scanner already flat, so edge finding is skipped --- */
+// The scanner maker's own window exists only on Windows; the Mac helper says dialog: false.
+const scDialogOk = () => scHasHw() && window.quireDesktop.scanner.dialog !== false;
 async function scHwList(force) {
   if (!scHasHw() || (SC.hw.devices && !force)) return;
   SC.hw.devices = []; scSide();
   try { const r = await window.quireDesktop.scanner.list(); SC.hw.devices = (r && r.devices) || []; SC.hw.err = r && !r.ok ? r.error || '' : ''; }
-  catch (e) { SC.hw.err = 'Could not reach Windows scanning.'; }
+  catch (e) { SC.hw.err = 'Could not reach the scanner.'; }
+  if (!scDialogOk() && SC.hw.native) SC.hw.native = false;
   if (SC.hw.devices.length && !SC.hw.devices.some(d => d.id === SC.hw.device)) SC.hw.device = SC.hw.devices[0].id;
   scBatchSync(true);
 }
@@ -11107,9 +11110,9 @@ function scHwSection() {
     <div class="grid2"><div class="field"><label for="scHwPap">Paper size</label><select id="scHwPap" class="inp">${opt([['auto', 'Scanner default'], ['a4', 'A4'], ['letter', 'Letter'], ['legal', 'Legal'], ['a5', 'A5']], H.paper)}</select></div>
     <div class="field"><label for="scHwDpi">Resolution</label><select id="scHwDpi" class="inp">${opt([[150, '150 dpi · small'], [200, '200 dpi'], [300, '300 dpi · OCR'], [400, '400 dpi'], [600, '600 dpi · photos']], H.dpi)}</select></div></div>
     <span class="lbl">Colour</span>${seg('scHwCol', [['color', 'Colour'], ['grey', 'Grey'], ['bw', 'B&W']], H.color)}
-    <label class="chk"><input type="checkbox" id="scHwNat" ${H.native ? 'checked' : ''}> Always use the scanner’s own window</label>
+    ${scDialogOk() ? `<label class="chk"><input type="checkbox" id="scHwNat" ${H.native ? 'checked' : ''}> Always use the scanner’s own window</label>` : ''}
     <button class="btn primary sc-wide" data-sc="hwScan" ${H.busy || (H.devices && !H.devices.length) ? 'disabled' : ''}><span>${H.busy ? 'Scanning…' : fb || H.native ? (backs ? 'Scan a back' : 'Scan page') : backs ? 'Scan backs' : 'Scan all pages in feeder'}</span></button>
-    ${H.native ? '' : `<button class="btn ghost" data-sc="hwDialog" type="button" ${H.busy ? 'disabled' : ''}>Scanner’s own settings…</button>`}
+    ${H.native || !scDialogOk() ? '' : `<button class="btn ghost" data-sc="hwDialog" type="button" ${H.busy ? 'disabled' : ''}>Scanner’s own settings…</button>`}
     <p class="hint">${H.native ? 'Each scan opens the scanner maker’s window, with every option its driver has.' : fb ? 'Put a page on the glass and press Scan page.' : 'Load the pages in the feeder. Quire scans until it is empty.'} Set how many pages and the wait between them under Batch above.</p></section>`;
 }
 function scHwWire(P) {

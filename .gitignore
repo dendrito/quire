@@ -2,3 +2,4 @@ __pycache__/
 web/dist/
 web/site/
 /build/
+/mac/bin/
