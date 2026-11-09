@@ -1,9 +1,11 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('quireDesktop', {
   onOpenFile: cb => ipcRenderer.on('open-file', (_event, file) => cb(file)),
   ready: () => ipcRenderer.send('renderer-ready'),
   askCamera: () => ipcRenderer.invoke('ask-camera'),
+  // Interface size from Settings: the window's zoom, so text, icons and pages all scale and stay sharp.
+  setZoom: f => webFrame.setZoomFactor(Math.max(.8, Math.min(2, +f || 1))),
   // Send to Zotero: zotero(items in Zotero's item JSON) -> { ok, error }
   // Trusted timestamp: timestamp(url, request bytes) -> { bytes } or { error }
   timestamp: (url, req) => ipcRenderer.invoke('timestamp', url, req),
