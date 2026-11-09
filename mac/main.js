@@ -1,6 +1,8 @@
 const { app, BrowserWindow, shell, ipcMain, protocol, net, session, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 
 const APP_DIR = path.join(__dirname, 'app');
@@ -39,6 +41,42 @@ ipcMain.handle('ask-camera', async () => {
   if (process.platform !== 'darwin') return true;
   if (systemPreferences.getMediaAccessStatus('camera') === 'granted') return true;
   try { return await systemPreferences.askForMediaAccess('camera'); } catch { return false; }
+});
+
+// Document scanners, through the Mac's Image Capture framework (bin/quire-scan, built from scanner/quire-scan.swift).
+// Settings travel in environment variables, the same ones the Windows app passes to its scanner script.
+const SCAN_BIN = app.isPackaged ? path.join(process.resourcesPath, 'bin', 'quire-scan') : path.join(__dirname, 'bin', 'quire-scan');
+function runScan(env, timeoutMs) {
+  return new Promise(resolve => {
+    if (!fs.existsSync(SCAN_BIN)) { resolve({ ok: false, devices: [], error: 'This build of Quire has no scanner support.' }); return; }
+    execFile(SCAN_BIN, [], { env: { ...process.env, ...env }, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      const line = String(stdout || '').trim().split(/\r?\n/).pop();
+      try { resolve(JSON.parse(line)); }
+      catch { resolve({ ok: false, error: err && err.killed ? 'The scanner took too long to answer.' : 'Could not reach the scanner.' }); }
+    });
+  });
+}
+ipcMain.handle('scanner-list', async () => runScan({ QUIRE_SCAN_ACTION: 'list' }, 90000));
+ipcMain.handle('scanner-scan', async (_event, opts = {}) => {
+  if (opts.dialog) return { ok: false, pages: [], error: 'The Mac has no scanner window of its own. Use the settings in Quire.' };
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'quire-scan-'));
+  try {
+    const r = await runScan({
+      QUIRE_SCAN_ACTION: 'scan',
+      QUIRE_SCAN_DEVICE: String(opts.device || ''),
+      QUIRE_SCAN_SOURCE: ['flatbed', 'feeder', 'duplex'].includes(opts.source) ? opts.source : 'flatbed',
+      QUIRE_SCAN_DPI: String(Math.max(75, Math.min(1200, parseInt(opts.dpi, 10) || 300))),
+      QUIRE_SCAN_COLOR: ['color', 'grey', 'bw'].includes(opts.color) ? opts.color : 'color',
+      QUIRE_SCAN_MAX: String(Math.max(0, Math.min(500, parseInt(opts.max, 10) || 0))),
+      QUIRE_SCAN_PAPER: ['a4', 'letter', 'legal', 'a5'].includes(opts.paper) ? opts.paper : 'auto',
+      QUIRE_SCAN_OUT: out
+    }, 15 * 60 * 1000);
+    // Only files inside our own temporary folder are read back, in the order they were scanned.
+    const pages = (r.files || []).filter(f => path.dirname(path.resolve(f)) === fs.realpathSync(out) || path.dirname(path.resolve(f)) === out).map(f => new Uint8Array(fs.readFileSync(f)));
+    return { ok: !!r.ok, error: r.error || '', warning: r.warning || '', simplex: !!r.simplex, pages };
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
 });
 
 // Send to Zotero: pass items to the Zotero app on this computer through its connector server (the one the Zotero browser

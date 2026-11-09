@@ -6,10 +6,11 @@
   "main": "main.js",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/vendor.js",
+    "postinstall": "node scripts/build-scanner.js && node scripts/vendor.js",
     "vendor": "node scripts/vendor.js",
-    "start": "node scripts/vendor.js && electron .",
-    "dist": "node scripts/vendor.js && electron-builder --mac"
+    "start": "node scripts/build-scanner.js && node scripts/vendor.js && electron .",
+    "dist": "node scripts/build-scanner.js && node scripts/vendor.js && electron-builder --mac",
+    "scanner": "node scripts/build-scanner.js"
   },
   "devDependencies": {
     "@expo-google-fonts/arimo": "0.4.3",
@@ -85,6 +86,15 @@
     },
     "dmg": {
       "title": "Quire PDF Studio"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "bin/",
+        "to": "bin/",
+        "filter": [
+          "quire-scan"
+        ]
+      }
+    ]
   }
 }
