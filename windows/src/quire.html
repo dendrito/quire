@@ -405,6 +405,7 @@ dialog h2{margin:0 0 14px;font:600 17px var(--f-ui);letter-spacing:-.02em}
 .sc-tile.on .n{color:var(--accent)}
 .sc-tile.drop{box-shadow:-2px 0 0 var(--accent)}
 .sc-bh{flex:none;align-self:stretch;display:flex;flex-direction:column;justify-content:center;gap:2px;max-width:96px;padding:6px 8px;margin-left:4px;border:0;border-left:2px solid var(--accent);border-radius:0 8px 8px 0;background:var(--accent-soft);color:var(--fg);font-family:inherit;font-size:10.5px;font-weight:500;line-height:1.25;text-align:left;cursor:pointer}
+.sc-qsides{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%;max-width:380px}.sc-qsides .field{width:100%;text-align:left}
 .sc-bh:first-child{margin-left:0}.sc-bh b{font-size:11.5px;font-weight:600;color:var(--accent)}.sc-bh span{color:var(--muted)}.sc-bh:hover{filter:brightness(.97)}
 .sc-tile .camb{height:84px;width:62px;border-radius:6px;display:grid;place-items:center;box-shadow:inset 0 0 0 1.5px var(--line);color:var(--muted)}
 .sc-tile .camb svg{width:22px;height:22px}
@@ -10691,16 +10692,15 @@ function scMsg() {
     M.hidden = false;
     if (H.waitUntil) { const left = Math.max(1, Math.ceil((H.waitUntil - performance.now()) / 1000)); M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>Next page in ${left} s</h3><p style="margin:0;line-height:1.5">Turn to the next page and put it on the glass. ${SC.limit > 0 ? `${scCountTxt()} pages` : `${SC.pages.length} page${SC.pages.length === 1 ? '' : 's'} so far`}.</p><div class="row" style="justify-content:center"><button class="btn" data-sc="hwStop">Stop</button><button class="btn primary" data-sc="hwScan">Scan now</button></div></div>`; return; }
     const ob = scOpenBatch(), sides = ob && scBatchUsed(ob) ? ob.sides : scSides(), tp = scTwoPass(sides), backs = tp && ob && ob.phase === 'backs';
-    const turn = H.axis === 'top' ? 'turn the stack over top to bottom' : 'turn the stack over like a book page';
+    const turn = H.axis === 'top' ? 'flip the pile over top to bottom' : 'flip the pile over sideways';
     const say = H.devices && !H.devices.length ? esc(H.err || 'Check that the scanner is switched on and connected, then press Refresh on the right.')
-      : backs ? (fe ? `${plural(ob.nf, 'front')} scanned. Now ${sides === 'flip' ? `${turn}, without reordering it,` : 'take the stack in its original order, back side up,'} and put it in the feeder again. Press Scan backs: Quire puts each back after its front.`
+      : backs ? (fe ? `${plural(ob.nf, 'front')} scanned. Now ${sides === 'flip' ? `${turn} without changing the order` : 'put the pile back in its original order, backs facing the scanner,'} and load it in the feeder again. Then press Scan backs.`
         : `${plural(ob.nf, 'front')} scanned. Now the backs: ${sides === 'flip' ? 'start with the last sheet (it is still on the glass: just turn it over)' : 'start again from the first sheet'}. ${ob.nf - ob.nb} to go.`)
-      : fe ? (tp ? 'Load the stack in the feeder and press Scan to read all the fronts. Quire then asks you to turn it over for the backs.' : sides === 'duplex' ? 'Load your pages in the feeder, then press Scan. The scanner reads both sides of every sheet.' : SC.limit > 0 ? `Load your pages in the feeder, then press Scan. Quire stops when the feeder is empty or at ${SC.limit} pages.` : 'Load your pages in the feeder, then press Scan. Quire scans until the feeder is empty.')
+      : fe ? (tp ? 'Load the pile in the feeder and press Scan fronts. Quire then asks you to flip the pile for the backs.' : sides === 'duplex' ? 'Load your pages in the feeder, then press Scan. The scanner reads both sides of every sheet.' : SC.limit > 0 ? `Load your pages in the feeder, then press Scan. Quire stops when the feeder is empty or at ${SC.limit} pages.` : 'Load your pages in the feeder, then press Scan. Quire scans until the feeder is empty.')
       : tp ? 'Put the front of each sheet on the glass and press Scan, or press Space. When all the fronts are done, press Scan backs.' : sides === 'each' ? 'Scan the front of a sheet, then turn it over and scan its back. Press Space to scan.' : 'Put a page on the glass and press Scan, or press Space. Repeat for each page.';
-    const sOpts = SC_SIDES.filter(([v]) => scSidesOk(v)).map(([v, l]) => `<option value="${v}"${v === scSides() ? ' selected' : ''}>${l}</option>`).join('');
     M.innerHTML = `<div class="card"><span class="sc-hwic">${svg('scanner')}</span><h3>${backs ? `Batch ${ob.no}: the backs` : esc(d ? d.name : H.devices && !H.devices.length ? 'No scanner found' : 'Document scanner')}</h3>
       ${SC.limit > 0 ? `<p class="hint" style="margin:0">${scCountTxt()} pages</p>` : ''}<p style="margin:0;line-height:1.5">${say}</p>
-      <div class="sc-quick"><label>Sides <select id="scQSides" class="inp">${sOpts}</select></label></div>
+      <div class="sc-qsides">${scSidesFields('scQ')}</div>
       <div class="sc-quick"><label>Pages to scan <input id="scQLim" class="inp" type="number" min="0" max="2000" step="1" placeholder="All" value="${SC.limit || ''}"></label>
       ${fe ? '' : `<label>Between pages <select id="scQMore" class="inp">${SC_MORE.map(([v, l]) => `<option value="${v}"${H.more === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>${H.more === 'wait' ? `<label>Wait <input id="scQWait" class="inp" type="number" min="1" max="600" step="1" value="${H.wait}"> s</label>` : ''}`}</div>
       <div class="sc-quick"><label><input type="checkbox" id="scQAuS" ${SC.auto.straight ? 'checked' : ''}> Straighten</label><label><input type="checkbox" id="scQAuM" ${SC.auto.margins ? 'checked' : ''}> Detect margins</label><label><input type="checkbox" id="scQAuO" ${SC.auto.ocr ? 'checked' : ''}> OCR</label></div>
@@ -10886,16 +10886,17 @@ async function scImport() {
 //   flip   all the fronts, then the stack is turned over and fed again, so the backs come last sheet first
 //   same   all the fronts, then all the backs from the first sheet
 //   each   front, then back, of each sheet in turn (a flatbed or camera)
-const SC_SIDES = [['one', 'One-sided'], ['duplex', 'Both sides in one pass'], ['flip', 'Fronts, then turn the stack over'], ['same', 'Fronts, then backs from sheet 1'], ['each', 'Front then back, sheet by sheet']];
-const SC_SIDES_SHORT = { one: 'one-sided', duplex: 'both sides at once', flip: 'stack turned over', same: 'backs in the same order', each: 'front then back' };
+// Asked as two plain questions: are the pages printed on one side or both, and (for both) how will you scan the backs?
+const SC_SIDES = [['one', 'Printed on one side'], ['duplex', 'The scanner does both sides'], ['flip', 'Fronts first, then flip the pile'], ['same', 'Fronts first, then backs in order'], ['each', 'Flip each sheet as I go']];
+const SC_SIDES_SHORT = { one: 'one side', duplex: 'both sides by the scanner', flip: 'fronts, then pile flipped', same: 'fronts, then backs', each: 'sheet by sheet' };
 const SC_SIDES_HINT = {
-  one: 'Each sheet is scanned on one side.',
-  duplex: 'The scanner reads the front and the back of every sheet in one pass.',
-  flip: 'Scan all the fronts. Then turn the whole stack over and scan the backs: they come out last sheet first, and Quire puts each one after its front.',
-  same: 'Scan all the fronts, then the backs starting again from the first sheet. Quire puts each back after its front.',
-  each: 'Scan the front of a sheet, then its back, then the next sheet.'
+  one: 'Only the front of each sheet has anything on it.',
+  duplex: 'Put the pile in the feeder once. Quire gets the front and the back of every sheet.',
+  flip: 'Scan the whole pile. When the fronts are done, Quire asks you to flip the pile over and scan it again. Every back ends up right after its own front.',
+  same: 'Scan the front of every sheet. Then start again from the first sheet and scan the backs in the same order.',
+  each: 'Scan a front, turn that sheet over and scan its back, then go on to the next sheet.'
 };
-const SC_AXIS = [['book', 'Like a book page'], ['top', 'Top over bottom']];
+const SC_AXIS = [['book', 'Sideways'], ['top', 'Top to bottom']];
 const scTwoPass = s => s === 'flip' || s === 'same';
 // Batches with the same kind of feeding can be re-sorted into each other; any other change starts a new batch.
 const scKind = s => scTwoPass(s) ? 'pass' : s;
@@ -10974,23 +10975,32 @@ const scBatchName = b => `Batch ${b.no} · ${SC_SRC_NAME[b.src] || 'Scan'}, ${SC
 // The settings of the batch being scanned: shown in the side panel.
 function scSidesSection() {
   const H = SC.hw, b = scOpenBatch(), used = b && scBatchUsed(b), sides = scSides(), no = b ? b.no : SC.batches.filter(scBatchUsed).length + 1;
-  const opts = SC_SIDES.filter(([v]) => scSidesOk(v)).map(([v, l]) => `<option value="${v}"${v === sides ? ' selected' : ''}>${l}</option>`).join('');
   const d = scDev(); const noDup = scUseHw() && H.source === 'feeder' && !H.native && d && d.caps && d.caps.duplex === false;
   let st = '';
   if (used && scTwoPass(b.sides)) st = `<p class="hint" style="margin:0"><b>${b.phase === 'backs' ? 'Scanning the backs' : 'Scanning the fronts'}</b> · ${plural(b.nf, 'front')}, ${plural(b.nb, 'back')}${b.phase === 'backs' && b.nf > b.nb ? `, ${b.nf - b.nb} to go` : ''}</p>`
     + (b.phase === 'fronts' ? `<button class="btn" data-sc="backs" ${b.nf ? '' : 'disabled'} style="align-self:flex-start">All fronts done: scan the backs</button>` : '');
   else if (used) st = `<p class="hint" style="margin:0">${plural(scBatchPages(b).length, 'page')} in this batch${b.hold.length ? `, ${plural(b.hold.length, 'blank back')} left out` : ''}.</p>`;
   return `<section class="sec" id="scSides"><div class="task-h"><h3>Batch ${no}</h3>${used ? '<button class="btn ghost" data-sc="batchNew" type="button">New batch</button>' : ''}</div>
-    <div class="field"><label for="scSidesSel">Sides</label><select id="scSidesSel" class="inp">${opts}</select></div>
-    <p class="hint" style="margin:0">${SC_SIDES_HINT[sides]}${noDup ? ' This scanner can’t read both sides in one pass.' : ''}</p>
-    ${scTwoPass(sides) ? `<span class="lbl">Turning the stack over</span><div class="segs" id="scAxis">${SC_AXIS.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === H.axis ? 'on' : ''}">${l}</button>`).join('')}</div>
-    <p class="hint" style="margin:0">${H.axis === 'top' ? 'Turning top over bottom leaves the backs upside down, so Quire turns them round.' : 'Turning it like a book page keeps the backs upright.'}</p>` : ''}
+    ${scSidesFields('scS')}
+    ${sides !== 'one' ? `<p class="hint" style="margin:0">${SC_SIDES_HINT[sides]}${noDup && sides !== 'each' ? ' (This scanner can’t scan both sides by itself.)' : ''}</p>` : ''}
+    ${scTwoPass(sides) ? `<span class="lbl">How do you flip the pile?</span><div class="segs" id="scAxis">${SC_AXIS.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === H.axis ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <p class="hint" style="margin:0">${H.axis === 'top' ? 'Like a notepad. The backs come out upside down, and Quire turns them the right way up.' : 'Like turning a page in a book.'}</p>` : ''}
     ${sides !== 'one' ? `<label class="chk"><input type="checkbox" id="scSkipB" ${H.skipBlank ? 'checked' : ''}> Leave out blank backs</label>` : ''}
     ${st}${used ? '<p class="hint" style="margin:0">Each batch keeps its own settings. Change them for the next stack with New batch. Click a batch’s label in the strip to fix its order.</p>' : ''}</section>`;
 }
+// "Printed on one side / both sides", and for both sides "How will you scan the backs?" (id prefix: scS panel, scQ card).
+function scSidesFields(id) {
+  const sides = scSides(), two = sides !== 'one';
+  const how = SC_SIDES.filter(([v]) => v !== 'one' && scSidesOk(v)).map(([v, l]) => `<option value="${v}"${v === sides ? ' selected' : ''}>${l}</option>`).join('');
+  return `<span class="lbl">Pages are printed on</span><div class="segs" id="${id}Pr"><button type="button" data-v="one" class="${two ? '' : 'on'}">One side</button><button type="button" data-v="two" class="${two ? 'on' : ''}">Both sides</button></div>
+    ${two ? `<div class="field"><label for="${id}How">How will you scan the backs?</label><select id="${id}How" class="inp">${how}</select></div>` : ''}`;
+}
 function scSidesWire(R) {
-  const s = $('#scSidesSel', R); if (s) s.onchange = () => scBatchOpt('sides', s.value);
-  const q = $('#scQSides', R); if (q) q.onchange = () => scBatchOpt('sides', q.value);
+  for (const id of ['scS', 'scQ']) {
+    const pr = $('#' + id + 'Pr', R); if (pr) pr.onclick = e => { const b = e.target.closest('button'); if (!b || (b.dataset.v === 'one') === (scSides() === 'one')) return;
+      if (b.dataset.v === 'one') scBatchOpt('sides', 'one'); else { const last = pref.get('hwSidesTwo', ''); scBatchOpt('sides', last && scSidesOk(last) ? last : scSidesOk('duplex') ? 'duplex' : 'flip'); } };
+    const hw = $('#' + id + 'How', R); if (hw) hw.onchange = () => { pref.set('hwSidesTwo', hw.value); scBatchOpt('sides', hw.value); };
+  }
   const a = $('#scAxis', R); if (a) a.onclick = e => { const b = e.target.closest('button'); if (b) scBatchOpt('axis', b.dataset.v); };
   const k = $('#scSkipB', R); if (k) k.onchange = () => scBatchOpt('skipBlank', k.checked);
 }
@@ -10998,8 +11008,8 @@ function scSidesWire(R) {
 async function scBatchEdit(id) {
   const b = SC.batches.find(x => x.id === id); if (!b) return; const pass = scTwoPass(b.sides);
   const box = el('div'); box.innerHTML = `<p class="hint" style="margin:0 0 10px">${plural(scBatchPages(b).length, 'page')}${b.hold.length ? ` and ${plural(b.hold.length, 'blank back')} left out` : ''} · ${SC_SRC_NAME[b.src] || 'Scan'}${b.src === 'camera' ? '' : `, ${b.dpi} dpi`}</p>
-    ${pass ? `<div class="field"><label for="sbS">The backs were scanned</label><select id="sbS" class="inp"><option value="flip"${b.sides === 'flip' ? ' selected' : ''}>After turning the stack over (last sheet first)</option><option value="same"${b.sides === 'same' ? ' selected' : ''}>From the first sheet again</option></select></div>
-    <div class="field"><label for="sbA">The stack was turned</label><select id="sbA" class="inp">${SC_AXIS.map(([v, l]) => `<option value="${v}"${v === b.axis ? ' selected' : ''}>${l}${v === 'top' ? ' (backs upside down)' : ''}</option>`).join('')}</select></div>`
+    ${pass ? `<div class="field"><label for="sbS">How were the backs scanned?</label><select id="sbS" class="inp"><option value="flip"${b.sides === 'flip' ? ' selected' : ''}>After flipping the whole pile over</option><option value="same"${b.sides === 'same' ? ' selected' : ''}>Again from the first sheet, same order</option></select></div>
+    <div class="field"><label for="sbA">How was the pile flipped?</label><select id="sbA" class="inp">${SC_AXIS.map(([v, l]) => `<option value="${v}"${v === b.axis ? ' selected' : ''}>${l}${v === 'top' ? ' (backs upside down)' : ''}</option>`).join('')}</select></div>`
     : `<p style="margin:0 0 8px">${SC_SIDES.find(x => x[0] === b.sides)[1]}.</p>`}
     ${b.sides !== 'one' ? `<label class="chk"><input type="checkbox" id="sbB" ${b.skipBlank ? 'checked' : ''}> Leave out blank backs</label>` : ''}`;
   const r = await modal({ title: scBatchName(b), body: box, actions: [{ label: 'Remove batch', danger: true, value: 'del' }, { label: 'Cancel', value: null }, ...(b.sides !== 'one' ? [{ label: 'Apply', primary: true, value: 'ok' }] : [])] });

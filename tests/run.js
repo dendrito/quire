@@ -396,10 +396,12 @@ TESTS.scanner = async () => {
     // the PDF has every page in the strip
     const bytes = await scBuildPdf(); out.pdfPages = (await PDFDocument.load(bytes)).getPageCount(); out.stripN = SC.pages.length;
     // the side panel offers the two-sided choices, and a scanner without two-sided scanning hides that one
-    out.opts = [...document.querySelectorAll('#scSidesSel option')].map(o => o.value).join(' ');
-    SC.hw.devices[0].caps.duplex = false; H.sides = 'duplex'; scBatchSync(true); out.noDup = [...document.querySelectorAll('#scSidesSel option')].map(o => o.value).join(' ') + ' / ' + scSides();
+    H.sides = 'flip'; scBatchSync(true); out.opts = [...document.querySelectorAll('#scSHow option')].map(o => o.value).join(' ');
+    SC.hw.devices[0].caps.duplex = false; H.sides = 'duplex'; scBatchSync(true); out.noDup = [...document.querySelectorAll('#scSHow option')].map(o => o.value).join(' ') + ' / ' + scSides();
+    // "One side" / "Both sides" buttons switch the setting
+    document.querySelector('#scSPr [data-v="one"]').click(); out.toOne = scSides(); document.querySelector('#scSPr [data-v="two"]').click(); out.toTwo = scSides();
     // the camera gets the same choices (photograph all fronts, then all backs)
-    scSetSrc('camera'); H.sides = 'flip'; scBatchSync(true); out.cam = document.querySelector('#scSidesSel').value;
+    scSetSrc('camera'); H.sides = 'flip'; scBatchSync(true); out.cam = document.querySelector('#scSHow').value;
     await scClose(true);
     return out;
   });
@@ -413,8 +415,9 @@ TESTS.scanner = async () => {
   check('a scanner that reads both sides: asked for two-sided, order kept', r.dup.endsWith('F7 F8 F20 B20 F21 B21') && r.src4 === 'duplex' && r.dupSides === 'flip one duplex', `${r.dup} · ${r.src4} · ${r.dupSides}`);
   check('driver without two-sided: falls back to turning the stack over', r.fallback === 'flip backs 2 flip' && r.fb.endsWith('F30 B30 F31 B31'), `${r.fallback} · ${r.fb}`);
   check('the PDF has every page of every batch', r.pdfPages === r.stripN && r.stripN === 16, `${r.pdfPages} of ${r.stripN}`);
-  check('side panel offers every way of feeding', r.opts === 'one duplex flip same each', r.opts);
-  check('a scanner without two-sided hides that choice', r.noDup === 'one flip same each / flip', r.noDup);
+  check('side panel offers every way of scanning the backs', r.opts === 'duplex flip same each', r.opts);
+  check('a scanner without two-sided hides that choice', r.noDup === 'flip same each / flip', r.noDup);
+  check('One side / Both sides buttons work', r.toOne === 'one' && r.toTwo === 'flip', `${r.toOne} → ${r.toTwo}`);
   check('the camera offers the same choices', r.cam === 'flip', r.cam);
   check('no errors', !p.errs.length, p.errs.slice(0, 3).join(' | '));
   await p.context().close();
