@@ -1,6 +1,6 @@
 {
  "made_by": "tools/htr/materials.py",
- "kept_words": 239801,
+ "kept_words": 246929,
  "min_count": 3,
  "sources": [
   {
@@ -8,44 +8,43 @@
    "name": "Rafael Bluteau, Vocabulario Portuguez e Latino (1712-1728)",
    "archive_org": [
     "002994-10-completo",
-    "bub_gb_n7sOBRumqOcC",
     "bub_gb_wFd6AvENzikC",
+    "002994-02-completo_202608",
+    "002994-04-completo",
+    "b30414581_0006",
+    "002994-08-completo",
     "002994-07-completo",
     "002994-01-completo",
     "002994-02-completo",
     "002994-06-completo",
     "002994-09-completo",
     "002994-05-completo",
-    "002994-02-completo_202608",
-    "002994-04-completo",
     "bub_gb_MCIlQdcLRAMC",
-    "b30414581_0005",
+    "b30414581_0008",
+    "b30414581_0002",
+    "002994-03-completo",
     "b30414581_0003",
     "b30414581_0010",
-    "b30414581_0009",
-    "b30414581_0006",
     "b30414581_0001"
    ],
-   "words": 11181216,
-   "distinct": 929578,
+   "words": 11751452,
+   "distinct": 869198,
    "licence": "public domain"
   },
   {
    "key": "morais",
    "name": "Antonio de Morais Silva, Diccionario da Lingua Portugueza (1789)",
    "archive_org": [
-    "bub_gb_4FkSAAAAIAAJ",
-    "diccionariodalin00mora"
+    "diccionariodali00conggoog"
    ],
-   "words": 1033099,
-   "distinct": 211202,
+   "words": 315134,
+   "distinct": 75347,
    "licence": "public domain"
   },
   {
    "key": "tycho-brahe",
    "url": "https://www.tycho.iel.unicamp.br/corpus/",
-   "reachable": false,
-   "error": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1010)>"
+   "reachable": true
   },
   {
    "key": "post-scriptum",
@@ -56,7 +55,7 @@
    "key": "teitok-ps",
    "url": "https://teitok.clul.ul.pt/postscriptum/",
    "reachable": false,
-   "error": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'teitok.clul.ul.pt'. (_ssl.c:1010)>"
+   "error": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'teitok.clul.ul.pt'. (_ssl.c:1011)>"
   }
  ]
 }
