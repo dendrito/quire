@@ -36,6 +36,15 @@ Open it with **Scan** in the top bar, the camera button on the Pages toolbar, or
 - **PDF:** page size "Match each scan" (210 mm or Letter wide), A4 or Letter. Create PDF opens a new tab; "Add to <document>" inserts after the current page.
 - Everything is non-destructive until Create PDF: each page keeps `{src, quad, rot, filter, margins}`.
 
+## Batches and two-sided feeding (done, 9 Nov 2026)
+
+Code: the `/* --- batches --- */` block in the batch scanner section (names `scBatch*`, `scSides*`, `scCollate`, `SC_SIDES`). Test group `scanner` (a stand-in scanner).
+
+- **Sides** (side panel and the scanner card, scanner and camera): One-sided; Both sides in one pass (feeder, scanner does it); Fronts, then turn the stack over (backs come last sheet first); Fronts, then backs from sheet 1; Front then back, sheet by sheet. For the two-pass orders, **Turning the stack over**: like a book page, or top over bottom (backs turned 180°; Straighten keeps that turn unless the text clearly says otherwise). **Leave out blank backs** (ink under 0.1% of the page; kept aside, not deleted).
+- Two-pass flow: on a feeder, the fronts pass ends with "turn the stack over, press Scan backs", and the backs pass asks for one back per front. On flatbed/camera, **Scan backs** switches over. Each back slots after its front as it arrives.
+- **Batches:** every page carries `{batch, side, k}`. Each batch keeps its own source, sides, turn and blank setting. Changing the source or the kind of feeding when the batch has pages starts a new batch; New batch does it by hand. The strip shows a label per batch; clicking it re-sorts the batch (other order, other turn, blanks in or out) or removes it.
+- WIA: `list` reads Document Handling Capabilities (3086) into `caps {feeder, flatbed, duplex}`, which hides "Both sides in one pass" on a scanner without it. A driver that refuses duplex returns `simplex: true`; Quire then switches the batch to turning the stack over. "Both sides" is no longer a paper source (old prefs and presets are converted). Not yet tried on the Brother.
+
 ## Crop margins (done)
 
 Pages toolbar, crop button. **Set margins** (top/bottom/left/right in mm, in or pt, linkable, or drag the dashed edges on the page) or **Trim white space** (renders each page, finds where the content ends and keeps a border). Scope: all, selected or current page. It sets each page's CropBox, so the margins are hidden rather than deleted; **Remove crop** restores them. Works on rotated pages.
@@ -192,3 +201,26 @@ Branch claude/project-thread-vzqdhg, same block rules.
 - **Embedding missing fonts** (`fontEmbedMissing`, `fontSfnt`): Helvetica/Arial, Times, Courier and the standard 14 that a file only names are replaced by Arimo/Tinos/Cousine (same widths) as symbolic TrueType with a (3,0) cmap and ToUnicode, subset by blanking unused glyphs (fontkit's subsetter garbles these fonts). Used by the accessibility Fix and by PDF/A (which no longer rasterises those pages). Fonts: jsDelivr `@expo-google-fonts/*` on the web, `vendor/fonts-sub/` in the apps.
 - **Accessibility**: fonts check now fails with a Fix; new "Marked as a PDF/UA file" check (`uaid`, pdfuaid:part 1); headings never skip a level and start at H1.
 - **Tests** (`tests/`, `.github/workflows/tests.yml`): signatures, PDF/A-2b and PDF/UA-1 (veraPDF), OCR accuracy (pdftotext), Excel (openpyxl), Word (python-docx), redaction. Fixtures from `tests/fixtures/make.py`. Runs on every push touching web/, the app copies or tests/. A failing test means a real regression; thresholds are in run.js (`OCR_MIN`).
+
+## Handwriting / paleography (done, 4 Nov 2026)
+- OCR panel → "Kind of text: Handwriting". Code block `/* === handwriting (paleography) === */` above signature; names prefixed `htr`.
+- Models: kraken's line finder (blla) and three free CC BY readers, converted to ONNX by `tools/htr/convert.py`; `.github/workflows/htr-models.yml` downloads them from Zenodo and commits `models/htr/` (Zenodo is blocked from the cloud sessions, GitHub runners are not).
+  - McCATMuS (16th–21st c., incl. Portuguese; DOI 10.5281/zenodo.13788177), CATMuS Medieval 1.6 (DOI 10.5281/zenodo.15030337), TRIDIS (charters 11th–16th c., expands abbreviations; DOI 10.5281/zenodo.10800223).
+  - Users can add any kraken model converted with convert.py ("Add a reader file…", stored in IndexedDB `quire-htr`).
+- Runtime: onnxruntime-web 1.20.1 (jsDelivr on the web; bundled as vendor/onnxruntime in the apps, plus vendor/htr models). Web build downloads models from jsDelivr gh, then raw.githubusercontent, at the commit in `HTR_REV` (update it if the models are rebuilt).
+- Pipeline (htrPage): page rendered ~2600 px high → blla at 1800 px high, inverted RGB → baselines traced column by column over the ridge of the baseline map, cut at kraken's line-start/line-end marks (keeps columns apart) → each line cut along its baseline and straightened (HTR_K top/bot share of the line gap) → reader input inverted grey at model height with 16 px padding → greedy CTC with the model's codec → words placed on the page as baseline quads in the invisible text layer.
+- Test `node tests/run.js htr`: two pages of the iForal ground truth (medieval Portuguese charters, fetched by the workflow, not stored). Page CER with CATMuS Medieval: condado-1491 27.3% (kraken's own pipeline 25.6%), abrantes-1217 17.8% (kraken 47.6%, mostly reading order).
+
+## PDF to PowerPoint and most-accurate OCR (done, 4 Nov 2026)
+- `cvPptx` (Tools ribbon → PowerPoint, Ctrl+K "powerpoint"): one slide per page, slide size from the first page. Background = the page rendered with `fillText`/`strokeText` switched off on the canvas (pdf.js draws font text with fillText), so drawings and pictures stay but the text is not doubled; text = one text box per XY-cut block, paragraphs from `cvParas` with alignment, indents, line spacing and space before; centred/right blocks get a box across the text area. Scanned (OCR'd) pages keep the scan with transparent OCR text on top. Test group `pptx` (python-pptx + LibreOffice).
+- OCR "Most accurate models": downloads tessdata_best (`@tesseract.js-data/<lang>@1.0.0/4.0.0/`) into IndexedDB under `quire-ocr-best/…` and runs Tesseract with that cachePath. Faded test page 58.2% → 60.6% of words; about 5× bigger and slower.
+
+## Quire Lite and Quire Pro (in progress, 4 Nov 2026)
+- One source, two editions. `tools/editions.json` lists the `/* ===== section ===== */` blocks of web/quire-pdf-studio.html that are Pro only; everything else is in both. `node tools/build-editions.js --check` writes `web/dist/quire-lite.html` and `quire-pro.html` (not committed; the Tests workflow keeps them as the `quire-web-editions` artifact) and fails if Lite uses a name only Pro defines. Each build sets `window.QUIRE_EDITION`.
+- Pro only for now: find personal data, reading mode and spoken skim, snapshot, loupe, split view, space audit, email. The PDF-XChange features (ideas doc Rounds 5-9) will be added as Pro sections.
+- A new feature goes in its own `/* ===== name ===== */` section that registers its own icon, label, action and ribbon button, so it can move between editions by editing editions.json. The ribbon skips buttons whose action or tool isn't defined.
+- Desktop: `QUIRE_EDITION=lite|pro node scripts/vendor.js` builds that edition into app/index.html (unset = every feature, as before); `scripts/edition-config.js` writes edition-builder.json so the app is named "Quire Lite" or "Quire Pro" with its own app id. The Mac and Windows workflows build both editions.
+- Performance (commits 4993af0, 0aca270 and the next): thumbnails drawn lazily (IntersectionObserver in renderThumbs); pdf.js runs in a real worker (the page no longer loads pdf.worker.min.js itself); undo copies capped (undoTrim, UNDO_MAX 768 MB); handwriting sessions LRU (HTR_KEEP 3) and lines cached per page (htrLines); OCR re-reads weak lines with Sauvola too, re-reads faded pages (mean confidence under OCR_FADED 80) with the most accurate models when they are on the device, otherwise suggests them; one OCR engine stays warm for 2 minutes (OCR_WARM).
+- Quire Lite desktop bundles only blla, traprinq, geneapt and catmus-medieval (window.QUIRE_HTR_BUNDLED); others download from HTR_REV and are kept in IndexedDB. main.js lets those GETs, and the most accurate OCR models, through the offline filter.
+- Audit: https://claude.ai/artifact/SLhBM3hNVqPaxoYxn4V4gY. Benchmark: `node tests/bench.js`.
+

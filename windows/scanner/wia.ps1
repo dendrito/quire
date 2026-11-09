@@ -9,6 +9,8 @@
 #   QUIRE_SCAN_MAX     feeder: stop after this many pages (0 = until empty)
 #   QUIRE_SCAN_OUT     folder for the scanned JPEG files
 # Output: one line of JSON on stdout.
+#   list: devices = [{ id, name, caps }]; caps (null when unknown) says whether the scanner has a feeder, a flatbed and two-sided scanning
+#   scan: files, plus simplex = true when two-sided was asked for but the scanner could only read the fronts
 $ErrorActionPreference = 'Stop'
 $JPEG = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'
 function Out-Json($o) { [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress -Depth 4)) }
@@ -22,7 +24,12 @@ try {
   $action = $env:QUIRE_SCAN_ACTION
 
   if ($action -eq 'list') {
-    $list = @($scanners | ForEach-Object { @{ id = $_.DeviceID; name = [string]$_.Properties.Item('Name').Value } })
+    # Document Handling Capabilities (3086): 1 = feeder, 2 = flatbed, 4 = two-sided. Reading it needs a connection, which a busy scanner may refuse.
+    $list = @($scanners | ForEach-Object {
+      $caps = $null
+      try { $d = $_.Connect(); foreach ($p in $d.Properties) { if ($p.PropertyID -eq 3086) { $v = [int]$p.Value; $caps = @{ feeder = [bool]($v -band 1); flatbed = [bool]($v -band 2); duplex = [bool]($v -band 4) } } } } catch {}
+      @{ id = $_.DeviceID; name = [string]$_.Properties.Item('Name').Value; caps = $caps }
+    })
     Out-Json @{ ok = $true; devices = $list }; exit 0
   }
 
@@ -43,13 +50,16 @@ try {
   if (-not $info) { $info = $scanners[0] }
   $dev = $info.Connect()
 
-  # Document Handling Select (3088): 1 = feeder, 2 = flatbed, 4 = duplex
+  # Document Handling Select (3088): 1 = feeder, 2 = flatbed, 4 = duplex, 8 = front first
   $source = $env:QUIRE_SCAN_SOURCE
   $feeder = $source -eq 'feeder' -or $source -eq 'duplex'
   $sel = switch ($source) { 'feeder' { 1 } 'duplex' { 5 } default { 2 } }
+  $simplex = $false
   if ($feeder) {
-    if (-not (Set-Prop $dev.Properties 3088 $sel)) {
-      if ($source -eq 'duplex' -and (Set-Prop $dev.Properties 3088 1)) { $warn = 'This scanner has no two-sided mode, so only the front of each page was scanned.' }
+    $set = Set-Prop $dev.Properties 3088 $sel
+    if (-not $set -and $source -eq 'duplex') { $set = Set-Prop $dev.Properties 3088 13 }  # some drivers want 'front first' as well
+    if (-not $set) {
+      if ($source -eq 'duplex' -and (Set-Prop $dev.Properties 3088 1)) { $simplex = $true; $warn = 'This scanner has no two-sided mode, so only the front of each page was scanned.' }
       else { Out-Json @{ ok = $false; error = 'This scanner has no document feeder. Choose Flatbed instead.' }; exit 0 }
     }
     $max = [int]$env:QUIRE_SCAN_MAX; if ($max -lt 0) { $max = 0 }
@@ -89,7 +99,7 @@ try {
     $n++; $f = Join-Path $out ('page-{0:D3}.jpg' -f $n); $img.SaveFile($f); $files += $f
     if (-not $feeder -or $n -ge 500 -or ($max -gt 0 -and $n -ge $max)) { break }
   }
-  Out-Json @{ ok = $true; files = $files; warning = $warn }
+  Out-Json @{ ok = $true; files = $files; warning = $warn; simplex = $simplex }
 } catch {
   $m = $_.Exception.Message
   if ($m -match 'WIA.DeviceManager') { $m = 'Windows scanning (WIA) is not available on this PC.' }

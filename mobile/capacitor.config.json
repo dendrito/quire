@@ -1,0 +1,7 @@
+{
+  "appId": "local.quire.lite",
+  "appName": "Quire Lite",
+  "webDir": "www",
+  "ios": { "contentInset": "never", "limitsNavigationsToAppBoundDomains": false },
+  "android": { "allowMixedContent": false }
+}

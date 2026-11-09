@@ -1,0 +1,197 @@
+{
+ "segmenter": "blla",
+ "readers": [
+  {
+   "id": "mccatmus",
+   "name": "Early modern and modern hands, 16th–21st century (McCATMuS)",
+   "langs": "Portuguese, Spanish, French, Latin, Italian, English, German, Dutch",
+   "era": "1500–2000",
+   "about": "Trained on handwritten, printed and typewritten documents from the 16th to the 21st century. The best free choice for Inquisition records, notarial deeds and letters.",
+   "file": "McCATMuS_nfd_nofix_V1.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Chagué, Alix (2024). McCATMuS - Transcription model for handwritten, printed and typewritten documents from the 16th century to the 21st century. Zenodo. https://doi.org/10.5281/zenodo.13788177",
+   "doi": "10.5281/zenodo.13788177",
+   "accuracy": [
+    271602,
+    0.9280267357826233
+   ],
+   "bytes": 16182160
+  },
+  {
+   "id": "catmus-medieval",
+   "name": "Medieval book hands, 8th–16th century (CATMuS Medieval)",
+   "langs": "Latin, French, Spanish, Italian, Catalan, Occitan, Dutch, Venetian",
+   "era": "800–1550",
+   "about": "Trained on over 200 medieval manuscripts: caroline, gothic textualis, cursiva, hybrida and humanistic scripts. Keeps abbreviations as written (MUFI characters).",
+   "file": "catmus-medieval-1.6.0.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Pinche, Ariane, Clérice, Thibault, Vlachou-Efstathiou, Malamatenia, Chagué, Alix et al. (2025). CATMuS Medieval. Zenodo. https://doi.org/10.5281/zenodo.15030337",
+   "doi": "10.5281/zenodo.15030337",
+   "accuracy": [
+    369765,
+    0.9485183358192444
+   ],
+   "bytes": 16398705
+  },
+  {
+   "id": "tridis",
+   "name": "Medieval and early modern documents, charters and registers (TRIDIS)",
+   "langs": "Latin, French, Spanish, German, Czech",
+   "era": "1100–1600",
+   "about": "Trained on documentary manuscripts (charters, registers, accounts) and expands abbreviations into full words.",
+   "file": "Tridis_Medieval_EarlyModern.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Torres Aguilar, Sergio, Jolivet, Vincent (2024). TRIDIS: HTR model for Multilingual Medieval and Early Modern Documentary Manuscripts (11th-16th). Zenodo. https://doi.org/10.5281/zenodo.10800223",
+   "doi": "10.5281/zenodo.10800223",
+   "accuracy": [
+    2877441,
+    0.9218370318412781
+   ],
+   "bytes": 24903662
+  },
+  {
+   "id": "traprinq",
+   "name": "Portuguese Inquisition records, 16th–19th century (TraPrInq)",
+   "langs": "Portuguese",
+   "era": "1500–1900",
+   "about": "Trained on over 6,400 pages of Portuguese Inquisition trials (Lisbon, Coimbra, Évora) transcribed by the TraPrInq project. Made for Inquisition records.",
+   "file": "TraPrInq.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Weslley Oliveira (2024). TraPrInq - Transcription model to recognize Portuguese handwritten texts from the 16th to 19th centuries. Zenodo. https://doi.org/10.5281/zenodo.14538271",
+   "doi": "10.5281/zenodo.14538271",
+   "accuracy": [
+    102718,
+    0.9415917992591858
+   ],
+   "bytes": 90357784
+  },
+  {
+   "id": "geneapt",
+   "name": "Portuguese parish registers, 18th–19th century (GeneaPT)",
+   "langs": "Portuguese",
+   "era": "1700–1900",
+   "about": "Trained on baptism, marriage and burial registers from Portuguese parishes. Made for genealogy.",
+   "file": "GeneaPT_v6.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "GeneaPT (2026). GeneaPT – Kraken HTR model for Portuguese parish registers (18th–19th c.). Zenodo. https://doi.org/10.5281/zenodo.23733764",
+   "doi": "10.5281/zenodo.23733764",
+   "accuracy": [
+    0,
+    0
+   ],
+   "bytes": 90229619
+  },
+  {
+   "id": "catmus-print",
+   "name": "Printed books, 15th–20th century (CATMuS-Print)",
+   "langs": "Latin, French, Spanish, Italian, English, German and more",
+   "era": "1450–1900",
+   "about": "For old printed books, pamphlets and newspapers, from incunabula to the 19th century.",
+   "file": "catmus-print-fondue-large.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Gabay, Simon, Clérice, Thibault (2024). CATMuS-Print [Large]. Zenodo. https://doi.org/10.5281/zenodo.10592716",
+   "doi": "10.5281/zenodo.10592716",
+   "accuracy": [
+    121696,
+    0.9849029779434204
+   ],
+   "bytes": 22914058
+  },
+  {
+   "id": "catmus-gothic",
+   "name": "Gothic (blackletter) print (CATMuS Gothic Print)",
+   "langs": "Latin, German, French, Spanish",
+   "era": "1450–1600",
+   "about": "For early books printed in gothic type: incunabula and 16th-century prints.",
+   "file": "CATMuS-Gothic-Print-1.0.0.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Solfrini, Sonia, Gabay, Simon (2024). CATMuS Gothic Print. Zenodo. https://doi.org/10.5281/zenodo.10599911",
+   "doi": "10.5281/zenodo.10599911",
+   "accuracy": [
+    617112,
+    -1.0
+   ],
+   "bytes": 22893538
+  },
+  {
+   "id": "frolat-expan",
+   "name": "Medieval Latin and French, abbreviations expanded",
+   "langs": "Latin, French",
+   "era": "1100–1500",
+   "about": "Reads medieval Latin and French book and document hands and writes abbreviations out in full.",
+   "file": "frolat_medieval_expan.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Camps, Jean-Baptiste, Vidal-Gorène, Chahan (2023). HTR Model - Medieval Latin and French 12th-15th c. expanded (no abbr.). Zenodo. https://doi.org/10.5281/zenodo.7516057",
+   "doi": "10.5281/zenodo.7516057",
+   "accuracy": [
+    102320,
+    0.890839333134123
+   ],
+   "bytes": 16172536
+  },
+  {
+   "id": "regfiii-damage",
+   "name": "Damaged documents (Regg. F. III)",
+   "langs": "Latin, German",
+   "era": "1400–1500",
+   "about": "Trained on damaged, stained and faded pages. Try it when the parchment or paper is worn.",
+   "file": "regfiii-damage.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Kunzek, Jan, Skidzun, Frederik (2026). Regg.F.III-damaged - ATR model for damaged text. Zenodo. https://doi.org/10.5281/zenodo.23313428",
+   "doi": "10.5281/zenodo.23313428",
+   "accuracy": [
+    0,
+    0
+   ],
+   "bytes": 25104758
+  },
+  {
+   "id": "lectaurep",
+   "name": "19th–20th century French administrative hands (LECTAUREP)",
+   "langs": "French",
+   "era": "1800–1950",
+   "about": "Notarial and administrative registers of the 19th and 20th centuries.",
+   "file": "lectaurep_base.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Chagué, Alix (2022). LECTAUREP Contemporary French Model (Administration). Zenodo. https://doi.org/10.5281/zenodo.6542744",
+   "doi": "10.5281/zenodo.6542744",
+   "accuracy": [
+    682128,
+    0.9090173840522766
+   ],
+   "bytes": 16158100
+  },
+  {
+   "id": "sephardi",
+   "name": "Medieval Hebrew, Sephardi bookhand",
+   "langs": "Hebrew",
+   "era": "1200–1500",
+   "about": "Hebrew manuscripts in Sephardi (Iberian) bookhand. Right-to-left.",
+   "file": "Sephardi_01.mlmodel",
+   "licence": "cc-by-sa-4.0",
+   "cite": "Daniel STOEKL BEN EZRA (2021). Medieval Hebrew manuscripts in Sephardi bookhand version 1.0. Zenodo. https://doi.org/10.5281/zenodo.5468665",
+   "doi": "10.5281/zenodo.5468665",
+   "accuracy": [
+    21160,
+    0.9830375098364956
+   ],
+   "bytes": 16108376
+  },
+  {
+   "id": "muharaf",
+   "name": "Arabic handwriting (Muharaf)",
+   "langs": "Arabic",
+   "era": "1800–1950",
+   "about": "Handwritten Arabic documents: letters, legal and administrative papers. Right-to-left.",
+   "file": "muharaf_rec_best.mlmodel",
+   "licence": "cc-by-4.0",
+   "cite": "Bors Uifalean, Simion Toader (2024). HTR Model - Arabic Handwritten Recognition Model Trained on the Muharaf Corpus. Zenodo. https://doi.org/10.5281/zenodo.14295489",
+   "doi": "10.5281/zenodo.14295489",
+   "accuracy": [
+    1535664,
+    0.8699910640716553
+   ],
+   "bytes": 20131371
+  }
+ ]
+}

@@ -1,13 +1,15 @@
 # Runs Quire's automatic tests on every change to the app or the tests, and on demand from the Actions tab.
 # Each test drives the real app in headless Chromium and checks the result with independent tools:
-# veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx and openpyxl (Word, Excel).
-# The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact.
+# veraPDF (PDF/A-2b, PDF/UA-1), poppler (OCR accuracy, redaction), python-docx, openpyxl and python-pptx plus LibreOffice
+# (Word, Excel, PowerPoint), and the experts' transcriptions of medieval charters (handwriting).
+# The summary table appears on the run's page; the files the tests wrote are kept as the "test-output" artifact,
+# and the web builds of Quire Lite and Quire Pro (tools/build-editions.js) as "quire-web-editions".
 name: Tests
 on:
   workflow_dispatch:
   pull_request:
   push:
-    paths: ['web/**', 'mac/src/**', 'windows/src/**', 'tests/**', '.github/workflows/tests.yml']
+    paths: ['models/**', 'web/**', 'mac/src/**', 'windows/src/**', 'tests/**', 'tools/editions*', '.github/workflows/tests.yml']
 jobs:
   copies:
     name: App copies in sync
@@ -37,10 +39,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: System tools (poppler, Liberation fonts for the test scans)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils fonts-liberation
+      - name: System tools (poppler, Liberation fonts for the test scans, LibreOffice to open the PowerPoint files)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils fonts-liberation libreoffice-impress libreoffice-writer
       - name: Python packages
-        run: pip install -q reportlab pillow numpy python-docx openpyxl
+        run: pip install -q reportlab pillow numpy python-docx openpyxl python-pptx pyhanko==0.25.1
       - name: veraPDF
         run: |
           mvn -q -f verapdf/pom.xml dependency:copy-dependencies -DoutputDirectory=lib
@@ -49,12 +51,25 @@ jobs:
         run: npm install --no-audit --no-fund && npx playwright install --with-deps chromium
       - name: Test files
         run: python3 fixtures/make.py
+      - name: Manuscript test pages (iForal ground truth, fetched for the run)
+        working-directory: tests
+        run: |
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/Arch-W/iForal-Dataset /tmp/ifo
+          git -C /tmp/ifo sparse-checkout set --no-cone 'data/foral_de_condado_1491/1.*' 'data/foral_de_abrantes_1217/1.*'
+          python3 fixtures/page_xml.py /tmp/ifo/data/foral_de_condado_1491/1 fixtures/condado-1491
+          python3 fixtures/page_xml.py /tmp/ifo/data/foral_de_abrantes_1217/1 fixtures/abrantes-1217
       - name: Run the tests
         run: node run.js
         env:
           VERAPDF: ${{ github.workspace }}/tests/verapdf/vera
+          REAL_TSA: http://timestamp.digicert.com
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-output
           path: tests/out/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quire-web-editions
+          path: web/dist/*.html

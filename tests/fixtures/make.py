@@ -124,7 +124,35 @@ def columns():
     doc.build(st)
 
 
-report(); columns()
+def magazine():
+    """A magazine spread: a tinted banner with a headline, a picture with a caption, three columns of different widths,
+    a shaded sidebar box with its own text, and a large pull quote. The kind of page ABBYY keeps with text boxes."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as rc
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Paragraph, Frame
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
+    W, H = A4; c = rc.Canvas(p('magazine.pdf'), pagesize=A4, invariant=1)
+    c.setFillColorRGB(.85, .9, .97); c.rect(0, H - 150, W, 150, fill=1, stroke=0)
+    c.setFillColorRGB(.1, .15, .35); c.setFont('Helvetica-Bold', 30); c.drawString(40, H - 80, 'Os arquivos da Torre do Tombo')
+    c.setFont('Helvetica', 13); c.drawString(40, H - 110, 'Quatro séculos de processos, agora digitalizados')
+    g = np.zeros((200, 300, 3), np.uint8); yy, xx = np.mgrid[0:200, 0:300]; g[..., 0] = 120 + xx * .4; g[..., 1] = 90 + yy * .5; g[..., 2] = 60
+    c.drawImage(ImageReader(Image.fromarray(g)), 40, H - 400, 300, 200)
+    c.setFillColorRGB(.3, .3, .3); c.setFont('Helvetica-Oblique', 8.5); c.drawString(40, H - 414, 'Sala de leitura, Lisboa. Fotografia de arquivo.')
+    words = (' '.join(TEXT) + ' ') * 4; body = ParagraphStyle('b', fontName='Times-Roman', fontSize=9.5, leading=12, alignment=TA_JUSTIFY, spaceBefore=4)
+    c.setFillColorRGB(.98, .94, .78); c.rect(360, H - 400, W - 400, 230, fill=1, stroke=0)
+    side = ParagraphStyle('s', fontName='Helvetica', fontSize=9, leading=11.5)
+    Frame(368, H - 395, W - 416, 215, showBoundary=0).addFromList([Paragraph('<b>Em números</b>', ParagraphStyle('sh', fontName='Helvetica-Bold', fontSize=11, leading=14)), Paragraph(words[2000:2400], side)], c)
+    cols = [(40, 170, 40, 0, 950), (225, 150, 185, 950, 1400), (390, W - 430, 40, 1400, 2300)]
+    for x, w, b, a, z in cols:
+        Frame(x, b, w, H - 430 - b, showBoundary=0).addFromList([Paragraph(words[a:z].strip(), body)], c)
+    c.setFillColorRGB(.85, .2, .1); c.rect(225, 170, 150, 2, fill=1, stroke=0)
+    Frame(225, 100, 150, 70, showBoundary=0).addFromList([Paragraph('«Cada processo conta uma vida inteira»', ParagraphStyle('q', fontName='Times-Italic', fontSize=15, leading=18, alignment=TA_CENTER))], c)
+    c.showPage(); c.save()
+
+
+report(); columns(); magazine()
 book_scan('book', 150, 3.5, 8, .8)
 faded_scan('faded', 150, 165)
 table_scan('table-ruled', True); table_scan('table-free', False)

@@ -1,0 +1,43 @@
+# Lists free kraken reading models on Zenodo (title, licence, files, size, accuracy) to choose readers for the app.
+name: Manuscript model search
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/htr-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 - <<'PY'
+          import json, urllib.request, urllib.parse
+          seen = {}
+          qs = ['kraken model', 'kraken HTR model', 'kraken recognition model', 'HTR model mlmodel', 'CATMuS', 'HTR-United model',
+                'kraken model Spanish', 'kraken model Latin', 'kraken model French', 'kraken model English', 'kraken model German Kurrent',
+                'kraken model Arabic', 'kraken model Hebrew', 'kraken model Greek', 'kraken model Italian', 'kraken model Dutch',
+                'kraken model early printed', 'kraken OCR model print', 'kraken model notarial', 'kraken model parish registers',
+                'Gallicorpora', 'kraken model Catalan', 'kraken model Czech', 'kraken model Ottoman', 'kraken model Persian', 'kraken model Syriac',
+                'kraken model secretary hand', 'kraken model Fraktur', 'kraken model letters correspondence', 'kraken model Brazil']
+          for q in qs:
+              try: r = json.load(urllib.request.urlopen('https://zenodo.org/api/records?size=25&q=' + urllib.parse.quote(q)))
+              except Exception as e: print('ERR', q, e); continue
+              for h in r['hits']['hits']:
+                  fs = [f for f in h.get('files', []) if f['key'].lower().endswith(('.mlmodel', '.safetensors'))]
+                  if not fs or h['id'] in seen: continue
+                  m = h['metadata']; seen[h['id']] = 1
+                  lic = (m.get('license') or {}).get('id', '') if isinstance(m.get('license'), dict) else m.get('license')
+                  print(f"{h['id']} | {m['title'][:110]} | {lic} | {m.get('publication_date','')} | " + ', '.join(f"{f['key']} {f['size']//1000000}MB" for f in fs[:4]))
+          # kraken's own model repository is the Zenodo community ocr_models
+          for page in range(1, 30):
+              try: r = json.load(urllib.request.urlopen(f'https://zenodo.org/api/communities/ocr_models/records?size=25&page={page}'))
+              except Exception as e: print('ERR community', page, e); break
+              hits = r['hits']['hits']
+              if not hits: break
+              for h in hits:
+                  fs = [f for f in h.get('files', []) if f['key'].lower().endswith(('.mlmodel', '.safetensors'))]
+                  if h['id'] in seen: continue
+                  m = h['metadata']; seen[h['id']] = 1
+                  lic = (m.get('license') or {}).get('id', '') if isinstance(m.get('license'), dict) else m.get('license')
+                  print(f"{h['id']} | {m['title'][:110]} | {lic} | {m.get('publication_date','')} | " + ', '.join(f"{f['key']} {f['size']//1000000}MB" for f in fs[:4]) + ' | ' + ','.join(k.get('id','') if isinstance(k, dict) else str(k) for k in (m.get('languages') or [])))
+          print(len(seen), 'records')
+          PY
